@@ -1,0 +1,40 @@
+Implement the new “usability” safeguards that Hardened-Cassandra introduces at start-up.
+
+Extend org.apache.cassandra.service.StartupChecks so that two additional checks are available and automatically executed by withDefaultTests():
+
+1. checkYamlConfig  
+   • Fails with a StartupException (code ERR_WRONG_CONFIG) when transient replication is enabled and the JVM is not running a unit/integration test (system property cassandra.testtag unset).  
+   • Emits WARN level log lines – always suffixed with  
+     “ This will impact your level of production support.” – for each of the following conditions:  
+     – the configured partitioner is not Murmur3Partitioner  
+     – num_tokens is higher than 16  
+     – Materialized Views are enabled  
+     – SASI indexes are enabled  
+     – DROP COMPACT STORAGE guardrail is enabled  
+     – the configured default compaction strategy is present and is not UnifiedCompactionStrategy  
+     – guardrail tombstone_failure_threshold > 100 000  
+     – guardrail batch_size_fail_threshold_in_kb > 640  
+     – the current SSTable format is not the BTI format (Trie-based)
+
+2. checkTableSettings  
+   Scans all user keyspaces and builds three separate lists of fully-qualified table names:  
+   • Tables whose compaction class is SizeTieredCompactionStrategy or LeveledCompactionStrategy  
+   • Tables declared WITH COMPACT STORAGE  
+   • Tables that own at least one index whose implementation class is not StorageAttachedIndex  
+   When any list is non-empty a single WARN line is emitted, listing the offending tables (comma-separated) and ending with the same support-impact suffix.
+
+In addition, update existing checks:
+
+• checkMaxMapCount’s warning must also carry the support-impact suffix.  
+• checkDataDirs must warn (with suffix) when more than one data directory is configured.
+
+All warnings produced by the new logic have to be discoverable through the normal SLF4J logging mechanism so unit tests can capture them.
+
+The test-suite exercises:
+ – Successful start-up when nothing is wrong
+ – A failure for transient replication
+ – Correct WARN messages for each individual guardrail
+ – Table inspection logic
+ – Multiple data_dir detection
+
+Implement the described behaviour so that every provided test class passes unchanged.

@@ -1,0 +1,77 @@
+Context  
+JGit decides whether repository files (loose objects, pack directory, packed-refs file, loose refs …​) may be considered “unchanged” simply by comparing their file-system attributes (size, mtime, inode, …​).  This is fast, but on some file systems—especially NFS—those attributes are not always up-to-date.  In the past JGit offered several unrelated configuration keys to disable that optimisation:
+
+• core.trustFolderStat (boolean) – very coarse switch  
+• core.trustPackedRefsStat – dedicated to the packed-refs file  
+• core.trustLooseRefStat  – dedicated to loose ref files  
+
+The project now consolidates and generalises those keys.
+
+Task  
+Add first-class support for the new option core.trustStat and the new enum org.eclipse.jgit.lib.CoreConfig.TrustStat.  Refactor the code that examines repository files so it uses the new enum instead of the previous booleans/enums, and make the old keys remain functional (but deprecated).
+
+Functional requirements
+
+1. New enum  
+   CoreConfig.TrustStat must contain the values  
+     • NEVER  
+     • ALWAYS  
+     • AFTER_OPEN – use the attributes, but only after the file or directory has been opened/closed once to refresh NFS caches  
+     • INHERIT    – only meaningful while parsing; no caller should ever see it
+
+2. Configuration semantics  
+   a. core.trustStat is global. Default: ALWAYS.  
+   b. core.trustFolderStat is still recognised.  
+      – If core.trustStat is absent, translate true→ALWAYS, false→NEVER and log a warning.  
+      – If both are set, core.trustStat wins and a warning is logged.  
+   c. The file-specific keys  
+        core.trustPackedRefsStat  
+        core.trustLooseRefStat  
+        core.trustPackStat               (NEW)  
+        core.trustLooseObjectStat        (NEW)  
+      accept the same value set as core.trustStat.  
+      Their default is INHERIT, meaning “use the global value”.  
+   d. The legacy enums TrustPackedRefsStat and TrustLooseRefStat stay in the public API but are now deprecated.  Internally they are mapped to TrustStat.
+
+3. Behavioural changes  
+   Wherever JGit previously used  
+        boolean trustFolderStat  
+        TrustPackedRefsStat  
+        TrustLooseRefStat  
+   switch to the new TrustStat coming from CoreConfig.  The effective behaviour must be
+
+      NEVER        – ignore attributes and always re-scan/read  
+      ALWAYS       – current behaviour when the old boolean/enums were ‘true’  
+      AFTER_OPEN   – before trusting attributes, open+close the relevant file or
+                     directory (for loose objects: the 2-hex fan-out dir; for pack
+                     files: the objects/pack directory; for refs: parent dirs up
+                     to repo root, exactly as old AFTER_OPEN option did)  
+      INHERIT      – must have been resolved during config parsing; treat it as
+                     an illegal state if encountered at runtime.
+
+4. Logging & messages  
+   Two new warning texts must be available via JGitText.properties  
+        deprecatedTrustFolderStat  
+        precedenceTrustConfig  
+   One further message is required for the illegal use of INHERIT  
+        invalidTrustStat  
+
+5. Public API additions  
+   CoreConfig gets  
+        getTrustPackedRefsStat()  
+        getTrustLooseRefStat()  
+        getTrustPackStat()  
+        getTrustLooseObjectStat()  
+   returning TrustStat.
+
+6. Affected subsystems  
+   The implementation must update at least  
+        org.eclipse.jgit.internal.storage.file.LooseObjects  
+        org.eclipse.jgit.internal.storage.file.PackDirectory  
+        org.eclipse.jgit.internal.storage.file.RefDirectory  
+   so their logic obeys the new enum and options.
+
+7. Tests  
+   All existing unit tests (old and newly introduced) must pass without modification.
+
+Your solution must compile with Java 8 (the project’s baseline) and respect existing coding standards.

@@ -1,0 +1,48 @@
+Lucene’s “competitive iterators” (the iterators returned by FieldComparator.competitiveIterator()) are updated several times while collecting results.  
+To simplify their implementation a new helper, org.apache.lucene.search.comparators.UpdateableDocIdSetIterator, has been introduced.  
+All existing comparators now wrap their own iterator into this new class and call `update(...)` each time their internal state changes.  
+Your task is to supply this new iterator so that every existing comparator – and the dedicated unit test – works correctly.
+
+Required behaviour
+------------------
+UpdateableDocIdSetIterator behaves like a standard DocIdSetIterator whose
+implementation can be switched at any time via the `update(DocIdSetIterator)` method.
+
+1. State keeping  
+   • The iterator keeps the usual `docID()` state that AbstractDocIdSetIterator
+     maintains.  
+   • A call to `update(...)` **must not** reset this state: after an update the
+     iterator must still report the last document that was returned to the
+     caller (or -1, NO_MORE_DOCS, …​).  
+   • The wrapped iterator that is supplied to `update(...)` may already be
+     positioned on an arbitrary document (even before the current `docID()`).
+
+2. nextDoc / advance  
+   Must return the next/target document according to the Lucene iterator
+   contract, using the wrapped iterator; if that iterator is behind the current
+   position it has to be advanced first.
+
+3. cost  
+   Delegates to the wrapped iterator.
+
+4. intoBitSet  
+   Delegates to the wrapped iterator, but only after making sure the wrapped
+   iterator is positioned on `docID()` or beyond. The method must update the
+   iterator’s own `doc` field to the document returned by the delegate.
+
+5. docIDRunEnd  
+   Same requirement as intoBitSet: ensure the wrapped iterator is positioned on
+   the current document before delegating.  If the wrapped iterator is already
+   past the current doc, fall back to the default implementation of
+   AbstractDocIdSetIterator.
+
+Package, inheritance and visibility must follow the declaration that the new
+comparators expect:
+
+package org.apache.lucene.search.comparators;
+
+final class UpdateableDocIdSetIterator extends AbstractDocIdSetIterator { … }
+
+Only this class has to be implemented; all other source files already compile
+against it.  Once the implementation honours the rules above, the full test
+suite – including the new tests for issue #14517 – will pass.

@@ -1,0 +1,50 @@
+### Goal
+
+Extend Cassandra so that users can ask **how fast compaction is running right now** as well as which
+throughput cap is configured.  
+All existing behaviour must stay unchanged and the new unit-tests devoted to
+`getcompactionthroughput` and `setcompactionthroughput` must succeed.
+
+### Required behaviour
+
+1. **Continuous measurement**
+   • While a compaction is running the number of bytes that are actually
+   processed has to be recorded in a `Meter` called  
+   `BytesCompactedThroughput` that lives under the `Compaction` metric
+   registry.  
+   • `CompactionManager` must update this meter every time it rate-limits a
+   compaction task and must publish the meter through
+   `CompactionManagerMBean` (method `getCompactionThroughput()`).
+
+2. **JMX exposure**
+   • `StorageServiceMBean` must expose  
+     `Map<String,String> getCurrentCompactionThroughputMebibytesPerSec()`  
+     returning three entries named `1minute`, `5minute`, `15minute`.  
+   • Every value is the corresponding rate (MiB/s) of the meter above,
+     formatted with three decimal digits.
+
+3. **nodetool**
+   • `nodetool getcompactionthroughput` keeps printing the configured cap
+     (MiB/s) and, beneath it, the three current figures exactly as specified:
+     ```
+     Current compaction throughput: <cap> MiB/s
+     Current compaction throughput (1 minute):  <rate> MiB/s
+     Current compaction throughput (5 minute):  <rate> MiB/s
+     Current compaction throughput (15 minute): <rate> MiB/s
+     ```
+     Spelling, blanks and units must match.
+
+4. **Input validation**
+   • `nodetool setcompactionthroughput <int>` continues to accept only an
+     integer between 0 and `Integer.MAX_VALUE-1` MiB/s and prints the same
+     error messages that were previously expected by the tests.
+
+### Constraints
+
+• Do **not** change any public method signatures other than the ones explicitly
+  mentioned above.  
+• Do **not** alter existing output unless specified.  
+• Make sure the new functionality is thread-safe and inexpensive.
+
+When all requirements are met, the complete test-suite (old and new) executes
+successfully.

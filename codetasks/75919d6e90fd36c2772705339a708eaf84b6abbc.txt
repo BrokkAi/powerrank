@@ -1,0 +1,10 @@
+Implement the missing empty-repository handling in the Brokk git integration so that all unit-tests succeed.
+
+Places where we need to support empty repos:
+1. GitRepo.getTrackedFiles()
+
+2. GitRepo.diff() and GitRepo.diffFiles(...)
+
+3. GitRepo.revertCommit(String commitId)
+   • Fail fast if the supplied commit id cannot be resolved: throw a `GitRepoException`
+     (same wording as other GitRepo methods) instead of letting JGit hide the error.

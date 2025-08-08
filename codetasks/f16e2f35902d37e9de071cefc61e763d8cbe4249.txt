@@ -1,0 +1,23 @@
+### Problem
+
+The search module offers a *patience* mode that wraps a regular k-nearest-neighbour (k-NN) query (`PatienceKnnVectorQuery`) and changes the low–level search strategy from **HNSW** to **Patience** while the query is being executed.  
+Another, independent feature is **seeded** k-NN querying (`SeededKnnVectorQuery`) which injects a pre-computed “seed” `Weight` into the execution plan.  
+When both features are combined (`PatienceKnnVectorQuery` that wraps a `SeededKnnVectorQuery`) an exception is currently thrown because:
+
+1. The collector that swaps the HNSW strategy for the Patience one (`HnswQueueSaturationCollector`) only understands pure `Hnsw` strategies and does not recognise the extra *Seeded* wrapper.
+2. `SeededKnnVectorQuery` needs to build its internal *seed* `Weight` during `rewrite`, but this step is skipped when it is itself wrapped by `PatienceKnnVectorQuery`.
+
+### Required behaviour
+
+1. `HnswQueueSaturationCollector#getSearchStrategy()` must still return a `KnnSearchStrategy.Patience` instance when the **delegate** strategy is  
+   a. plain `KnnSearchStrategy.Hnsw`, **or**  
+   b. `KnnSearchStrategy.Seeded` whose `originalStrategy()` is an `Hnsw`.
+
+   For all other strategies the collector must leave the strategy unchanged.
+
+2. `PatienceKnnVectorQuery#rewrite(IndexSearcher)` has to detect when its **delegate** is a `SeededKnnVectorQuery` whose `seedWeight` has not yet been created.  
+   During rewrite it must rebuild that delegate by calling `SeededKnnVectorQuery#createSeedWeight(IndexSearcher)` and storing the result inside a new `SeededKnnVectorQuery` instance, then continue with the usual `super.rewrite(...)` flow.
+
+3. All other public behaviour (equality, hashing, `toString`, etc.) must remain unchanged and every pre-existing test must still succeed.
+
+Implement the missing logic so that `PatienceKnnVectorQuery` works correctly whether or not it wraps a seeded query and so that the patience collector recognises the underlying HNSW strategy even when it is wrapped.

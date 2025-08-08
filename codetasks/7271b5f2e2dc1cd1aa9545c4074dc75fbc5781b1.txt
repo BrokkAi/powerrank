@@ -1,0 +1,46 @@
+### Problem Description
+
+A dense block of document-ids can be copied into an external `FixedBitSet`
+through the public method
+
+```
+IndexedDISI.intoBitSet(int upTo, FixedBitSet target, int offset)
+```
+
+For dense blocks the work is delegated to the package-private helper
+
+```
+boolean IndexedDISI.Dense.intoBitSetWithinBlock(IndexedDISI disi,
+                                                 int upTo,
+                                                 FixedBitSet target,
+                                                 int offset)
+```
+
+`upTo` is the *exclusive* upper document id that must be copied.
+`offset` is the value that has to be subtracted from every document id
+before writing it into the destination bitset
+(`target.get(docId - offset) == true` after the call).
+
+Bug #14922 shows that the current implementation does **not** verify that
+`upTo` is also within the boundaries of the destination bitset.  
+If the caller supplies an `upTo` that is greater than
+`offset + target.length()`, the method writes past the end of
+`target`, which raises an `IndexOutOfBoundsException`.
+
+### Task
+
+Modify the dense copying logic so that it **never accesses the
+destination bitset outside its declared length**.  
+Concretely:
+
+1. While computing the output range, clamp the effective end-position to
+   `offset + target.length()` when that value is smaller than `upTo`.
+2. Ensure the method’s return value and iterator state follow the same
+   clamped limit, so that subsequent calls continue from the correct
+   position.
+3. Keep all other behaviour identical; public and internal APIs must not
+   change.
+
+All unit tests – existing and newly added – must pass after your changes,
+including the new regression test that uses a destination `FixedBitSet`
+shorter than one dense block.

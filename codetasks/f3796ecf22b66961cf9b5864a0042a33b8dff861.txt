@@ -1,0 +1,22 @@
+Lucene’s search-time resource managers can already reopen their internal `DirectoryReader` whenever new index commits appear.  
+Extend this mechanism so applications may choose *which* commit the next reopen should switch to instead of always advancing straight to the newest one.
+
+Required behaviour
+------------------
+1. Add a new functional SPI (`RefreshCommitSupplier`, `core`) that lets callers decide, on every refresh attempt, which `IndexCommit` (or `null` for “latest”) the manager should reopen to, given the current `DirectoryReader`.
+
+2. Update  
+   • `SearcherManager` (`core`)  
+   • `SearcherTaxonomyManager` (`facet`)  
+to accept an optional `RefreshCommitSupplier` when they are constructed.  
+If none is supplied they must keep their old behaviour (refresh directly to the most recent commit).
+
+3. During `maybeRefresh/ maybeRefreshBlocking` these managers must call the supplier and reopen the `DirectoryReader` with
+`DirectoryReader.openIfChanged(reader, commit)` using the returned commit.  
+If the supplier returns `null` they must fall back to the previous logic.
+
+4. All public/back-compat constructors without the new parameter must keep working exactly as before.
+
+5. Any new helper methods used by the added unit tests (e.g. to expose the generation of the current commit or to check currency) must be present and have the expected package visibility.
+
+All existing and newly added JUnit tests in both `core` and `facet` modules must compile and succeed.

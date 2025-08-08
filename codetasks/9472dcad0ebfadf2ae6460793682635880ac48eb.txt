@@ -1,0 +1,55 @@
+### Background  
+Lucene stores the document ids of points that fall into each leaf node of its BKD-tree.  
+For space efficiency these ids are bit-packed with a *bits-per-value (BPV)* that depends on
+the maximum id stored in the leaf.  
+When `maxDoc` is small enough all ids fit into **24 bits** (BPV = 24).  
+Until now Lucene encoded such 24-bit values in a scalar way that requires many branches when
+decoding.  
+The goal of this task is to add a new on-disk format version that stores 24-bit doc ids in a
+layout that the JVM can auto-vectorise while keeping full backwards compatibility with the
+previous format.
+
+### Functional requirements
+
+1. A new BKD file format version (call it `VERSION_VECTORIZED_DOCID`) must be introduced.
+   • It is the successor of the current version (`VERSION_META_FILE`).  
+   • Only the 24-bit case changes; all other encodings stay byte-for-byte identical.
+
+2. Writing  
+   • Writers that are created with the new version must emit doc ids of **BPV = 24**
+     in the new vectorisable layout.  
+   • When forced to use an older version (tests do that) the writer must still emit
+     the legacy scalar layout.  
+
+3. Reading  
+   • Readers have to detect which of the two layouts is present based on the version
+     stored in the BKD meta header and decode accordingly.  
+   • Reading must be possible both through the bulk API
+     (`DocIdsWriter.readInts(IndexInput, int, int[])`)
+     and through the streaming API that forwards decoded ids directly to an
+     `IntersectVisitor`.  
+   • Decoding for the **new layout** has to work with any leaf size, but must be
+     especially efficient when the leaf size equals `BKDConfig.DEFAULT_MAX_POINTS_IN_LEAF_NODE`
+     (512).
+
+4. Version plumbing  
+   • `Lucene90PointsFormat` needs a compile-time constant for the new points-format
+     version and a mapping that translates a points-format version to the
+     corresponding BKD version.  
+   • Writers / readers created by this points format must pass the correct BKD
+     version down to `BKDWriter`, `BKDReader`, `DocIdsWriter`, …  
+   • Test utilities require a constructor that lets them instantiate the previous
+     points-format version to verify backwards compatibility.
+
+5. Regression tests  
+   All pre-existing tests as well as the new ones that target the vectorised
+   encoding must pass without changes.
+
+### Non-functional requirements
+
+* The implementation must **not** change the observable behaviour for segments that
+  were written with older versions.
+* No public APIs may be broken.
+* Code must remain thread-safe and adhere to existing coding conventions.
+
+Your task is to implement these changes so that *all* provided tests succeed.

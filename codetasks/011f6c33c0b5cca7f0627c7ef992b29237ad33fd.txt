@@ -1,0 +1,21 @@
+### Problem
+
+`ClassPathDocumentLoader` is responsible for scanning the class-path, locating documents that match a `PathMatcher`, parsing them, and producing `Document` instances whose `Document.FILE_NAME` metadata contains the relative name of the source file inside the class-path.
+
+Several scenarios are already supported (directories in the file system, JARs, archives, etc.).  
+However, when the directory that must be scanned is specified **relative to the class-path root** (e.g. `"."`, `"/"`, or `"some/dir"`), the produced `Document` objects contain incorrect relative paths or are not found at all.
+
+You must fix the path-resolution logic so that every combination below works correctly:
+
+1. Scanning the real file system.
+2. Scanning directories located inside a JAR/ZIP.
+3. Passing `"."` or `"/"` as the directory to scan (meaning “scan the class-path root itself”).
+4. Passing a _sub-directory_ of the class-path root (e.g. `"anotherDir"`, `"sub/dir"`, etc.).
+
+After your changes:
+
+* All previously existing tests must still succeed.
+* The newly added tests that expect successful loading from several nested sub-directories must also succeed.
+* `Document.FILE_NAME` must always hold the path relative **to the directory that was supplied to the loader**, using `/` as the separator, independently of the OS file separator.
+
+Focus only on the library code; do not modify the tests.

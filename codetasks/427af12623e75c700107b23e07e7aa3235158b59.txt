@@ -1,0 +1,53 @@
+### Problem
+
+`org.eclipse.jgit.internal.storage.file.Pack` can already lazily open the
+`.idx`, `.rev` and bitmap index files that belong to a pack file.
+For some use-cases, callers also need quick access to the *object size
+index* (`*.osi`, extension constant `PackExt.OBJECT_SIZE_INDEX`) that is
+optionally created by `PackWriter.writeObjectSizeIndex(...)`.
+
+Add support for this index to `Pack` so that callers can
+
+* check whether a pack has an object-size index,
+* query how many objects are covered by the index and
+* obtain the size of a specific object **without** having to read the
+  object itself.
+
+All existing functionality must keep working and all supplied tests –
+including the new ones – must pass.
+
+
+
+#### Required behaviour
+
+1. `Pack` must load the `*.osi` file on demand and cache the result.
+   * Use `PackObjectSizeIndexLoader.load(InputStream)` to read it.
+   * Don’t try to load the file more than once; remember a failed attempt.
+   * Be thread-safe (same level of safety as the current `.idx` handling).
+
+2. Public API additions in `Pack`
+
+   ```
+   boolean hasObjectSizeIndex()           // true if the .osi file exists
+   long    getObjectSizeIndexCount()      // number of entries, or 0 if none
+   long    getIndexedObjectSize(AnyObjectId objectId)
+   ```
+
+   * `getIndexedObjectSize(...)`  
+     – Caller *must* only invoke this when `hasObjectSizeIndex()` is true  
+     – Return the object’s size taken from the index  
+     – Return **-1** if the object is not present in the index  
+     – Throw `IllegalStateException` if the pack has no object-size index.
+
+3. Loading logic is similar to the one already used for the reverse
+   index:
+   * store the loaded `PackObjectSizeIndex` in a volatile field,
+   * guard the actual loading with `synchronized(this)`,
+   * if the file is missing, set a flag so later calls immediately know
+     there is nothing to load.
+
+4. `TestRepository.packAndPrune()` already writes the `*.osi` file when
+   `PackConfig.getMinBytesForObjSizeIndex() >= 0`; the implementation
+   must work with that.
+
+No other behavioural changes are expected.

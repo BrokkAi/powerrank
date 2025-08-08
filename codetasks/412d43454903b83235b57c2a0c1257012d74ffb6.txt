@@ -1,0 +1,28 @@
+### Problem
+
+`VertexAiGeminiStreamingChatModel` internally creates the Google Cloud `VertexAI` client with a fixed  
+`"user-agent" = "LangChain4j"` HTTP header.  
+There is currently no way for API users to add their own headers (for example the
+`X-Vertex-AI-LLM-Request-Type` header required for provisioned-throughput
+channels).
+
+Extend the model and its builder so that callers can supply an **optional map of
+custom headers** that will be forwarded to `VertexAI`.  
+The public API must fulfil the following rules:
+
+1. `VertexAiGeminiStreamingChatModel.builder().customHeaders(Map<String,String>)`
+   lets the caller register any number of headers.
+2. When the map is **omitted or null**, behaviour stays unchanged: the only
+   header is  
+   `"user-agent" = "LangChain4j"`.
+3. When the map is present  
+    • its entries are copied into the final header map  
+    • `"user-agent"` must always be present – add it with value
+      `"LangChain4j"` **unless the caller already supplied a value**, in which
+      case the caller’s value wins.
+4. Unit tests need access to the internally created `VertexAI` instance, so the
+   model must expose a package-visible (or `@VisibleForTesting`) accessor
+   `vertexAI()` that returns that object.
+
+All existing functionality must keep working and all supplied tests –
+including the new ones that verify the above rules – must pass.

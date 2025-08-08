@@ -1,0 +1,47 @@
+### Problem description
+
+The JGit multi–pack index (`MultiPackIndex`) must be able to translate an
+`AbbreviatedObjectId` (the prefix that Git users type on the command line)
+into the complete 20-byte `ObjectId`s that are contained in any of the packs
+that belong to the multi-pack index.
+
+`MultiPackIndex` already knows how to locate a *single* object (`find()`), but
+it does **not** yet expose the usual “abbreviation expansion” that normal pack
+indexes support.  
+Add this capability and make the public reader API symmetrical with the normal
+`PackIndex` API.
+
+Requirements
+
+1. Extend the `MultiPackIndex` interface with  
+   ```
+   void resolve(Set<ObjectId> matches,
+                AbbreviatedObjectId prefix,
+                int matchLimit);
+   ```
+   • Every full id that starts with `prefix` and is stored in **any** of the
+     packs must be added to `matches` until either  
+     `matches.size() == matchLimit` or no more matches exist.  
+   • The method must not remove elements that are already present in
+     `matches`.  
+   • If the index is empty or there is no match, the method returns without
+     modifying the set.
+
+2. Provide a working implementation for the currently supported on-disk
+   format (`MultiPackIndexV1`).  The implementation has to read only the data
+   that is already loaded in memory – do **not** touch the pack files
+   themselves.
+
+3. Performance must be at least O(log n + m) where  
+   n = number of objects in the multi-pack index,  
+   m = number of matches that are written to the output set.  
+   (Re-use the fan-out table and the object-id byte array that the reader has
+   in memory; there is no need to scan the whole index linearly.)
+
+4. The change must not alter the existing public behaviour of
+   `MultiPackIndex` or any of its subclasses except for introducing the new
+   `resolve` method.
+
+All supplied unit-tests – both pre-existing and the new ones that exercise the
+`resolve` method (including limits, no matches, empty index and large offsets)
+– must succeed.

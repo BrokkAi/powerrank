@@ -1,0 +1,23 @@
+### Problem Overview
+
+Apache Cassandra’s Storage-Attached Index (SAI) must be available for queries as soon as a node finishes booting if all required on-disk index components already exist.  
+A regression lets the node reach state `UP` while the index is still flagged **non-queryable**, producing failed reads until the background “initial build” finishes.  
+The goal is to eliminate this availability gap.
+
+### Required Behaviour
+
+1. During node start-up (`StorageService.Mode.STARTING`) each SAI instance must immediately become **queryable** when the following are true  
+   • every live SSTable for the table is already fully indexed, and  
+   • index files are valid (header/footer verification only).
+
+2. When the above condition is met, no “initial build” should be scheduled or executed; the `getInitializationTask()` call must instead return a completed future.
+
+3. If any SSTable is not yet indexed (or validation is requested at runtime, not at start-up), the existing build path must run unmodified.
+
+4. Additional utility: expose a testing-only method on `StorageService` that force-sets the node’s mode to `STARTING`, so unit tests can exercise the new path.
+
+### Acceptance Criteria
+
+• All unit and functional tests (existing and new) must pass.  
+• No regression in normal index build, rebuild, or failure handling scenarios.  
+• Correct metric/trace/log behaviour: when the fast-path is taken a debug message should note that the initial build is skipped because the index is already queryable.

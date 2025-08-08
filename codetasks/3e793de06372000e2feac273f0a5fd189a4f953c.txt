@@ -1,0 +1,35 @@
+### Context
+
+The project defines a provider-independent `TokenUsage` class and several provider-specific subclasses (e.g. `OpenAiTokenUsage`, `AnthropicTokenUsage`, …).  
+A `ChatResponseMetadata` object keeps meta–information – id, model name, `TokenUsage`, finish reason, etc.  
+These types are used by the whole public API (`AiServices`, `ChatModel`s, …) and by the testing suite.
+
+### Goal
+
+Upgrade the core implementation so that
+
+1. `TokenUsage` objects can **safely be combined**, even when the two operands are of *different concrete classes*.  
+   • The result must preserve every provider-specific field that is available in **any** of the operands.  
+   • Standard arithmetic fields (`inputTokenCount`, `outputTokenCount`, `totalTokenCount`) are summed in the usual nullable friendly way (`null + n = n`, `null + null = null`).  
+   • `TokenUsage.sum(a,b)` must delegate to `a.add(b)` / `b.add(a)` so that a provider-specific result is returned whenever possible.
+
+2. Each provider-specific subclass implements its own `add(...)` that returns the same subclass and merges its   proprietary counters (e.g. OpenAI’s `reasoningTokens`, Anthropic’s `cacheCreationInputTokens`, …).
+
+3. `ChatResponseMetadata` becomes *effectively immutable* but offers a **`toBuilder()`** method that copies the current values into a fresh builder **of the same concrete metadata class** so callers can alter a subset of fields while keeping all the others untouched.
+
+4. The service layer must use the new facilities:
+   • When tools are executed during a streaming conversation the aggregated `TokenUsage` must be stored back into the final `ChatResponse` **without losing the original provider-specific metadata type**.  
+   • All token usages produced by several intermediate calls must be merged with the logic described in 1–2.
+
+All existing public behaviour must stay intact; only the new expectations above are added.
+
+### Acceptance criteria
+
+The solution is considered complete when **all unit and integration tests supplied with the repository pass**, including the newly added ones that verify:
+
+* Correct arithmetic and preservation of provider-specific counters when adding / summing.
+* `ChatResponseMetadata#toBuilder()` correctly returns a builder of the concrete subclass and carries over every field.
+* After a streamed tool execution the resulting `ChatResponse.metadata()` still has the provider-specific runtime type and contains the accumulated `TokenUsage`.
+* `AiServices` refuses to build a service method whose return type is `void`.
+
+No public API other than the new `toBuilder()` and the extended merging behaviour may be broken.

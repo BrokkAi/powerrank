@@ -1,0 +1,44 @@
+Problem
+
+Lucene already offers DoubleValuesSource implementations that expose the
+approximate (quantised) similarity that is returned by the vector search
+layer.  
+Add the missing counterpart that can compute the *exact* similarity from
+the full-precision vectors that are stored alongside a
+KnnFloatVectorField.
+
+Required behaviour
+1. Provide a new DoubleValuesSource that
+   • is constructed with a query vector (float[]) and the name of a
+     KnnFloatVectorField,  
+   • optionally accepts a VectorSimilarityFunction; if none is supplied
+     the similarity configured on the field must be used,  
+   • returns for every document the value produced by
+     VectorSimilarityFunction.compare(query, docVector) where
+     docVector is the raw, full-precision vector stored in the index,
+   • returns DoubleValues.EMPTY when the segment contains no vectors for
+     the requested field,
+   • does not require existing score values (needsScores() → false) and
+     is cacheable at segment level.
+
+2. Update the static helpers
+       DoubleValuesSource.similarityToQueryVector(…byte[]…)
+       DoubleValuesSource.similarityToQueryVector(…float[]…)
+   so that they *no longer* perform their own
+   VectorEncoding sanity check.  Any mismatch must surface as the
+   IllegalStateException thrown by the lower layers, not as an
+   IllegalArgumentException from these helpers.
+
+3. Equality, hashCode, rewrite, isCacheable, and a useful toString()
+   must be implemented so the new source behaves like the existing
+   DoubleValuesSource implementations.
+
+4. All pre-existing functionality must keep working; both the old tests
+   and the new tests that rely on the class above and on the relaxed
+   encoding check must pass.
+
+Files referenced by the tests
+ – org.apache.lucene.search.FullPrecisionFloatVectorSimilarityValuesSource  
+ – org.apache.lucene.search.DoubleValuesSource (static helpers)
+
+No other public API changes are expected.

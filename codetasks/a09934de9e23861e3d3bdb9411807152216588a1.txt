@@ -1,0 +1,59 @@
+The code-base now has to understand simple SQL files and treat them as a first-class language.  
+Your job is to finish the implementation so that all existing and newly-added unit tests pass.
+
+Requirements
+
+1. Language support  
+   • Add a new Language called SQL whose recognised file extension is sql.  
+   • Language.SQL must appear in Language.ALL_LANGUAGES (just before Language.NONE) and
+     – return a working IAnalyzer created with createAnalyzer(Project).  
+     – report isCpg() == false.  
+     • loadAnalyzer(Project) should behave the same as createAnalyzer; the SQL analyser does not need persistent state.
+
+2. Automatic language detection (Project.autoDetectLanguages)  
+   When no languages are explicitly configured for a project the following rules must be applied to the tracked
+   (i.e. “recognised”, Language != NONE) files:
+     1. Add every language that accounts for at least 10 % of the recognised files.  
+     2. If rule 1 would yield an empty set, add the single most common recognised language instead.  
+     3. If at least one SQL file is present, Language.SQL must always be in the final set, even if it
+        already was or did not reach the 10 % threshold.  
+   The method must never return an empty set when at least one recognised file exists.
+
+3. SqlAnalyzer  
+   Implement a new IAnalyzer located at src/main/java/io/github/jbellis/brokk/analyzer/SqlAnalyzer.java that fulfils the usual
+   analyser contract and the behaviour checked by the tests.  The analyser works purely on text; it does not build a CPG.
+
+   Files to analyse  
+   • All *.sql project files whose absolute path is NOT inside any directory supplied via the constructor’s
+     excludedFiles parameter (the paths are relative to project root and must be resolved before comparing).  
+
+   What to extract  
+   • Every CREATE [OR REPLACE] [TEMPORARY] TABLE …​; or CREATE … VIEW …​; statement.  
+   • The regular expression already embedded in the diff is sufficient; its semantics must be respected.  
+   • From the fully-qualified object name
+       – packageName = part before the final ‘.’ (empty if no dot)  
+       – shortName   = part after the final ‘.’  
+       – fqName      = either “packageName.shortName” or “shortName” if no package  
+   • Create a CodeUnit of type CLASS for each table or view and keep all bookkeeping data expected from an analyser:
+       – getAllDeclarations(), getDeclarationsInFile(ProjectFile), getDefinition(String), getFileFor(String)  
+       – isEmpty(), isCpg() (always false)  
+       – getSkeleton(String) and getSkeletonHeader(String) must return the exact text of the
+         statement (including its terminating semicolon) as it appears in the source file.  
+         Use byte offsets so that non-ASCII characters are handled correctly.
+
+   Ranges  
+   • For each declaration store a TreeSitterAnalyzer.Range (startByte, endByte, startLine, endLine)
+     representing the statement.  TreeSitterAnalyzer.Range has been made public so the tests can
+     inspect it.
+
+4. Visibility change  
+   • TreeSitterAnalyzer.Range must be public (already shown in the diff).
+
+Constraints / clarifications  
+• A file may contain multiple CREATE statements; all must be discovered.  
+• An empty or non-SQL file must make the analyser report isEmpty() == true.  
+• If multiple definitions with the same fully-qualified name are found, getDefinition / getFileFor must return Optional.empty() (ambiguous).  
+• Parsing is intentionally naïve: the first ‘;’ after the regex match ends the statement; ignore malformed statements without a semicolon.  
+• All logging seen in the diff is optional; it is not asserted by the tests.
+
+Your solution must compile, and all provided tests – old and new – must pass.

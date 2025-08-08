@@ -1,0 +1,72 @@
+### Problem
+
+`FileReftableDatabase` keeps an in-memory view of the repository’s
+reftable stack.  
+When another JVM or an external `git` command changes that stack the
+in-memory copy can become stale, so subsequent reads may return outdated
+data and writes may wrongly succeed or fail.
+
+Add transparent “auto refresh” support that
+
+1. detects that the on-disk reftable stack has changed,
+2. silently reloads the stack before any read access when the feature is
+   enabled,
+3. allows the feature to be enabled either by repository configuration  
+   (`reftable.autorefresh = true`) or programmatically
+   (`FileReftableDatabase#setAutoRefresh(boolean)`), and
+4. exposes a public `refresh()` method that callers may invoke
+   explicitly.
+
+All existing behaviour must stay unchanged when the feature is disabled.
+
+The new and the pre-existing test-suite must compile and pass.
+
+
+
+### Functional requirements
+
+1. New configuration keys  
+   • section: `reftable`  
+   • key    : `autorefresh`  
+   They must be added to `ConfigConstants`.
+
+2. `FileReftableDatabase`
+   • Read the default value of the feature from the repository’s config
+     during construction (`false` if not set).  
+   • Provide  
+     `void setAutoRefresh(boolean)` – overrides the configured value,  
+     `boolean isAutoRefresh()`.
+   • Before each public *read* operation (`exactRef`, `getRefs(String)`
+     and `getRefsByPrefixWithExclusions`) call an internal
+     `autoRefresh()` helper that triggers a reload when the feature is
+     active.
+   • Implement/override `refresh()`:
+       – If `FileReftableStack#isUpToDate()` returns `false`, clear the
+         reftable database caches, reload the stack
+         (`FileReftableStack#reload()`), and swallow any checked
+         `IOException` by re-throwing it as `UncheckedIOException`.
+   • `isAutoRefresh()` returns the current status.
+
+3. The implementation must not break any existing semantics when the
+   feature is turned off.
+
+
+
+### Non-functional requirements
+
+* No public API other than the additions described above may change.
+* All unit and integration tests supplied with the project – old and new
+  – must compile and pass without modifications to the tests.
+* Follow the existing project style and error-handling conventions.
+
+
+
+### Files touched by the reference solution
+(you may choose different files as long as the requirements are met)
+
+* `org.eclipse.jgit/src/org/eclipse/jgit/lib/ConfigConstants.java`
+* `org.eclipse.jgit/src/org/eclipse/jgit/internal/storage/file/FileReftableDatabase.java`
+
+
+
+Implement the feature so that every provided test succeeds.

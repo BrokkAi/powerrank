@@ -1,0 +1,45 @@
+### Problem: Incorrect CQL results when a query involves `MIN_TOKEN`
+
+Apache Cassandra supports token-based predicates such as
+```
+WHERE token(pk) > 0 AND token(pk) < MIN_TOKEN
+WHERE token(pk) BETWEEN 0 AND MIN_TOKEN
+```
+With the current implementation these predicates return the wrong
+rows because the internal range calculations do not recognise the
+special semantics of the minimum token (`Long.MIN_VALUE` for the
+`Murmur3Partitioner`).  
+The bug shows up both with the two-sided inequality form and with
+`BETWEEN … AND …`.
+
+### Required behaviour
+1. `MIN_TOKEN` must be treated as a *real* lower bound in the token
+   ring and never as a wrap-around value when it appears as the
+   upper end of a restriction.
+2. The four basic range helpers
+   ```
+   ClusteringElements.atMost / lessThan / atLeast / greaterThan
+   ```
+   must build the correct `RangeSet` even when the endpoint is
+   `MIN_TOKEN`, independently of whether the query is on clustering
+   columns or on a token.
+3. The range operators in `Operator` (`EQ, LT, LTE, GT, GTE, BETWEEN`,
+   …) have to be able to pass the partitioner down to those helpers so
+   that they can detect the minimum token.
+4. `BETWEEN` must *not* reorder its two arguments when the predicate
+   is on a token, otherwise the query engine cannot distinguish
+   ```
+   BETWEEN 0 AND MIN_TOKEN   -- legal, wraps around the ring
+   BETWEEN MIN_TOKEN AND 0   -- legal, contiguous on the ring
+   ```
+5. All existing, unchanged CQL behaviour must stay intact.
+
+### What you will see failing before the fix
+New unit and distributed tests exercise the above scenarios.  Typical
+symptoms are:
+* rows missing from a result set when `MIN_TOKEN` is the upper bound;
+* rows unexpectedly returned when the range should be empty;
+* incorrect handling of the two `BETWEEN` forms shown above.
+
+Your task is to update the implementation so that **all** provided
+tests, old and new, pass.

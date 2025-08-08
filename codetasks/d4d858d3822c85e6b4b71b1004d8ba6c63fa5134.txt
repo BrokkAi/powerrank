@@ -1,0 +1,40 @@
+Background  
+In Cassandra every live value or tombstone is stored as a Cell that carries four pieces of “liveness” metadata:
+
+• timestamp – write-time in micro-seconds  
+• ttl – time-to-live in seconds (-1 means “not expiring”, 0 means “already a tombstone”)  
+• local deletion time – the wall-clock second at which the value must be considered deleted (for expiring values this is timestamp-seconds + ttl)  
+• value – the actual column data
+
+When two replicas hold different versions of the same Cell the merge logic decides which one “wins”.  
+The decision must be
+
+1. deterministic: merging A with B gives the same result as merging B with A  
+2. commutative/transitive, otherwise read-repair will keep flipping data and incremental repairs will report mismatches.
+
+Bug  
+If the two cells
+
+• have the same timestamp  
+• have the same local deletion time  
+• but different ttl (typically produced when an application rewrites the same row with
+  `USING TTL ? AND TIMESTAMP ?` so expiration stays unchanged)
+
+then the present merge algorithm can pick either of the two versions, making the result non-deterministic across replicas and leading to repair mismatches.
+
+Required behaviour  
+When the timestamp and local deletion time are equal the merge must consistently select the cell whose TTL is **smaller** (i.e. the one that will expire sooner).  
+The same rule applies both to
+
+• primary-key liveness information (class `LivenessInfo`) and  
+• individual column cells (class `Cells`).
+
+Tasks  
+Modify the reconciliation logic so that:
+
+• LivenessInfo: with identical timestamp and localDeletionTime, the instance with the lower `ttl()` supersedes the other one.  
+• Cells.reconcile: if both candidate cells are expiring (not tombstones), share the same timestamp and localDeletionTime, but have different TTLs, choose the cell with the lower TTL.  
+• The operation must remain commutative; merging (A,B) or (B,A) must always yield the same winner.  
+• All existing behaviours unrelated to this scenario must stay untouched.
+
+Once the change is in place all supplied unit tests – new and pre-existing – must pass.

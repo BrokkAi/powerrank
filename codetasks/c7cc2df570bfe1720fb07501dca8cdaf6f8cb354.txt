@@ -1,0 +1,37 @@
+Implement “markdown compaction” so that, once a message has finished streaming, all consecutive prose-only Markdown blocks are merged into a single block.  
+The change touches two GUI classes and one data class and has to satisfy the new test-suite that accompanies this commit.
+
+Behaviour to implement
+1. IncrementalBlockRenderer  
+   • Add the public method `void compactMarkdown()` (idempotent).  
+   • After the renderer has been compacted it must:
+     – refuse further `update(String markdown)` calls by throwing `IllegalStateException`;  
+     – keep the already rendered Swing components but merge every run of consecutive `MarkdownComponentData`
+       (blocks created by the renderer for normal prose) into one block.  
+       The new block keeps the id of the first block in the run and concatenates the stored HTML of the run
+       separated by a single new line.  
+   • The renderer has to remember the most recent markdown text (`lastMarkdown`) so that it can rebuild its
+     `ComponentData` model during compaction and create the new merged list that is then passed to
+     `updateUI(List<ComponentData>)`.  
+   • Re-compacting a renderer that is already compacted is a no-op (must not change the UI nor throw).  
+   • `compactMarkdown()` must call `revalidate()` / `repaint()` on the root so that size and layout are refreshed.
+
+2. MarkdownOutputPanel  
+   • Provide a `compactAllMessages()` method that calls `compactMarkdown()` on every
+     `IncrementalBlockRenderer` held in `messageRenderers`, then revalidates and repaints the panel.  
+   • Whenever the panel receives new messages (`addMessages(...)`) or when `setBlocking(false)` is
+     executed, call `compactAllMessages()` so that already-streamed messages are compacted immediately.
+
+3. Styling tweak  
+   • In `MarkdownComponentData.buildHtml()`, change the CSS so that the generated `<body>` rule uses
+     `padding-left: 8px; padding-right: 8px;` instead of the former single `padding: 8px;`.
+
+Functional requirements:
+• Two prose paragraphs that were originally rendered as two separate Swing components become a single
+  component after compaction (component count shrinks).  
+• Mixed sequences (e.g. prose – code fence – prose) are not merged across the non-markdown component.  
+• Calling `compactMarkdown()` twice leaves the component hierarchy unchanged.  
+• After compaction the overall preferred height of the root panel does not grow and the scroll position of
+  a surrounding `JScrollPane` remains unchanged.  
+• `update()` cannot be called after compaction.  
+• The id of the first markdown block in each merged run stays the same.

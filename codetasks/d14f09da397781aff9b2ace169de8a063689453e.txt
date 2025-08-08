@@ -1,0 +1,91 @@
+Implement an additional “utility layer” on top of the Sandbox-faceting API so that the most common
+faceting tasks can be handled with just a few helper classes living in the package
+
+  org.apache.lucene.sandbox.facet.utils
+
+and one supplemental iterator in
+
+  org.apache.lucene.sandbox.facet.iterators.
+
+All new JUnit suites appearing in this change-set (especially
+TestFacetOrchestrators) as well as every pre-existing test must succeed.
+
+Business requirements
+---------------------
+
+1.  Helpers for sorting / top-N  
+    • Provide `ComparableUtils` (moved from the former
+      org.apache.lucene.sandbox.facet package).  
+    • The public surface, semantics and behaviour of every previously existing
+      method are unchanged, only the package has moved.  
+      The class must also expose `sort(int[] ords, ComparableSupplier<T>…)`.
+
+2.  Iterator that counts while it streams  
+    • Class `LengthOrdinalIterator` wraps another `OrdinalIterator`.  
+    • It forwards all calls to its delegate, increments an internal counter for
+      every ordinal returned and exposes the total via `length()`.  
+    • Calling `length()` before the iterator has been fully consumed is an
+      error (throw `IllegalStateException`).
+
+3.  End-to-end request object (`FacetBuilder`)  
+    A “facet request” is represented by a dedicated builder instance which is
+    later asked for a `FacetResult`.  
+    Core responsibilities:
+      – decide which `FacetFieldCollectorManager` is needed,  
+      – share collectors with other compatible builders,  
+      – convert raw ordinals into the final `FacetResult` (supporting cut-off
+        by top-N and several sort orders).
+
+    A small hierarchy is required:
+
+      • FacetBuilder (abstract – public API entry)  
+      • BaseFacetBuilder<C extends BaseFacetBuilder<C>>  
+      • Concrete implementations:
+          – CommonFacetBuilder   (field-agnostic, takes cutter + ord-label map)  
+          – TaxonomyFacetBuilder (taxonomy facets)  
+          – LongValueFacetBuilder (distinct numeric values / DocValues)
+
+    The exact constructor signatures and public helper methods must match what
+    the test-classes use (see the diff).  Behaviour highlights:
+
+      – `.withTopN(int)` keeps only the N best children.  
+      – `.withSortByCount()` and default ordering rules described in the
+        diff.  
+      – Builders sharing the same “collection key” must re-use the same
+        collector/recorders so that only one CollectorManager is created per
+        unique facet field when orchestrated together.
+
+4.  Factory for numeric range facets  
+    • `RangeFacetBuilderFactory` creates ready-to-go `CommonFacetBuilder`
+      instances for long and double ranges.  
+    • Returned facets initially sort by the original range order unless the
+      caller changes it.
+
+5.  Simple orchestrators  
+    • `FacetOrchestrator` – runs any number of `FacetBuilder`s together with an
+      optional main `CollectorManager` on a plain `IndexSearcher`.  
+    • `DrillSidewaysFacetOrchestrator` – analogous helper when the user works
+      with `DrillSideways`.  It must support
+        – pure drill-down builders,  
+        – drill-sideways builders bound to a particular dimension.  
+      Internally it has to map dimensions to the correct collector manager list
+      expected by `DrillSideways`.
+
+6.  Minor support code / changes  
+    • TaxonomyFacetsCutter: always roll up single-valued dimensions irrespective
+      of the ‘hierarchical’ flag (see diff).  
+    • Any other auxiliary classes/interfaces introduced by the diff that are
+      referenced from the tests must be implemented.
+
+Constraints
+-----------
+
+• Keep public API identical to what is consumed in the updated demo and tests.  
+• Do not break any previously passing test.  
+• All logic has to be thread-safe where Lucene expects it (collector managers
+  can be executed concurrently).  
+• Implementations must work for the standard demo in
+  `SandboxFacetsExample` and for all unit tests added in this commit.
+
+Achieving the above guarantees that the whole build, including the new
+`TestFacetOrchestrators` suite, succeeds.

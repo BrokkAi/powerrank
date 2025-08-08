@@ -1,0 +1,30 @@
+### Problem
+
+`OpenSshServerKeyDatabase` is responsible for reading the *known-hosts* files and deciding whether an incoming SSH server key is acceptable, has changed, or is completely new.  
+At the moment the component silently **ignores** host-key lines whose key-type is unknown to JGit (for instance a line that starts with a proprietary algorithm).  
+Because of that:
+
+1. When such a host is contacted JGit behaves as if there were **no stored key at all** and only shows the “add new key?” prompt instead of the “the key you know is different, do you still want to continue?” prompt.
+2. If the user accepts and asks to store the key JGit overwrites the old line, thereby destroying information that might still be useful for other SSH programs.
+
+The behaviour must be fixed.
+
+### Required behaviour
+
+1. While parsing *known-hosts* a line that contains an **unknown key-type** must *not* be dropped.  
+   It has to be represented in memory as an `UnsupportedSshPublicKey` so the database can later detect that “some key for this host is already present, it’s just not one we understand”.
+
+2. When such a line is encountered during verification  
+   • it must be **ignored for the actual key comparison** (because we can’t verify it),  
+   • but it must make the session fall into the “modified key” workflow, i.e. the user must be told that *another* key for this host is already stored.
+
+3. If the user chooses **“allow and store”** for the new key while the existing line contains an `UnsupportedSshPublicKey`, the old line must **not be replaced**.  
+   Instead a **new line** with the supported key has to be appended so both keys coexist in the file.
+
+4. Creation of a completely new line (either because the key is entirely new or because of the situation described in 3) has to work exactly as before, including optionally creating the file if it is missing and the user confirms.
+
+5. All existing functionality and tests must keep working; the newly supplied test that covers the above scenario must also pass.
+
+### Scope
+
+Only modify the implementation; the public API and semantics visible to callers must stay unchanged except for the corrected behaviour described above.

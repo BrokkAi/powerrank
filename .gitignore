@@ -1,0 +1,10 @@
+
+### BROKK'S CONFIGURATION ###
+.brokk/**
+/.brokk/workspace.properties
+/.brokk/sessions/
+/.brokk/dependencies/
+/.brokk/history.zip
+!.brokk/style.md
+!.brokk/review.md
+!.brokk/project.properties

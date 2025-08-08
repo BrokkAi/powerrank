@@ -1,0 +1,14 @@
+The existing Git client library already supports creating a new branch from another branch (createAndCheckoutBranch).  
+A new feature is required: create a branch that starts from an arbitrary commit-id and not necessarily from the tip of an existing branch.  
+
+Required behaviour  
+1. Class src/main/java/io/github/jbellis/brokk/git/GitRepo.java must offer  
+   public void createBranchFromCommit(String newBranchName, String sourceCommitId) throws GitAPIException  
+   • newBranchName is the branch that will be created.  
+   • sourceCommitId is any valid full or short SHA that exists in the repository.  
+2. If listLocalBranches() already contains newBranchName the method must throw the same runtime exception type that the rest of the
+   class uses to signal an illegal repository state (GitStateException).  
+   The message is verified by the tests:  
+   "Branch '" + newBranchName + "' already exists" (the calling code appends its own suffix if it wants uniqueness).  
+3. Otherwise the method must ask JGit to create the branch with setStartPoint(sourceCommitId) and finally call refresh() so that the
+   in-memory caches (branch list etc.) are up to date.  

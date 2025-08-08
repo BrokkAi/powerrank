@@ -1,0 +1,42 @@
+### Problem
+
+The Mistral AI integration must be able to request **structured-output** answers by attaching a JSON-Schema definition to the prompt.  
+Refactor the representation of that schema so that:
+
+1.  A schema can be built fluently before it is submitted to Mistral.  
+2.  The same representation can be deserialised back from the wire by Jackson.  
+3.  An instance can be produced automatically from LangChain4j’s generic `JsonSchema` description, both in *strict* and *non-strict* modes.  
+
+The new implementation has to satisfy every existing and newly–added integration/AI-service test, including the new
+`MistralAiAiServiceWithJsonSchemaIT`.
+
+
+
+#### Functional requirements
+* Provide an immutable `MistralAiJsonSchema` value object that  
+  * contains the fields `name`, `description`, `schema` (a `Map<String, Object>`) and the boolean flag `strict`;  
+  * exposes public getters for all fields;  
+  * can be serialised/deserialised by Jackson exactly as Mistral’s REST API expects;
+    the Jackson annotations already used in the codebase must be respected;
+  * is instantiated exclusively through a `Builder` returned by a static `builder()` method.
+* Supply the conversion helpers  
+  `MistralAiJsonSchema.fromJsonSchema(JsonSchema schema)` and  
+  `MistralAiJsonSchema.fromJsonSchema(JsonSchema schema, boolean strict)`
+  that turn LangChain4j’s generic `JsonSchema` into the provider-specific one
+  (the generic helper `JsonSchemaElementHelper.toMap(…)` must be reused).
+* Backward compatibility:
+  nothing that previously compiled may break – public surface and behaviour relied on by other providers/tests must remain intact.
+
+
+
+#### Non-functional requirements
+* All provided unit and integration tests, old and new, must pass.
+* Do **not** break binary compatibility for other modules in the project.
+* Follow the existing coding style (immutability, naming conventions, Jackson configuration, etc.).
+
+
+
+#### Hints
+The bulk of the work is inside `dev.langchain4j.model.mistralai.internal.api.MistralAiJsonSchema`.
+No changes are necessary in the test sources; fixing compilation/runtime issues in
+main sources is sufficient to make the suite green.

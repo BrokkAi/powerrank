@@ -1,0 +1,41 @@
+Context  
+The compaction framework already supports “composite” (sharded / parallel) compactions.  
+During such a compaction every shard-task reports its own progress, and a
+`SharedCompactionObserver` merges those per-shard notifications so that the
+outside world sees the operation only once.
+
+What is missing is a way for callers that create background work
+explicitly (e.g. CNDB) to plug in their own top-level observer instead of
+always getting the internal `UnifiedCompactionStrategy` instance.
+
+
+
+Required behaviour  
+1. `UnifiedCompactionStrategy#getNextBackgroundTasks(Collection<CompactionAggregate>, int)`
+   must be overloadable with an extra
+   `CompactionObserver compositeObserver` argument.  
+   The original two-argument flavour keeps its existing behaviour and
+   delegates to the new one by passing `this` as the observer.
+
+2. The observer supplied through the new entry point has to be propagated
+   all the way down to the code that actually builds the compaction
+   tasks:
+      • `createCompactionTasks`  
+      • `createAndAddTasks`  
+      • `createParallelCompactionTasks`
+
+3. `SharedCompactionObserver`
+   • Its constructor must accept a generic `CompactionObserver`
+     (the one handed in from the chain above).  
+   • It must forward the aggregated notifications (`onInProgress`,
+     `onCompleted`) to that delegate exactly once – i.e. the delegate must
+     receive a single “in-progress” event when the first shard starts and a
+     single “completed” event when the very last shard finishes.  
+     (Per-shard observers must still be attached to every task.)
+
+4. All public and existing behaviour of
+   `UnifiedCompactionStrategy` and its two-argument
+   `getNextBackgroundTasks` variant must remain unchanged.
+
+When the implementation is correct the whole unit test suite – including the
+new tests that rely on a user-provided observer – compiles and passes.

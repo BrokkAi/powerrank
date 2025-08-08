@@ -1,0 +1,21 @@
+### Task Description
+
+You are tasked with modifying the `getPagerank` method in the `AbstractAnalyzer` class. The current implementation returns a list of code units and their pagerank scores, including entries with zero scores. Your goal is to ensure that any result with a score of zero is excluded from the returned list.
+
+#### Requirements
+1. Modify the `getPagerank` method in `AbstractAnalyzer` to **exclude all entries** where the pagerank score is zero (`0.0`).
+2. The method must still return a list of `(CodeUnit, Double)` pairs for entries with scores greater than zero, sorted in descending order by score.
+3. After your changes, the existing test `getPagerankEmptyClassTest` must pass. This test verifies that when pagerank is seeded with a class that has no connections, the result is an empty list.
+
+#### Constraints
+- Do not modify the pagerank algorithm itself (e.g., damping factor, iterations, or teleportation logic).
+- Only change the result processing step to filter out zero scores.
+- Ensure inner class coalescing logic remains intact.
+- Maintain all existing functionality for non-zero score entries.
+
+#### Context
+- The `getPagerank` method computes relevance scores for classes based on connectivity.
+- The method signature is:  
+  `getPagerank(seedWeights: java.util.Map[String, java.lang.Double], k: Int): java.util.List[(CodeUnit, java.lang.Double)]`
+
+Your solution must pass all provided tests, including the new `getPagerankEmptyClassTest` which expects an empty list for disconnected classes.

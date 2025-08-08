@@ -1,0 +1,79 @@
+Implement support for writing Git “multi-pack index” ( *.midx ) files in JGit.
+
+Add a new class org.eclipse.jgit.internal.storage.midx.MultiPackIndexWriter and a companion
+org.eclipse.jgit.internal.storage.midx.MultiPackIndexConstants.
+
+MultiPackIndexWriter.write(ProgressMonitor monitor,
+                           OutputStream out,
+                           Map<String, PackIndex> packIndexes)
+
+must serialise the supplied pack indexes into a valid version-1 multi-pack index that
+Git itself ( git multi-pack-index verify ) accepts.
+
+Required format (see git-docs):
+
+Header – 12 bytes  
+  4 byte signature ‘MIDX’  
+  1 byte midx version (1)  
+  1 byte hash version (1 → SHA-1)  
+  1 byte number of chunks  
+  1 byte reserved (0)  
+  4 byte number of packfiles
+
+Chunk-lookup table  
+  (chunkCount + 1) entries, each 12 bytes:  
+  4 byte chunk id (ASCII)  
+  8 byte absolute offset of the chunk in the file  
+  last entry has id 0 and points to the end of the previous chunk.
+
+Mandatory chunks (in this order)
+
+• OIDF (‘OIDF’) – fan-out table: 256 × 4 bytes, cumulative counts  
+• OIDL (‘OIDL’) – list of object ids in ascending hash order  
+• OOFF (‘OOFF’) – for every object: 4 byte pack-id, 4 byte offset  
+     • if offset ≤ 0xFFFFFFFF write it directly  
+     • if offset > 0xFFFFFFFF store (index | 0x80000000) where index
+       is the position inside the LOFF chunk (see below)  
+• RIDX (‘RIDX’) – reverse index: positions of the objects when sorted
+  by (pack-id, offset) – one 4 byte entry per object  
+• PNAM (‘PNAM’) – NUL-terminated pack names in lexicographic order
+  (exact file names passed in the input map). No padding is required.
+
+Optional chunk
+
+• LOFF (‘LOFF’) – present only when at least one object offset is
+  larger than 0xFFFFFFFF. Contains the 64-bit offsets referenced from
+  OOFF (8 bytes each, in the order they are first encountered).
+
+After all chunks, append the 20-byte SHA-1 digest of every preceding
+byte in the file (same algorithm as Git index files).
+
+Utility constants that must be provided in MultiPackIndexConstants:
+
+CHUNK_LOOKUP_WIDTH = 12  
+MIDX_CHUNKID_PACKNAMES = 0x504E414D  /* ‘PNAM’ */  
+MIDX_CHUNKID_OIDFANOUT = 0x4F494446  /* ‘OIDF’ */  
+MIDX_CHUNKID_OIDLOOKUP = 0x4F49444C  /* ‘OIDL’ */  
+MIDX_CHUNKID_OBJECTOFFSETS = 0x4F4F4646  /* ‘OOFF’ */  
+MIDX_CHUNKID_LARGEOFFSETS = 0x4C4F4646  /* ‘LOFF’ */  
+MIDX_CHUNKID_REVINDEX = 0x52494458  /* ‘RIDX’ */  
+plus MIDX_SIGNATURE, MIDX_VERSION, OID_HASH_VERSION and
+MULTIPACK_INDEX_FANOUT_SIZE (256 × 4).
+
+Functional requirements
+
+• Pack names are sorted lexicographically; the first pack has id 0, the
+  second id 1, and so on.
+• Across all packs an object is stored only once.  When duplicates are
+  found, the copy from the pack with the lowest pack-id is kept.
+• Objects in OIDL are sorted by full object id; the accompanying
+  information in all parallel chunks is kept in exactly the same order.
+• The file must be verifiable with ‘git multi-pack-index verify’.
+• The writer must work for packs whose largest offset crosses the 4 GB
+  boundary by adding/omitting the ‘LOFF’ chunk as described.
+• The existing progress-monitor may be ignored except that a cancelled
+  monitor must stop writing and throw an IOException.
+
+Passing the supplied unit-tests requires producing files of the exact
+sizes they calculate (1340 bytes without LOFF, 1360 bytes with LOFF)
+and the expected chunk ordering.

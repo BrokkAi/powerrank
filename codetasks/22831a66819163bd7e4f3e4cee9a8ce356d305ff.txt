@@ -1,0 +1,74 @@
+Context  
+A `CounterMutation` must ensure that every local counter it touches is protected by a
+per-counter lock so that two threads never update the same counter row simultaneously.
+The project now exposes this requirement through the new interface  
+
+    org.apache.cassandra.db.counters.CounterLockManager
+
+together with two alternative runtime implementations:
+
+1. StripedCounterLockManager – the legacy approach that relies on a fixed
+   number of Guava‐striped re-entrant locks that may be shared by many counters.
+2. CachedCounterLockManager – a new, fully dynamic solution that creates an
+   independent re-entrant lock for every counter that is accessed and keeps each
+   lock in an internal cache until it is no longer referenced.
+
+Task  
+Supply a fully-functional implementation of the complete lock-management
+framework so that all existing and new unit–tests pass.
+
+Functional requirements (abridged)
+
+CounterLockManager  
+• grabLocks(Iterable<Integer> keys)  
+  – Returns one LockHandle for every key in the iterable (duplicates allowed).  
+  – Returned list must be sorted by the key value to eliminate dead-lock cycles.  
+  – Each handle refers to one concrete lock that is shared by all handles created
+    for the same key.  
+• hasNumKeys()/getNumKeys()  
+  – Only the cached implementation must support these methods; the striped
+    version can always return false / throw UnsupportedOperationException.  
+
+LockHandle  
+• tryLock(timeout, unit) may be invoked at most once; it must return true if the
+  lock is obtained within the deadline.  
+• release() must always be called, even when the lock wasn’t acquired or
+  tryLock has never been executed.  
+  – The first call must
+        • unlock the underlying lock if it was actually acquired and
+        • decrease the reference count kept by the cached implementation.  
+  – A second call must throw IllegalMonitorStateException (as the tests expect).  
+
+CachedCounterLockManager  
+• Internally stores a ConcurrentHashMap<Integer, RefCountedLock>.  
+• When grabLocks is invoked:  
+  – For every requested key, atomically create (or fetch and ref-count) a
+    ReentrantLock.  
+  – Wrap the lock inside a new LockHandle instance (there may be several handles
+    for the same lock).  
+• When a handle is released, the map entry must be removed once the last live
+  handle for that key is gone (reference count drops to zero).  
+• getNumKeys() returns the current size of the map.
+
+StripedCounterLockManager  
+• Delegates locking to a Guava Striped<Lock> created with a stripe count that
+  scales with DatabaseDescriptor.getConcurrentCounterWriters().  
+• No key accounting is needed (hasNumKeys() returns false).
+
+General constraints  
+• All locks must be instances of java.util.concurrent.locks.ReentrantLock so
+  that re-entrancy works when the same thread receives several handles pointing
+  to the same physical lock (e.g. for duplicate keys).  
+• Implementations must be completely thread-safe; the included stress test
+  spawns many threads that concurrently grab, acquire and release locks.  
+• The static field  
+
+      CounterLockManager.instance
+
+  must deliver a CachedCounterLockManager by default and the
+  StripedCounterLockManager when the JVM property
+  “cassandra.use_striped_counter_lock_manager” is set to “true”.
+
+With these behaviours in place all unit tests – including basic scenarios,
+timeout handling, interruption propagation and a multi-threaded stress test –
+have to succeed.

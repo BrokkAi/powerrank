@@ -1,0 +1,36 @@
+### Objective  
+Extend Lucene’s combined-fields query so that it can fill a `DocAndFloatFeatureBuffer` in one call instead of iterating and scoring one document at a time.  
+Two classes have to be enhanced:
+
+1. `CombinedFieldQuery.CombinedFieldScorer` (core scorer that drives the query)  
+2. `MultiNormsLeafSimScorer` (helper that translates term frequency + norm into a final score)
+
+### Functional requirements  
+
+1. `CombinedFieldScorer` must override  
+   `void nextDocsAndScores(int upTo, Bits liveDocs, DocAndFloatFeatureBuffer buffer)`  
+
+   • Read through the scorer’s `DocIdSetIterator` starting from its current position (inclusive).  
+   • Stop once one of the following happens  
+     – The iterator’s current document id ≥ `upTo`.  
+     – A fixed batch size of documents has been copied into the `buffer`.  
+   • Skip deleted documents when `liveDocs != null`.  
+   • For every accepted document, place its id in `buffer.docs` and its raw term-frequency (the value returned by `freq()`) in `buffer.features`.  
+   • Ensure the internal arrays of the buffer are large enough (`buffer.growNoCopy(...)`) and then set `buffer.size` to the number of collected documents.  
+   • When at least one document has been gathered, convert every raw term-frequency in the buffer into a final score by delegating to the scorer’s `simScorer` through `MultiNormsLeafSimScorer.scoreRange(buffer)`.  
+   • The underlying iterator has to progress exactly as far as the last document copied into the buffer (or remain unchanged when no document was copied).
+
+2. `MultiNormsLeafSimScorer` must add  
+
+   `void scoreRange(DocAndFloatFeatureBuffer buffer) throws IOException`
+
+   • For each entry inside `buffer` look up the document’s norm value (use `getNormValue(doc)` which already exists).  
+   • Call the wrapped `Similarity.SimScorer` once per document: `scorer.score(freq, norm)` and store the returned value back into `buffer.features[i]`.  
+   • Re-use a private growable `long[]` cache to avoid reallocations when reading consecutive batches.
+
+3. Behavioural expectations  
+   • The new bulk method must yield exactly the same scores and iterator state as scoring the same documents one by one.  
+   • Supplying a `Bits` implementation that excludes every document must leave the buffer empty.  
+   • All existing public behaviour of `CombinedFieldQuery` remains unchanged.
+
+Implementations must respect Lucene’s usual contract regarding iterator states and must not leave the scorer positioned behind the batch that has just been returned.

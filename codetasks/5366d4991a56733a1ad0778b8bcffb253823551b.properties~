@@ -1,0 +1,1 @@
+testall_cmd=sbt "testOnly io.github.jbellis.brokk.context.ContextSerializationTest"

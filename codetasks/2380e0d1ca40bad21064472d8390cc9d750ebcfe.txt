@@ -1,0 +1,13 @@
+Task summary  
+A number of classes were updated to rely on a new helper that has not existed so far:
+
+org.apache.lucene.util.MathUtil#unsignedMin(int a, int b)
+
+Your job is to add this method to MathUtil (and only touch files the harness tells you to).  
+The method must:
+
+1. Compare the two given values as 32-bit unsigned integers (i.e. the range 0 … 2³²-1, so negative signed ints are larger than every non-negative signed int).
+2. Return whichever of the two arguments is the smaller one in that unsigned sense.
+3. Run in constant time – just a couple of simple operations; no boxing or loops required.
+
+After you implement it, every existing and newly added test—including the new cases in TestMathUtil—must compile and succeed. No other behaviour of MathUtil may change.

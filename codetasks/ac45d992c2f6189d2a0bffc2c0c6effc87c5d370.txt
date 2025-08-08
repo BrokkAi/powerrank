@@ -1,0 +1,27 @@
+Implement support for extracting the positions of set bits from a `FixedBitSet` into a pre-allocated `int[]` so that Lucene’s postings reader can copy documents that are stored as a bit-set block.
+
+Required behaviour
+------------------
+Create an implementation for
+
+    package org.apache.lucene.codecs.lucene103;
+
+    final class BitSetUtil {
+        static int denseBitsetToArray(FixedBitSet bitSet,
+                                      int from,          // inclusive
+                                      int to,            // exclusive
+                                      int base,          // value added to every id
+                                      int[] target)      // destination
+    }
+
+• Only bits whose index is ≥ `from` and < `to` must be considered.  
+• For every such set bit *i*, write `base + i` into `target` starting at index 0, preserving ascending order.  
+• Return the number of values written.  
+• The calling code guarantees that `target.length ≥ bitSet.cardinality(from,to)+1`; throw no exceptions related to capacity.  
+• Validate the range with `Objects.checkFromToIndex(from,to,bitSet.length())`. No other public validation is required.  
+• The method is package-private and may use `FixedBitSet#getBits()` for direct word access.  
+• It must work correctly irrespective of how `from` and `to` align to 64-bit machine words.
+
+Performance is important (it is executed in the postings reader hot-loop) but any correct, allocation-free implementation that passes all unit tests is acceptable.
+
+All existing and new tests, especially `TestBitSetUtil`, must pass. No public API or behaviour elsewhere in Lucene may regress.

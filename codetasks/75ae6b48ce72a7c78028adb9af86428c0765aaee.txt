@@ -1,0 +1,35 @@
+LangChain4j’s MCP client must now understand the “roots” feature that was recently added to the MCP protocol.  
+Your task is to extend the client-side implementation so that:
+
+1.  A caller can declare a set of roots when the client is built and can replace that set later.
+2.  The client advertises “roots” capability during initialisation and answers the server’s
+    `roots/list` request with the current list.
+3.  Every time the local list is replaced the client notifies the server with
+    `notifications/roots/list_changed`.
+4.  All message classes use the new naming scheme (`Mcp…`) and the former `ClientMethod`,
+    `CancellationNotification`, … classes are no longer referenced anywhere.
+
+Protocol artefacts that have to exist (and be serialised with Jackson exactly like the other
+messages):
+
+• `McpRoot` – simple record holding the root’s name and URI.  
+• `McpClientMethod` – enum listing all client-originated methods including the new
+  `NOTIFICATION_ROOTS_LIST_CHANGED`.  
+• `McpCancellationNotification`, `McpInitializationNotification`,
+  `McpRootsListChangedNotification`, `McpRootsListResponse` – message wrappers that follow the
+  style of the already existing `McpPingRequest`, `McpPingResponse`, … classes.  
+• `McpInitializeParams` – same content and JSON shape as the former `InitializeParams`
+  but kept under the new name.
+
+Runtime behaviour that must be honoured:
+
+• `DefaultMcpClient.Builder.roots(List<McpRoot>)` stores the initial list.  
+• `DefaultMcpClient.setRoots(List<McpRoot>)` replaces the list (thread-safe) and immediately
+  sends a `notifications/roots/list_changed` message.  
+• `McpOperationHandler` receives the current root list through a
+  `Supplier<List<McpRoot>>`, completes every `roots/list` *server-initiated* request by sending a
+  `McpRootsListResponse`, and still answers `ping` as before.  
+• The existing health-check, tool execution and other functionality must continue to work.
+
+All new and existing unit / integration tests supplied with the project (including the new
+`McpRoots…` tests) must pass.

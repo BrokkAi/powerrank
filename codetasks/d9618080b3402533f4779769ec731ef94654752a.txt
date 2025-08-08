@@ -1,0 +1,61 @@
+Implement late-interaction re-ranking support in Lucene.
+
+Required behaviour
+
+1. org.apache.lucene.document.LateInteractionField  
+   • Sub-class of BinaryDocValuesField able to hold a multi-vector (float[][]).  
+   • Encoding: payload is little-endian. First 4 bytes store the common token-vector dimension (int), followed by all floats of all token vectors in row-major order.  
+   • All composing token vectors of one value must share the same dimension.  
+   • Public API  
+     – LateInteractionField(String name, float[][] value)  
+     – void setValue(float[][] value)  
+     – float[][] getValue()  
+     – static BytesRef encode(float[][] value)  
+     – static float[][] decode(BytesRef bytes)  
+   • IllegalArgumentException must be thrown when the value is null, empty, or when token-vector dimensions are inconsistent.
+
+2. org.apache.lucene.search.MultiVectorSimilarity  
+   • Functional interface with  
+       float compare(float[][] a, float[][] b, VectorSimilarityFunction sim);
+
+3. org.apache.lucene.search.LateInteractionFloatValuesSource  
+   • Extends DoubleValuesSource.  
+   • Constructor variants:  
+       LateInteractionFloatValuesSource(String field, float[][] query)  
+       LateInteractionFloatValuesSource(String field, float[][] query, VectorSimilarityFunction sim)  
+       LateInteractionFloatValuesSource(String field, float[][] query, VectorSimilarityFunction sim, MultiVectorSimilarity scorer)  
+   • Default similarity = VectorSimilarityFunction.COSINE, default scorer = ScoreFunction.SUM_MAX_SIM.  
+   • Validates the supplied query multi-vector the same way LateInteractionField validates values.  
+   • getValues(): reads BinaryDocValues of the supplied field; for every document that has a value, decodes it with LateInteractionField.decode and returns scorer.compare(query, docVector, similarity). If the field is absent, DoubleValues.EMPTY is returned.  
+   • needsScores() = false, rewrite() returns itself, isCacheable() = true.  
+   • Proper equals, hashCode, toString implementations.
+
+   Inner enum ScoreFunction implements MultiVectorSimilarity and provides at least SUM_MAX_SIM : for each query token vector take the maximum similarity against any document token vector and sum those maxima.  Similarity between two single float[] vectors is delegated to VectorSimilarityFunction.compare(a,b).  If the document multi-vector is empty return Float.MIN_VALUE.
+
+4. org.apache.lucene.search.LateInteractionRescorer  
+   • Extends DoubleValuesSourceRescorer.  
+   • Constructors are private; use factory methods:  
+       create(String field, float[][] query)  
+       create(String field, float[][] query, VectorSimilarityFunction sim)  
+       withFallbackToFirstPassScore(String field, float[][] query, VectorSimilarityFunction sim)  
+   • Factories build a LateInteractionFloatValuesSource with ScoreFunction.SUM_MAX_SIM, wrap it in a LateInteractionRescorer and return it.  
+   • Default combine(): if the document has a late-interaction value return sourceValue else 0f.  
+   • withFallbackToFirstPassScore() overrides combine(): if value present use sourceValue, otherwise keep firstPassScore.
+
+5. org.apache.lucene.search.RescoreTopNQuery  
+   • Add static factory  
+       createLateInteractionQuery(Query in, int n, String field, float[][] query, VectorSimilarityFunction sim)  
+     which returns new RescoreTopNQuery(in, new LateInteractionFloatValuesSource(field, query, sim), n);
+
+6. All new code must compile under the existing Lucene test framework and satisfy the added test suites in:
+   • TestLateInteractionField  
+   • TestLateInteractionFloatValuesSource  
+   • TestLateInteractionRescorer  
+   • TestRescoreTopNQuery
+
+Notes & constraints
+
+• Follow existing Lucene coding conventions.  
+• Use java.nio.ByteBuffer for encoding/decoding; ensure little-endian order.  
+• Do not modify other public APIs beyond what is described.  
+• Performance (e.g. buffering, allocations) should be on par with typical Lucene code, but exhaustive optimisation is not required—correctness is.

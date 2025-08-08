@@ -1,0 +1,35 @@
+Background
+Cassandra keeps a per-SSTable probabilistic index (Bloom filter).  
+When global Bloom-filter memory is exhausted the factory returns a
+singleton placeholder (org.apache.cassandra.utils.AlwaysPresentFilter)
+instead of a real BloomFilter.  
+That placeholder must stay in-memory only: trying to write it to disk
+(or later re-read it) is useless and can even break table loading.
+
+Task
+1. Make every code path that writes a filter component to disk ignore
+   anything that is not an actual
+   org.apache.cassandra.utils.obs.BloomFilter.  
+   • When the filter instance is not a BloomFilter simply skip the write
+     and leave the *.filter component absent.  
+   • Add an informational log entry that the filter was skipped.
+
+   These writes happen when
+   – an SSTable is flushed/streamed/compacted (writers)  
+   – a finished table is being saved (SSTableReader.saveBloomFilter)  
+   – a Bloom filter is “re-created” after opening an old SSTable.
+
+2. org.apache.cassandra.utils.obs.MemoryLimiter.increment(long bytes)
+   must guard against 64-bit overflow: if the internal counter would
+   become negative treat it the same as exceeding the configured
+   maximum and reject the allocation.
+
+3. Give org.apache.cassandra.utils.AlwaysPresentFilter a meaningful
+   toString implementation so the log messages from step 1 are readable.
+
+Result
+• No *.filter file is produced when AlwaysPresentFilter is used.  
+• Opening such an SSTable later leaves the reader with the same
+  AlwaysPresentFilter instance.  
+• MemoryLimiter never rolls over into negative numbers.  
+All existing and new unit tests must pass.

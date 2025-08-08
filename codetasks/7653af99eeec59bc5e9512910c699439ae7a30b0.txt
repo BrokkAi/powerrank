@@ -1,0 +1,31 @@
+Subject
+ORDER BY … BM25 on an analysed SAI index must not crash if some of the rows that match the index key have already been deleted (row- or column-tombstone).  
+A deleted row/column must simply be ignored when BM25 statistics and scores are produced.
+
+Background
+While the BM25 logic walks over the postings that the SAI inverted index returns, it asks the mem-table/SSTable for the corresponding Cell that stores the indexed column value.  
+If the row (or just the column) has been deleted, that lookup returns null.  
+The code that turns the Cell into a BM25 document (`BM25Utils.DocTF.createFromDocument`) was called unconditionally and dereferenced the null, producing a `NullPointerException`.  
+The same unconditional use of the Cell led to wrong corpus statistics (document frequency, total document count) because deleted rows were still counted.
+
+Required behaviour
+1. Whenever the BM25 implementation meets a PrimaryKey for which the indexed column is no longer live  
+   • do NOT build a `DocTF`,  
+   • do NOT add it to the candidate list that will be scored,  
+   • do NOT add it to any corpus statistics (document frequency, total document count).
+
+2. With the fix in place:
+   • `ORDER BY <column> BM25 OF …` must always succeed, regardless of whether any of the
+     rows that once contained the term have been deleted before or after a flush.  
+   • The remaining live rows must be returned in the correct BM25 order.  
+   • The change must be effective for plain BM25 queries, BM25 queries that are combined with
+     additional SAI predicates, and for both single-partition and wide-partition layouts.
+
+Implementation notes
+The solution only needs to touch the in-memory index path; the on-disk path already ignores tombstoned rows.  
+Make sure that every place where the code:
+   • transforms a PrimaryKey into a `DocTF`, or  
+   • lazily counts documents while computing frequencies,  
+first checks that `getCellForKey(pk)` is non-null and skips the key otherwise.
+
+All existing functionality, including the new tests that cover the above scenarios, must continue to pass.

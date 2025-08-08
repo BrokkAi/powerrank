@@ -1,0 +1,36 @@
+### Problem
+
+`langchain4j` currently demands that an `AiService` is configured **either**
+
+* with a fixed list/set of tools (`tool(Object …)` / `tools(…)`) **or**
+* with a `ToolProvider`
+
+but never with both at the same time.  
+The framework must be changed so that static and dynamic tools **can be mixed during the same
+invocation**.
+
+Required behaviour
+
+1. `ToolService` must accept calls to `toolProvider(…)` **and** `tools(…)` in any order on the
+   same builder instance. The previous *mutual-exclusion* checks have to be removed.
+
+2. When a `ToolExecutionContext` is created  
+   (`ToolService.executionContext(Object memoryId, UserMessage message)`)
+
+   * the context must contain  
+     • every statically registered tool, plus  
+     • every tool returned by the `ToolProvider` for this request.
+   * If a tool coming from the provider has the same **name** as one that is already present
+     (either another provider tool or a static one) the call must fail with  
+     `IllegalConfigurationException("Duplicated definition for tool: <name>")`.
+
+3. If no tools are configured at all the returned `ToolExecutionContext` must expose
+   `null` (not an empty collection) for both the specifications and executors, reproducing the
+   historical behaviour.
+
+4. `ToolService` should no longer create its internal collections lazily; they must be
+   initialised once and never become `null`.
+
+All existing functionality (including sequential invocation limits, etc.) must keep working.
+
+When the implementation is complete **all supplied tests – old and new – must pass.**

@@ -1,0 +1,56 @@
+Problem: 
+The current implementation of org.apache.cassandra.service.accord.WatermarkCollector keeps
+
+1. ``closed`` and ``retired`` watermark information in ordinary hash-maps and forwards every single
+   range to `ConfigurationService`.  
+   – The same range may be inserted many times and overlapping/adjacent ranges are never merged,
+     so the internal state can grow without bound and the hand-off to `TopologyManager`
+     becomes quadratic.
+
+2. Per-node “synced” epochs are stored in an `Int2ObjectHashMap`; this both wastes memory and
+   prevents representing node identifiers that do not fit into a signed 32-bit
+   integer.
+
+3. The public nested class `WatermarkCollector.Snapshot` (and its
+   `Serializer`) still reflects the old data-structures.  
+
+Because of these limitations the new unit tests cannot pass.
+
+Task
+Implement the necessary changes in WatermarkCollector (and any support
+classes you touch) so that:
+
+• Ranges that share the same epoch are automatically coalesced.  
+  Use the existing utility `accord.utils.ReducingRangeMap` for the
+  in-memory representation and its helpers (`create`, `merge`, `foldlWithBounds`, …).  
+  After every `onEpochClosed` / `onEpochRetired` call the corresponding
+  map must contain at most one entry for every contiguous token interval.
+
+• Per-node sync information is held in an `org.agrona.collections.Long2LongHashMap`
+  keyed by the raw `long` node id.  The default “no entry” value must be –1.
+
+• `WatermarkCollector.Snapshot`
+  – now contains `List<Map.Entry<Range,Long>> closed`, the same for
+    `retired`, and the `Long2LongHashMap synced`.  
+  – Its binary representation (used by its inner `Serializer`)
+    is updated to write/read the new collections in the same order as
+    before, but using the new types and unsigned-VInt encoding for the
+    long map key.
+
+• `WatermarkCollector.handler` must build the new snapshot from the
+  internal data: extract the deduplicated ranges from each
+  `ReducingRangeMap`, keep the current epochs, and copy the `synced`
+  map.
+
+• When a snapshot is received (`SYNCHRONISE` verb) the ranges must be
+  re-grouped by epoch before being handed to the
+  `ConfigurationService` so that each `receiveClosed` or
+  `receiveRetired` call is made once per epoch, not once per individual
+  range.
+
+• All other public behaviour of WatermarkCollector (thread-safety,
+  idempotency, etc.) must stay intact and every existing or new unit
+  test supplied with the exercise must succeed.
+
+You may refactor freely but must not change public APIs outside the
+classes already modified by the patch.

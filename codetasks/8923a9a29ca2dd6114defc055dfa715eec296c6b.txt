@@ -1,0 +1,31 @@
+Problem Description
+
+The ANN (approximate-nearest-neighbour) branch of the Storage-Attached Index (SAI) exposes a query path that returns rows ordered by a per-row score supplied by the index layer.  
+During query evaluation the Score-ordered iterator first collects at most LIMIT scored “primary keys”.  
+Because rows may have been updated, more than one scored entry for the *same* logical primary key can be present in this batch – each entry coming from a different index segment and therefore carrying a different score and validity status.
+
+Current behaviour  
+The iterator assumes that every collected PrimaryKey instance is equivalent and always uses the first one it sees:
+
+• If the first copy is outdated or invalid (tombstoned, shadowed by a newer update, etc.) the row is still considered valid and its score is taken from this outdated copy.  
+• When the row is materialised the wrong score may be injected into the synthetic “+score” column, which corrupts the final ordering seen by the client.
+
+Required behaviour  
+For every logical primary key contained in the batch
+
+1. A row must be returned only if at least one of its scored copies is actually valid for the current row image.  
+2. When several scored copies exist, the score belonging to the **valid** copy must be used when the “+score” column is added to the result set.  
+3. No primary key may be marked as “processed” unless a valid copy has been used.  
+4. If no copy is valid, the row must be skipped.
+
+Your task  
+Fix the Score-ordered query path so that it fulfils the above requirements. A regression test exercising an update that turns the best-scoring row into the worst now accompanies the suite; all existing tests continue to run.
+
+Notes and constraints
+
+• The bug manifests inside the SAI search path (see StorageAttachedIndexSearcher / ScoreOrderedResultRetriever); the fix must be local to this functionality.  
+• Do not alter public APIs.  
+• Preserve the iterator semantics: it must still deliver each qualifying row exactly once and in the correct score order.  
+• The new on-disk version tag “ed” is already declared; nothing else in the versioning logic has to change.
+
+Implement the fix so that the entire test suite, old and new, passes.

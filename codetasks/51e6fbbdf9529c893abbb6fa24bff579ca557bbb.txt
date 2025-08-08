@@ -1,0 +1,21 @@
+Update the Lucene query optimisation that decides whether a FieldExistsQuery can be rewritten to a cheap MatchAllDocsQuery.
+
+Background  
+FieldExistsQuery is able to turn itself into a MatchAllDocsQuery when it can prove, segment-by-segment, that every live document in that segment actually contains the queried field. So far this proof was only possible when the same field also indexed terms or points, because their metadata (Terms.getDocCount / PointValues.getDocCount) exposes “how many live docs contain at least one value”.  
+Pure doc-values fields could not benefit from the optimisation, even though the skip-index that backs DocValuesSkipper contains exactly the same statistic.
+
+Required change  
+Teach FieldExistsQuery to consult DocValuesSkipper when:
+
+1. the field stores doc values (DocValuesType ≠ NONE) and  
+2. the field does not index terms or points (or those structures exist but don’t cover every doc).
+
+If `DocValuesSkipper.docCount() == LeafReader.maxDoc()` for a segment the field is known to be present in every live document of that segment. When this is true for all segments the whole FieldExistsQuery must rewrite to MatchAllDocsQuery.
+
+While doing so, the helper that computes the per-segment doc-count used by the scorer must also take DocValuesSkipper into account, so the query continues to behave correctly when only some segments can be rewritten.
+
+Test expectations  
+• `TestFieldExistsQuery.testDocValuesRewriteWithDocValuesSkipperPresent` must now pass: a pure numeric DV field with a skip-index should rewrite to MatchAllDocsQuery.  
+• Existing tests, including point/terms handling and deletion scenarios (`testDeleteDocValues`, etc.), must remain green.
+
+No other behaviour of FieldExistsQuery may change.

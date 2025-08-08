@@ -1,0 +1,18 @@
+Objective  
+Enhance the scalar-quantised vectors implementation so that an index that stores only quantised byte vectors (the original full-precision floats have been dropped) can still be queried through the ordinary FloatVectorValues API.
+
+Required behaviour  
+1. Lucene99ScalarQuantizedVectorsReader.getFloatVectorValues(String field) must return a working FloatVectorValues even when the raw (float) vector file is empty or missing.  
+2. The returned object must:
+   • Deliver the correct dimensionality, size, order → doc mapping and iterator semantics already expected from the original reader.  
+   • Reconstruct the float values on the fly by de-quantising the stored bytes with the corresponding ScalarQuantizer and, when 4-bit compression was used, reversing that compression first.  
+   • Support both dense and sparse fields (i.e. with or without ord-to-doc tables) and produce accurate VectorScorer instances.  
+3. Memory for the quantised vectors must remain off-heap; only the small working buffer that is required for a single vector may reside on-heap.  
+4. All public APIs must remain unchanged, therefore ScalarQuantizer.deQuantize has to be public.
+
+Acceptance criteria  
+All existing tests as well as the newly added tests (see TestLucene99ScalarQuantizedVectorsFormat) must succeed. The new tests open an index from which the raw float vector files have been removed, obtain FloatVectorValues and verify that:
+ • vectors are returned for every document that originally had a vector, and
+ • the de-quantised floats are sufficiently close to the originals.
+
+No other parts of the system may regress.

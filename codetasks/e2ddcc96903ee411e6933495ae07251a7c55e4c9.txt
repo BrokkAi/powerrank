@@ -1,0 +1,71 @@
+### Goal  
+Enhance JGit’s revision-walk filtering so that Bloom filters stored in a commit-graph (Changed-Path filter) are actually consulted during path based history walks.  
+Implement the public API and internal logic that allow a tree filter to decide, *before* any tree traversal is executed, whether a commit can be discarded immediately.
+
+### Functional Requirements  
+
+1. TreeFilter pre-check  
+   • Introduce a method  
+     `boolean shouldTreeWalk(RevCommit c, RevWalk rw, @Nullable TreeFilter.MutableBoolean cpfUsed)`  
+     which is invoked by `TreeRevFilter` once per commit, *before* any tree
+     diffing is performed.  
+   • The default implementation must return `true` (preserves old behaviour).  
+   • Implement a small mutable boolean helper class so callers can learn
+     whether the Bloom filter was used during a decision.
+
+2. Changed-Path tree filter  
+   • Provide a concrete `ChangedPathTreeFilter` that represents  
+     “the commit modifies at least one of the supplied paths”.  
+   • It behaves like `PathFilter AND ANY_DIFF` but consults the commit’s
+     Bloom filter (if present) inside `shouldTreeWalk`.  
+   • When a commit has a Bloom filter, the method must return  
+     – `false` if the filter guarantees that none of the requested paths were
+       touched,  
+     – `true` otherwise.  
+     When the commit carries no Bloom filter it must fall back to `true`.  
+   • Two or more path strings can be supplied; path strings follow the same
+     rules that `PathFilter` uses.
+
+3. Composition filters  
+   • `AndTreeFilter` and `OrTreeFilter` must delegate `shouldTreeWalk`
+     to their children using the corresponding boolean logic
+     (AND / OR over the results).  
+   • Cloned instances must keep this behaviour.
+
+4. Follow filter  
+   • `FollowFilter` must be re-implemented on top of
+     `ChangedPathTreeFilter` instead of `PathFilter AND ANY_DIFF` and
+     forward `shouldTreeWalk` to it.
+
+5. TreeRevFilter integration  
+   • Replace the previous “best effort path extraction” code with the new
+     `shouldTreeWalk` workflow.  
+   • Statistics counters  
+       `getChangedPathFilterTruePositive()`,  
+       `getChangedPathFilterFalsePositive()`,  
+       `getChangedPathFilterNegative()`  
+     must still be computed correctly as defined in existing javadoc and
+     updated tests.
+
+6. Public Surface  
+   • Add the new API elements (`ChangedPathTreeFilter`, the new method,
+     the helper class) with the visibility and javadoc required by the tests.  
+   • Keep the old `TreeFilter#getPathsBestEffort()` method but mark it as
+     deprecated, ensuring all existing callers still compile.
+
+### Non-functional Requirements  
+
+• All unit tests in the repository, old and new, have to pass.  
+• No behavioural regressions for callers that do **not** use the new API.  
+• The solution must compile without warnings and respect existing coding
+  conventions.
+
+### Context  
+
+`ChangedPathFilter` is a bloom filter attached to commits by the
+commit-graph feature.  The library currently retrieves raw path lists from
+`TreeFilter` to decide whether to diff.  This cannot cope with filter
+compositions such as `AND`, `OR`, `NOT`.  
+The new design lets every `TreeFilter` estimate, on its own, whether a
+tree walk is required, making bloom filter checks work for arbitrary
+filter hierarchies.

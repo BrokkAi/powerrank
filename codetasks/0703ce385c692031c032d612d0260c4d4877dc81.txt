@@ -1,0 +1,21 @@
+Background  
+Cassandra’s secondary-index “top-k” queries – i.e. statements that order the result set with an index (`ORDER BY … BM25`, `ORDER BY … ANN`, or a generic `ORDER BY` on an indexed column) – are executed on the coordinator without paging support.  
+CQL aggregation (`GROUP BY`, `SELECT COUNT(*)`, `max()`, `sum()`, …) is implemented by repeatedly paging until the requested limit is satisfied. Because paging cannot be used for top-k reads, such combinations are inherently unsupported and must be rejected up-front.
+
+Task  
+Alter the CQL query validation so that every top-k read which also requests any form of aggregation is refused during statement preparation. The server must:
+
+1. Detect that the statement is a top-k read.  
+2. Detect that the statement contains an aggregation of any kind (aggregate functions, `COUNT(*)`, or `GROUP BY`).  
+3. Abort preparation with  
+   `InvalidRequestException`  
+   message: `Top-K queries can not be run with aggregation`
+
+(The exact string, including punctuation and capitalisation, must match.)
+
+Notes  
+• The rejection applies irrespective of the presence of `WHERE`, primary-key restrictions, consistency level, or limit.  
+• Non top-k queries continue to accept aggregation; top-k queries without aggregation continue to work.  
+• All existing public behaviour not related to this feature must stay unchanged.
+
+Passing the complete test-suite (old and new) is the acceptance criterion.

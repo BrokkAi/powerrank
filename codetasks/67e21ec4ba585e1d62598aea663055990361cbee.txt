@@ -1,0 +1,74 @@
+Background  
+In Apache Cassandra the Accord layer keeps a local view of the cluster’s
+topology for every metadata epoch.  
+Before a node can execute any Accord-level request for an epoch it must be sure
+that  
+  • the corresponding `Topology` object is available locally, and  
+  • no two threads attempt to fetch the same `Topology` concurrently.
+
+At the moment this guarantee is missing: under load several threads may try to
+fetch the same epoch simultaneously, or a failure while talking to CMS/peers
+may leave the topology unavailable even though higher-level code believes the
+fetch succeeded.  This race shows up as sporadic time-outs and
+`Invalidated/Preempted` exceptions in migration and fuzz tests.
+
+Your task  
+Augment the Accord configuration service so that topology fetching is
+idempotent, race-free and automatically retried on failure.
+
+Functional requirements
+1. Public API  
+   A new public method  
+     `void fetchTopologyForEpoch(long epoch)`  
+   must ensure that, for *every* epoch in `[currentEpoch() + 1, epoch]`,
+   • exactly one asynchronous fetch is started, and  
+   • the returned `Future<Topology>` (kept internally) is completed exactly
+     once, with either the successfully fetched `Topology` or the final
+     exception that prevented the fetch.
+
+2. De–duplication  
+   – If several callers request the same epoch, they must all obtain the **same
+     Future** instance.  
+   – Use a thread-safe structure so that duplicate fetches cannot be scheduled
+     even if the calls race.
+
+3. Asynchronous fetch logic  
+   – The actual work must run on `Stage.ACCORD_MIGRATION`.  
+   – First try to bring the local TCM up-to-date via
+     `ClusterMetadataService.fetchLogFromCMS`.  
+   – If after that the local `ClusterMetadata` is *ahead* of the requested
+     epoch, build the `Topology` directly from the local metadata and complete
+     the future.  
+   – Otherwise request the topology from peers with
+     `FetchTopology.fetch(...)`.  
+   – On success:  
+     • call `reportTopology(topology)` so Accord learns about it,  
+     • complete the stored future with the topology.  
+   – On any exception:  
+     • complete the stored future exceptionally,  
+     • remove the failed entry from the map,  
+     • immediately trigger a new fetch so that a transient error is retried.
+
+4. Failure & interruption handling  
+   – If the local node has already advanced past the requested epoch when an
+     error is observed, simply provide the already-known topology and mark the
+     future successful.  
+   – Preserve the thread’s interrupted status when catching
+     `InterruptedException`.
+
+5. Visibility  
+   The existing protected helper used by tests must be kept functional; i.e. a
+   subclass may still override the *new* API without compiler errors.
+
+6. Concurrency safety  
+   All state used to track outstanding fetches must be thread-safe without
+   blocking the callers; busy-waiting or manual locking is **not** acceptable.
+
+Non-functional constraints
+– Do not introduce any new external dependencies.  
+– Do not change public behaviour of any other component.  
+– All existing and new unit, integration and simulator tests must run and pass.
+
+Deliverables  
+Update the relevant Accord classes to satisfy the requirements above and commit
+the code so that the full test suite passes.

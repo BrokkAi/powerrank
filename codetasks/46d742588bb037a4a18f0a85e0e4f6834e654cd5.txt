@@ -1,0 +1,84 @@
+#### Background  
+`org.eclipse.jgit.api.AddCommand` is the programmatic counterpart of the
+`git add` command.  
+Until now it accepted only:
+
+* explicit file-patterns,
+* `--update / -u`
+* `--renormalize`
+
+Consequently it could
+
+* add new or modified paths and  
+* – when `--update` was used – also stage deletions
+  (but only for paths that were **already** in the index).
+
+The porcelain version contained in `org.eclipse.jgit.pgm.Add` offered
+exactly the same subset of options.
+
+#### Goal  
+Bring JGit in line with C Git’s current behaviour by supporting
+
+* `--all` (and its aliases `-A`, `--no-ignore-removal`) – “stage
+  deletions as well”  
+* `--no-all` (alias `--ignore-removal`) – “**do not** stage deletions”
+
+The new option must be available
+
+* in the low-level `AddCommand` API (fluent setter & getter),
+* on the command line via `jgit add` (including help text),
+* and must interact correctly with the existing `--update` flag.
+
+All existing features must continue to work.
+
+#### Functional requirements
+
+1. `AddCommand`
+   1. Add a tri-state *all* setting (`Boolean`, initially `null`).
+      * `setAll(boolean)` – fluent setter  
+      * `isAll()` – returns `true` only if the flag was explicitly set to
+        `true`.
+   2. Mutual exclusion  
+      `--update` and `--all/--no-all` are incompatible. Calling `call()`
+      after both have been selected must raise
+      `JGitInternalException` (same type the class already uses for
+      other illegal combinations) with a meaningful message.
+   3. Implicit path “.”  
+      File patterns may be omitted when **either**
+      `isUpdate() == true` **or** the *all* flag was set
+      (regardless of its boolean value).  
+      Without those pre-conditions at least one file-pattern is still
+      required and the existing `NoFilepatternException` must be
+      thrown otherwise.
+   4. Default for explicit paths  
+      If the caller supplies at least one file-pattern and does *not*
+      touch the *all* flag, the command behaves like C Git: it
+      automatically enables *all == true* (i.e. will also stage
+      deletions inside the given paths).
+   5. Staging deletions  
+      A path that exists in the index but not in the working tree
+      must be removed from the resulting index iff  
+      `isUpdate() == true` **or** `isAll() == true`.  
+      If `isAll() == false` deletions are **not** staged, even when
+      file patterns were passed.
+2. `org.eclipse.jgit.pgm.Add`
+   * Parse `--all`, `-A`, `--no-ignore-removal`, `--no-all`,
+     `--ignore-removal`.
+   * Forward the corresponding value to the underlying
+     `AddCommand#setAll(boolean)`.
+   * Enforce the same incompatibility rule as in 1.2 and expose the
+     translated error text via `CLIText.properties`.
+3. Internationalisation
+   * Add key `addIncompatibleOptions` to `CLIText` / properties file and
+     use it for the error produced by `org.eclipse.jgit.pgm.Add`.
+4. Tests
+   * All pre-existing tests keep passing.
+   * New tests covering the above scenarios must pass.
+
+#### Non-functional notes
+* Do **not** change public behaviour that is unrelated to the new
+  option.
+* Keep backward compatibility of the public API: adding the new setter
+  and getter is allowed, removing or altering existing ones is not.
+* Follow the style and error-handling patterns already used in
+  `AddCommand`.

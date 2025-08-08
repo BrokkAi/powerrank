@@ -1,0 +1,32 @@
+Background  
+The Auto-Repair feature owns a handful of `ScheduledExecutorPlus` instances that run continuous
+monitoring / repair tasks.  
+When Cassandra is shut down these threads are never stopped, therefore the JVM keeps running and
+the process cannot terminate cleanly.
+
+Task  
+Add explicit shutdown logic for Auto-Repair and invoke it during normal node shutdown.
+
+Functional requirements  
+1. Auto-Repair must expose a public, *blocking* shutdown method.  
+   • It must terminate every executor registered in the two existing maps  
+     `repairExecutors` and `repairRunnableExecutors`.  
+   • The call is only meaningful after the Auto-Repair subsystem has been initialised through
+     `setup()`. If Auto-Repair has never been set up, the method must return immediately.  
+   • A boolean state flag must ensure the shutdown is executed exactly once.  
+     – A second invocation after a successful shutdown must throw `IllegalStateException`.  
+
+2. Unit tests require read-only access to the two executor maps and to the internal shutdown
+   state; provide suitable package-visible (or public) getters/fields.
+
+3. Integrate the shutdown into Cassandra’s normal lifecycle by calling the new method from the
+   orderly shutdown path in `StorageService.shutdownClientServers()` (the same block that already
+   waits for the commit-log executor).
+
+Non-functional requirements  
+• Do not introduce race conditions – use appropriate synchronisation around the new state flag.  
+• All existing behaviour unrelated to shutdown must remain unchanged.  
+• All supplied tests, old and new, must pass.
+
+Deliverable  
+Updated Java sources implementing the behaviour described above.

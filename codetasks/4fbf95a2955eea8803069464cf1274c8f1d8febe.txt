@@ -1,0 +1,37 @@
+Problem description  
+Cassandra’s offline SSTable verifier is now expected to validate the on–disk components that belong to Storage-Attached Indexes (SAI) as well.  
+Your task is to expose a validation entry-point on the secondary–index layer, invoke it from the Verifier and implement the concrete logic for SAI, so that:
+
+1. Verifier.verify() fails with CorruptSSTableException when any of the SAI component files attached to the SSTable are missing or corrupted.  
+   •  When the verifier runs in ”quick” mode it must only perform light header/footer checks; otherwise it must also verify checksums.  
+2. Verifier.verify() succeeds if every active SAI component is present and passes the above integrity checks.  
+3. Existing behaviour for tables without secondary indexes or with custom indexes that do not implement the validation hook is unchanged.  
+4. All unit and functional tests – old and new – pass.
+
+Functional requirements  
+• Extend Index.Group with a side-effect-free method  
+
+    void validateComponents(SSTableReader sstable,
+                            boolean validateChecksum)
+        throws CorruptIndexException;
+
+  that must verify every component currently considered “active” for the supplied SSTable (the same components that activeComponents(...) would return).  
+• Verifier must call this method for every secondary index group attached to the SSTable being verified.  
+  – The call is skipped completely when the compaction realm is not available.  
+  – The boolean parameter must be “!options.quick”.  
+  – If validation throws, the verifier must propagate the failure via the usual markAndThrow(...) path.  
+• For custom index groups that do not need validation the default implementation may be a no-op.  
+• StorageAttachedIndexGroup must implement the new API by validating:  
+  – The shared, per-SSTable SAI components.  
+  – The per-column components for every StorageAttachedIndex in the group.  
+  Use IndexDescriptor to load the component sets and its isValid(validateChecksum) helper.  
+  Throw CorruptIndexException on any failure.  
+• IndexDescriptor validation must treat a component as invalid when it is either missing from the descriptor map or its file does not exist on disk, in addition to any checksum/header/footer errors.
+
+Non-functional requirements  
+• The new code must not introduce side effects; it only inspects files.  
+• All compilation warnings should be addressed.  
+• Disk-failure policy invocation, logging and warning behaviour already present in Verifier must remain intact.
+
+Deliverables  
+Commit the necessary code changes so that the complete Cassandra test-suite included with the exercise executes successfully.

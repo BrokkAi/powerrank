@@ -1,0 +1,26 @@
+Problem description
+
+Background  
+In the index-IO framework every file that is opened can be annotated with a set of IOContext.FileOpenHint values.  
+MMapDirectory already allows callers to decide, through Directory#setPreload(BiPredicate<String,IOContext>), which files should be fully brought into RAM (mmap + madvise).  Call-sites still have no generic way to express “this particular open should be pre-loaded” – they must hard–code their own predicate or know the file name in advance.
+
+Task  
+1. Introduce a new hint type named PreloadHint that can be passed in an IOContext.  
+   • It must be an enum that implements IOContext.FileOpenHint.  
+   • Only one value is required (e.g. INSTANCE).
+
+2. Provide an out-of-the-box BiPredicate in MMapDirectory called PRELOAD_HINT that returns true when the supplied IOContext contains PreloadHint.INSTANCE, otherwise false.
+
+3. Make sure MMapDirectory#setPreload’s javadoc mentions PRELOAD_HINT.
+
+4. The new hint must be usable from the rest of the code-base.  In particular code such as  
+       IOContext.DEFAULT.withHints(PreloadHint.INSTANCE)
+   and  
+       dir.setPreload(MMapDirectory.PRELOAD_HINT)
+   has to compile and behave correctly.
+
+5. No existing behaviour may change: if the user never sets a preload predicate or never passes the new hint, nothing is pre-loaded.
+
+Success criteria  
+• The code compiles with the new hint.  
+• All existing and new unit tests succeed, including those that verify that a file opened with PreloadHint and with a directory configured with MMapDirectory.PRELOAD_HINT is eagerly loaded into memory (Input#isLoaded must report true).

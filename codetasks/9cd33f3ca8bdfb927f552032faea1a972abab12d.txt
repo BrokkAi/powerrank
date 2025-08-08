@@ -1,0 +1,26 @@
+Problem Description  
+Apache Cassandra’s Storage-Attached Index (SAI) supports ordering query results by a BM25 rank of full-text columns:  
+
+    SELECT … ORDER BY <column> BM25 OF ? LIMIT …  
+
+When the query also contains additional predicates that restrict the candidate rows – so-called “search-then-sort” queries – every returned row must satisfy BOTH  
+
+1. the normal CQL predicates (e.g. “score = 3”), and  
+2. the implicit BM25 full-text filter: the row has to contain every query term that is passed to BM25 (otherwise the document is not part of the logical search result).  
+
+Currently the second requirement is silently ignored in the search-then-sort path: rows that match the CQL predicates are still scored and may be returned even if they do not contain all BM25 terms.  
+The task is to fix this bug.
+
+Required behaviour  
+• When a BM25 ordered query is executed, a document must only be considered if it contains every BM25 query term at least once.  
+• The rule must apply both to data coming from memtables and from SSTables.  
+• Deleted rows must still be skipped.  
+• All existing functionality unrelated to this change must stay intact.
+
+Hints on the existing code base (for context, not exhaustive)  
+• BM25Utils.DocTF encapsulates per-document term frequencies.  
+• InvertedIndexSearcher and TrieMemtableIndex build iterators of DocTF objects that are later scored.  
+• Returning null from createFromDocument() and filtering nulls out of the iterator is the standard way of dropping a row from the candidate set.
+
+Deliverables  
+Implement the missing filtering so that only documents containing every BM25 query term are scored and returned. All supplied tests, old and new, must pass.

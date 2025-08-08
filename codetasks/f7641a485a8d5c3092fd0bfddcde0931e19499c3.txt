@@ -1,0 +1,33 @@
+Background  
+During LWT/Paxos contention Cassandra backs off for a random period that, until now, was chosen between 0 and the configured upper limit cassandra.lwt_max_backoff_ms (default 50 ms). Allowing a zero-length wait can lead to unnecessary spinning under heavy contention.
+
+Task  
+1. Introduce a lower bound for the random back-off interval.  
+   • New JVM system property / cassandra.yaml flag: cassandra.lwt_min_backoff_ms  
+   • Default value: 5 ms  
+   • The existing property cassandra.lwt_max_backoff_ms keeps its current semantics (exclusive upper bound, default 50 ms).
+
+2. Centralise the back-off logic.  
+   • Implement a helper class (PaxosUtils) exposing  
+     applyPaxosContentionBackoff(CASClientRequestMetrics metrics)  
+     The method must  
+       – pick a random duration D with min ≤ D < max,  
+       – sleep for D milliseconds (uninterruptible),  
+       – record the pause in metrics.contentionBackoffLatency using nanoseconds.
+
+3. Expose the bounds through JMX.  
+   • Register an MBean org.apache.cassandra.service:type=Paxos that allows reading and updating both min and max values at runtime.
+
+4. Use the new helper everywhere the former logic lived (three contention paths in StorageProxy).
+
+5. Remove the now-obsolete getters/setters for the back-off limit from StorageProxyMBean.
+
+6. Add the new property to CassandraRelevantProperties with its default.
+
+Behavioural requirements  
+• The sleep duration is always ≥ min and < max.  
+• contentionBackoffLatency.count increments once per invocation and the added latency equals the actual sleep time (in nanoseconds).  
+• Changing the min/max values through the MBean immediately affects subsequent back-offs.  
+• All previous functionality remains intact; only the back-off policy changes.
+
+Implement these changes so that the complete test-suite passes.

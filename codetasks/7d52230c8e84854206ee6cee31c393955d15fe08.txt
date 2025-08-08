@@ -1,0 +1,20 @@
+Problem description  
+
+Search-based secondary indexes (SAI) need a fast way to turn the primitive long value of a token into a Token instance, without detouring through a temporary ByteBuffer.  At the moment the public API only offers Token#getLongValue (which extracts the primitive value), but there is no symmetric constructor.  
+
+Extend the partitioner/token API so that callers can directly create a token from its long value and make the Murmur3 implementation (and the lightweight test partitioner used in unit tests) support it.  Afterwards SAI’s primary-key maps must be switched to the new API to eliminate their per-call ByteBuffer allocation.  
+
+Functional requirements  
+
+1. A new method Token.Factory fromLongValue(long) must exist.  
+   • The default implementation should throw UnsupportedOperationException, because not every partitioner is backed by a long.  
+
+2. Murmur3Partitioner’s token factory must override the new method and return a correctly constructed Murmur3Partitioner.LongToken for the supplied value.  
+
+3. The ad-hoc LengthPartitioner used in unit tests must also override the method and return its BigIntegerToken.  
+
+4. SAI classes that previously built a token by stuffing the long into a ByteBuffer (PartitionAwarePrimaryKeyMap and RowAwarePrimaryKeyMap) must switch to the new API.  No extra allocations or buffer rewinds should remain.  
+
+5. All existing behaviour of the partitioner/token framework must stay intact; code that works with partitioners whose tokens are not long-backed must still throw UnsupportedOperationException when the new method is called.  
+
+Once these changes are in place the whole project must compile and every provided test (old and new) must pass.

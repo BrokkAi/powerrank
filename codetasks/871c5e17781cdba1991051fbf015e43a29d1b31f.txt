@@ -1,0 +1,65 @@
+Implement blame-result caching for JGit.
+
+New behaviour
+-------------
+A `BlameGenerator` may now receive a `BlameCache` instance.  
+While walking history it must
+
+1. Count every candidate popped from the queue (`candidatesVisited`).
+2. If
+   • a `BlameCache` is present,  
+   • `setUseCache(true)` (default) and the generator is **not** running in
+     reverse mode, and  
+   • the current candidate’s commit/path is stored in the cache,  
+
+   then the cached information has to be reused instead of continuing the
+   history walk.
+
+   Reusing means:
+   • Take the list of fully-blamed `CacheRegion`s that the cache hands back.  
+   • The candidate that was just popped still contains the *unblamed*
+     `Region` list.  Translate each of those unblamed ranges into one or more
+     blamed regions by intersecting them with the cached ones.  
+   • Produce a linked list of new `Candidate` objects, one per distinct commit
+     found in the cached regions, each one already populated with its
+     (possibly split) `Region` list.  
+   • Feed that list into the usual `result(…)` path so the generator emits
+     them immediately.
+   • Record a cache hit (`cacheHit = true`).
+
+If no cache hit happens the normal algorithm continues unchanged.
+
+Public additions
+----------------
+BlameGenerator
+• new ctor `BlameGenerator(Repository, String, @Nullable BlameCache)`
+• `Stats getStats()` returning an object that exposes  
+  `int getCandidatesVisited()` and `boolean isCacheHit()`
+• `void setUseCache(boolean)` – when `false` the cache must be ignored  
+  (`BlameResult` disables it because it needs exact source-line numbers).
+
+BlameRegionMerger  
+Utility that receives `(Repository, RevWalk, List<CacheRegion>)` and offers:
+
+• `Candidate mergeCandidate(Candidate)` – converts every unblamed region in
+  the supplied candidate into blamed regions by intersecting with the cached
+  ones and returns the head of a linked list of fresh candidates.
+
+It may throw/propagate `IOException` if any `RevCommit` has to be parsed.
+
+Algorithm notes
+---------------
+* `CacheRegion`s cover the whole file and are non-overlapping.
+* When intersecting an unblamed region `[s,e)` with a cached one adjust
+  `resultStart` as well as `sourceStart` so that both ranges stay aligned.
+* Cached data do **not** store source line numbers; after merging they are
+  therefore only approximate – consequently the cache must not be used when
+  the generator works in reverse order.
+
+Regression
+----------
+`BlameResult`’s package-private constructor must call
+`generator.setUseCache(false)`.
+
+All previous functionality has to remain intact and every supplied unit test
+(including the new cache-related suites) must pass.

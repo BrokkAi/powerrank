@@ -1,0 +1,26 @@
+Problem description  
+-------------------  
+Cassandra already enforces individual time-outs for ordinary single-row reads (`read_request_timeout_in_ms`) and for range reads that are executed page by page (`range_request_timeout_in_ms`).  
+For client requests that execute a CQL aggregate function ( `SELECT COUNT(*)`, `MIN()`, `AVG()` … ) only `range_request_timeout_in_ms` is currently applied even though the overall query may take significantly longer than any single range page.  
+DSE used to expose a dedicated “aggregation” time-out (default = 120 s).  The OSS code base must regain this behaviour.
+
+Required behaviour
+1. Configuration  
+   • A new YAML option `aggregation_request_timeout_in_ms` must exist.  
+     – Default: 120 000 ms.  
+     – Lowest permitted value: 10 ms (same rule as for the other time-outs).  
+   • The option is part of `Config` and accessible through `DatabaseDescriptor` the same way the other RPC time-outs are.  
+   • `DatabaseDescriptor.getMinRpcTimeout(..)` must include the new value.
+
+2. Server logic  
+   • When a coordinator executes an aggregation query it must measure the **total time** spent since the start of the client request (not just the time spent inside one page).  
+   • If that elapsed time exceeds `aggregation_request_timeout_in_ms`, the coordinator throws `ReadTimeoutException` back to the client.  
+     – The check must not be performed for internal queries (`QueryPager.fetchPageInternal`), only for client facing requests.  
+     – Ordinary range pages must still use `range_request_timeout_in_ms`; only the *whole* aggregation is guarded by the new limit.
+
+3. Exceptions  
+   • `RequestTimeoutException` and `ReadTimeoutException` need constructors that allow raising the error when no per-page information (`received`, `blockFor`) is available.
+
+4. Tests  
+   The new functionality is exercised by the supplied JUnit/Byteman tests.  
+   Both the brand-new tests and all pre-existing tests must pass after the implementation.

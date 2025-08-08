@@ -1,0 +1,67 @@
+Task  
+
+Extend the compound-word decompounding implementation so that it is able to discard
+all sub-tokens that are embedded in an already emitted longest match.
+
+Background  
+
+`DictionaryCompoundWordTokenFilter` currently offers two boolean options
+
+• onlyLongestMatch – emit just one token for every start position  
+• reuseChars       – when false, the cursor is moved to the end of the emitted
+  token so that characters are not examined twice
+
+This “double option” is confusing and does not really express the desired
+behaviour “return the longest match and ignore its sub-words”.  
+A new option is introduced to make this intention explicit and the old one is
+deprecated.
+
+Required changes
+
+1. DictionaryCompoundWordTokenFilter  
+   • Replace the field `reuseChars` with a field called
+     `onlyLongestMatchNoSubwords` (name inside the filter, the external API
+     spells it `onlyLongestMatchIgnoreSubwords`).  
+   • Keep the existing 7-argument constructor but let the last argument
+     represent the **new** option  
+     `(TokenStream in, CharArraySet dict, int minWordSize, int minSub, int maxSub,
+       boolean onlyLongestMatch, boolean onlyLongestMatchIgnoreSubwords)`  
+     – mark it with `@Deprecated` in the javadoc because the meaning of the
+       last parameter changed.  
+   • Add a second, shorter constructor that omits `onlyLongestMatch` and only
+     takes the new flag.  
+   • Throw IllegalArgumentException when the supplied dictionary is null.  
+   • Delete the old validation that tied `reuseChars` to `onlyLongestMatch`
+     (it is no longer relevant).  
+   • Update `decompose()`  
+       – A local variable  
+         `boolean onlyLongest = this.onlyLongestMatch || onlyLongestMatchNoSubwords;`  
+         must be used when deciding whether to keep only one token per start
+         position.  
+       – After a longest match has been added, advance the outer loop’s index
+         by `match.length() - 1` **iff** `onlyLongestMatchNoSubwords` is true
+         so that nested words are never visited.
+
+2. DictionaryCompoundWordTokenFilterFactory  
+   • Parse the new option `onlyLongestMatchIgnoreSubwords` (default `true`) and
+     remove support for `reuseChars`.  
+   • Pass both `onlyLongestMatch` and `onlyLongestMatchIgnoreSubwords` to the
+     filter constructor.  
+   • Unknown parameters must still trigger an `IllegalArgumentException`.
+
+3. CHANGES / javadoc  
+   • Document that `onlyLongestMatchIgnoreSubwords` supersedes
+     `onlyLongestMatch` and that `onlyLongestMatch` is deprecated.
+
+Behaviour to achieve
+
+• If only `onlyLongestMatch` is true, the filter must behave exactly as before
+  (longest token per offset, but sub-words may still be emitted later).  
+• If `onlyLongestMatchIgnoreSubwords` is true (irrespective of the value of
+  `onlyLongestMatch`) the filter must additionally skip over the characters of
+  the emitted token so that no embedded sub-words are produced.  
+• If both flags are false, the original “all matches” behaviour remains
+  unchanged.
+
+After implementing the above, all existing unit tests – both the previous ones
+and the new ones that exercise the fresh option – must pass.

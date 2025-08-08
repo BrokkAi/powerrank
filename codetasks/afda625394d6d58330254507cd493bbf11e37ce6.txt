@@ -1,0 +1,43 @@
+### Problem
+
+When a CQL query cannot be satisfied because a secondary index is *still building*, clients should
+receive `INDEX_BUILD_IN_PROGRESS` instead of the generic `INDEX_NOT_AVAILABLE`.
+The code-base currently lacks this distinction and a number of unit and distributed tests that rely
+on it are now failing.
+
+Your task is to introduce the new failure reason and make sure it is:
+
+1. Exposed through the public `RequestFailureReason` enumeration (with its own numeric code);
+2. Raised on the coordinator (read & read-repair paths) when a replica refuses a query because the
+   requested index is in the **building** state, both locally and remotely;
+3. Correctly serialized / deserialized on the wire and mapped back to the new enum value;
+4. Returned by `RequestFailureReason.forException(Throwable)` whenever the new
+   `IndexBuildInProgressException` is thrown, and by extension propagated to clients;
+5. Handled in the replica filtering logic so that a coordinator can distinguish between
+   `INDEX_BUILD_IN_PROGRESS` and `INDEX_NOT_AVAILABLE` when it decides whether to fail a request.
+
+All previously supported behaviour must remain unchanged.
+
+### Acceptance criteria
+
+The implementation is considered correct when **all** supplied unit and integration tests
+(`ant test` and `ant testall`) succeed.  In particular:
+
+* Existing tests that used to expect `INDEX_NOT_AVAILABLE` must still pass untouched.
+* The new and modified tests now expect `INDEX_BUILD_IN_PROGRESS` under the right conditions.
+* No regression is introduced in the request failure-reason wire protocol.
+
+### Notes
+
+* A new unchecked exception type is required; it must carry the new
+  `RequestFailureReason` value so that the generic exception handling code continues to work.
+* The numeric code chosen for `INDEX_BUILD_IN_PROGRESS` must not clash with any value that already
+  exists in the **upstream Apache Cassandra** enumeration.
+* Remember to update every bidirectional mapping (code ⇆ enum ⇆ exception) as well as the on-wire
+  serializer.
+* The coordinator must emit `ReadFailureException` whose per-endpoint failure map differentiates
+  the two index-related reasons, depending on the replica’s index status.
+* Cosmetic changes in log or exception messages are irrelevant, but message *content* visible to
+  the new tests must match their expectations.
+
+Implement the missing pieces so that the whole test suite passes.

@@ -1,0 +1,50 @@
+Implement full support for case-insensitive working trees during check-out and merge operations.
+
+Background  
+Git trees are case-sensitive, but many operating systems are not.  
+When a branch renames a path only by changing its case, a merge or
+checkout on a case-insensitive file system must
+
+1. keep exactly one copy of the path on disk, written with the spelling
+   stored in the target revision;
+2. never delete the file that was previously marked “keep” simply because
+   another path with the same name but different case is being removed;
+3. report removals, updates, conflicts and kept files exactly as before.
+
+Required behaviour
+
+A. Repository  
+   Provide a reliable way to find out whether the work-tree resides on a
+   case-insensitive file system.  
+   • Added API `boolean Repository.isWorkTreeCaseInsensitive()`  
+     – May be called often, therefore cache the result.  
+     – Must throw `NoWorkTreeException` for bare repositories.  
+     – Heuristic:  
+       • Prefer a direct test in the work tree: if a path that exists
+         with the recorded spelling also exists when converted to
+         upper-case, the file system is considered case-insensitive.  
+       • Otherwise fall back to the platform default (Windows or macOS is
+         assumed to be case-insensitive, others not).  
+
+B. Checkout  
+   When replacing a work-tree file by renaming the temporary check-out
+   file into place, make sure that an existing case-variant of the same
+   path does not survive the operation. On a case-insensitive system the
+   old variant must be removed first so that the new file is written with
+   the exact case stored in the tree.
+
+C. DirCacheCheckout  
+   1. Track removed paths in an order that makes it possible to delete
+      leaf files before their parent directories and at the same time
+      look-up collisions ignoring case.  
+      – Use an order that collapses paths differing only in case.  
+      – When both a “keep” and a “remove” entry refer to the same file
+        ignoring case, the “remove” must be discarded.  
+   2. Public getters (`getRemoved()`, etc.) must keep their contract.  
+      They may return copies of the internal collections.  
+   3. All existing merge, checkout and conflict scenarios must still be
+      reported exactly like before.
+
+D. Everything must continue to work on case-sensitive file systems.
+
+New and existing unit tests validate the above.

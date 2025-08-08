@@ -1,0 +1,30 @@
+Your task is to make fixes to the Brokk message redaction behavior.
+
+What has changed
+----------------
+1.  The wording “SEARCH/REPLACE block(s)” is being retired.  
+    A redact operation must now replace every concrete *edit block* with one of the following
+    placeholders ­— chosen per block:
+
+        • If the block’s filename is non-null  ➜  “[elided edits for file <filename>]”  
+        • If the block’s filename is   null   ➜  “[elided edits]”
+
+2.  The public surface:
+        ContextManager.redactAiMessage(AiMessage, EditBlockParser)
+    must be `public static`, because other classes (e.g. CodeAgent) call it now.
+
+3.  When an AiMessage is redacted:
+    • All original plain text is preserved.  
+    • Every individual Search/Replace block (now “edit block”) is replaced by the correct
+      placeholder.  
+    • If two blocks are consecutive, keep the single newline that originally separated them
+      (tests assert `"\n"` between the corresponding placeholders).  
+    • After the substitution, carry out a final textual clean-up:
+          “SEARCH/REPLACE block”, “*SEARCH/REPLACE* block”, and
+          “`SEARCH/REPLACE` block”
+      in the resulting string must be replaced by “edit”.
+
+4.  Removal rules stay unchanged:
+    – If the message contained no edit blocks, return `Optional.empty()`.  
+    – If, after the redaction, the produced text is blank, also return `Optional.empty()`.  
+    – Otherwise return `Optional.of(new AiMessage(redactedText))`.

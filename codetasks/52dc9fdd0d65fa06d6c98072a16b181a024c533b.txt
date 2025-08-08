@@ -1,0 +1,53 @@
+Context  
+The class org.eclipse.jgit.blame.BlameGenerator walks backwards through the
+history of a path and, for every commit that once contained that path, tries to
+find out which lines were last changed there.  
+A performance feature allows it to re-use already computed information that may
+be stored in a BlameCache.  The current implementation queries that cache for
+every “candidate” commit found in the history.  For long histories in which
+most commits do not touch the path this turns the cache lookup into the
+dominant cost and can make a cached run slower than an uncached one.
+
+Required change  
+BlameGenerator must consult the BlameCache only when the candidate commit is
+known to have modified the file that is currently being blamed.  Concretely:
+
+1. When a candidate is first taken from the priority queue do not perform a
+   cache lookup immediately.
+
+2. After it has been proven that the commit really affects the blamed path
+   (content change or pure rename)
+   – just before the generator would split the work among the parents or
+   directly return a result – query the cache once.  
+   • If the cache returns a list of CacheRegions that fully explains the
+     candidate, merge them and finish as today, setting the statistics field
+     stats.cacheHit to true.  
+   • If the cache has no entry or the merge does not fully explain the
+     candidate, continue the normal algorithm without changing any existing
+     behaviour.
+
+3. Commits that do not modify the blamed file (e.g. unrelated changes, the root
+   commit when the file is created, intermediate commits that only touch other
+   paths) must skip the cache lookup altogether; BlameGenerator.Stats must
+   therefore report cacheHit == false for those commits.
+
+4. The figures recorded in Stats (candidatesVisited, cacheHit, …) and every
+   existing public behaviour must stay compatible with earlier versions except
+   for the intended change in the cache-hit decision described above.
+
+Hints  
+The tests exercise the following scenarios:
+
+• Straight-line history with and without cache.  
+• File created in the middle of the history.  
+• Commits that overwrite the whole file.  
+• Merge commits.  
+• Moving code blocks.  
+• Histories containing hundreds of commits that do not touch the blamed file.  
+• Pure renames without content change.
+
+They expect that the cache lookup happens only for commits that actually
+modified (or renamed) the path and nowhere else.
+
+Update BlameGenerator accordingly; no other public class needs to be touched.
+All shipped unit tests – both pre-existing and the new ones – must pass.

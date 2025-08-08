@@ -1,0 +1,22 @@
+Background  
+`org.apache.lucene.util.FixedLengthBytesRefArray` is a memory-efficient container that stores many `BytesRef` instances of identical length in fixed-size blocks.  
+Until now the class only supported forward iteration; there was no way to fetch an element by index after it had been added.  
+New code in BKD (one-dimensional writer) now needs random access to those stored values.
+
+Task  
+1. Expose `FixedLengthBytesRefArray` by making the class `public`.  
+2. Add an efficient random-access accessor:
+
+   BytesRef get(BytesRef spare, int index)
+
+   • `index` is zero-based.  
+   • `spare` is an existing `BytesRef` whose `length` field already equals the fixed length of the array.  
+   • The method must set `spare.bytes` and `spare.offset` so that it points to the requested value and then return `spare`.  
+   • If `index` is out of range throw `IndexOutOfBoundsException` (use `Objects.checkIndex`).  
+   • Keep all other fields of the array unchanged; do not copy bytes.
+
+3. All existing behaviour (append, iteration, sorting, etc.) must remain unchanged and all provided tests – old and new – must pass.
+
+Notes  
+• The internal layout already stores the blocks in the `blocks` array and exposes `valueLength`, `valuesPerBlock`, and `size`; use them to locate the value without allocating or copying.  
+• Add any imports you need (e.g. `java.util.Objects`).

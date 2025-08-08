@@ -1,0 +1,59 @@
+Lucene’s per-document scoring API only exposed
+
+    float SimScorer.score(float freq, long norm)
+
+so every caller had to iterate documents one by one.  
+This patch adds an optional bulk API that lets a scorer fill a whole
+`DocAndFloatFeatureBuffer` in one call and updates the term‐level scorer
+to use it.
+
+Task  
+Implement support for bulk scoring so that all existing unit tests,
+together with the new tests that exercise the API, compile and pass.
+
+Functional requirements
+
+1. Extend `Similarity.SimScorer`
+   • Add a public method  
+
+        void score(DocAndFloatFeatureBuffer buffer,
+                   NumericDocValues norms) throws IOException
+
+     – `buffer` contains `size` postings, with doc ids in the `docs`
+       array and the current term frequencies in `features`.  
+     – Replace every entry in `features` with the corresponding final
+       score.  
+     – If `norms` is `null` or does not have a value for a given
+       document, the implicit norm is `1L`.  
+     – The default implementation must compute results by repeatedly
+       calling the existing `score(float,long)` method so that current
+       scorers continue to work unchanged.
+
+2. Use the new API from `TermScorer`
+   • After the posting list for a block of documents has been read into
+     `DocAndFloatFeatureBuffer buffer`, invoke  
+
+        simScorer.score(buffer, norms);
+
+     instead of the hand-written loops that existed previously.
+   • Remove any dead code that is no longer needed (the temporary
+     `normValues` array, etc.).
+
+3. Ensure compatibility
+   • The change must not alter the semantics of existing scorers; when
+     a subclass does not override the bulk method, results must be
+     identical to the per-document loop.
+   • Doc ids in `buffer` are already strictly increasing; no additional
+     validation is required in the production code.
+
+4. Add compile-time and runtime safety
+   • All new public methods must declare `throws IOException` where
+     necessary.
+   • The implementation must never return NaN or negative scores.
+
+Notes
+
+• You do NOT have to micro-optimize or vectorize the computation—the
+  default loop is fine for the tests.  
+• Do not modify any test files; they rely on the behaviour described
+  above.

@@ -1,0 +1,43 @@
+### Problem
+
+Enhance the Storage-Attached Index (SAI) vector subsystem with detailed runtime and memory metrics that are accessible through the existing `ColumnQueryMetrics` framework and exposed via the usual Cassandra metrics endpoints.
+
+The additions must let Cassandra:
+
+1. Record what happens while an Approximate Nearest Neighbour (ANN) graph is searched (including resumed searches).
+2. Record the work performed when a query falls back to a brute-force evaluation path.
+3. Keep track, at column-level, of how much extra memory is occupied by every on-disk graph segment that is loaded into JVM memory.
+4. Provide a per-query histogram of the time spent in ANN graph searches so that table-level metrics reflect their cost.
+
+All metrics introduced by this change are already referenced from production code and from the new unit-tests; therefore the implementation has to compile, integrate with the rest of the code-base and make the tests pass.
+
+#### New public surface
+
+1. `QueryEventListener.VectorIndexEventListener`  
+   – defines callbacks that must be fired whenever a graph is loaded/unloaded, when an ANN search (or its resume) completes, and when brute-force comparisons occur.
+
+2. `ColumnQueryMetrics.VectorIndexMetrics`  
+   – concrete `ColumnQueryMetrics` implementation that aggregates the counters/timers defined in the previous interface.
+
+3. `OnDiskOrdinalsMap.cachedBytesUsed()`  
+   – returns the variable memory footprint of the particular ordinal map instance (excluding its constant object header).
+
+4. `QueryContext` now gathers **graph-search latency** instead of a simple counter of visited nodes.
+
+#### Acceptance requirements
+
+The code must satisfy all unit tests, old and new.  In particular it must guarantee that:
+
+* Every ANN search or resume increments the correct counters and records the elapsed time in nanoseconds.
+* Brute-force execution paths increment the corresponding counters for “visited” and “reranked” nodes.
+* Loading a graph segment increases the column-level gauges that track:
+  * bytes used for vector quantisation structures,
+  * bytes cached by the ordinals map,
+  * number of in-memory graphs,
+  * number of vectors contained in those graphs.
+  Un-loading a segment decrements them symmetrically.
+* Implementations of `OnDiskOrdinalsMap` always return a non-negative **exact** number of cached bytes.
+* Table-level metrics (`TableQueryMetrics`) include a per-query timer that aggregates the total time spent inside ANN graph searches.
+* All previous behaviour remains unchanged for non-vector indices.
+
+The existing test-suite already exercises the scenarios above (pure ANN search, brute-force search, compaction, truncation, etc.).  Passing the suite is sufficient proof that the implementation is correct.

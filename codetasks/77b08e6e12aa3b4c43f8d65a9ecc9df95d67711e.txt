@@ -1,0 +1,32 @@
+The recent test-suite expects several small but incompatible API changes that are missing in the current codebase.  
+Update the implementation so that every module compiles and the new tests pass.
+
+Key requirements
+
+1. Lazy default helper  
+   dev.langchain4j.internal.Utils now needs an additional overload
+
+   <T> T getOrDefault(T value, java.util.function.Supplier<T> defaultSupplier)
+
+   – return `value` if it is not null, otherwise evaluate and return `defaultSupplier.get()`.  
+   Existing overloads must stay untouched.
+
+2. Streaming fixes  
+   In dev.langchain4j.model.ollama.OllamaClient the SSE listener must forward a chunk to  
+   `handler.onPartialResponse(...)` only when the chunk’s text is not null/empty.
+
+3. Ollama builders / request objects  
+   • Correct the exception text in OllamaBaseChatModel (cannot use both *format* and *responseFormat*).  
+   • Replace the `keepAlive` field type from `Long` to `Integer` everywhere it appears  
+     (OllamaChatRequest, its Builder and OllamaChatRequestParameters + builder).  
+   • Builder’s `numPredict(Integer)` continues to delegate to the common
+     `maxOutputTokens` property.  
+   • When a builder overrides with another
+     OllamaChatRequestParameters instance, copy the `repeatPenalty` field, not
+     `frequencyPenalty`.
+
+4. Code style cleanup  
+   Apply the tiny spelling corrections already reflected in the tests
+   (“supported” instead of “suppoerted”, “Can’t” instead of “CanB”, etc.).
+
+No other behavioural changes are required.  Compile the project and ensure that **all tests succeed**.

@@ -1,0 +1,28 @@
+Update the MCP client so that an application using the HTTP/SSE transport can recover automatically when the
+connection to the MCP server is lost (e.g. the server is restarted).  
+Implement the following functional changes:
+
+1. DefaultMcpClient  
+   • Accept a configurable `reconnectInterval` (default 5 seconds) via the builder.  
+   • When the underlying transport reports a failure, wait for the chosen interval and try to
+     bring the client back to a fully-initialised state calling the normal initialisation routine.  
+   • The reconnect attempt must be retried every time the transport reports a failure.  
+   • Existing builder methods and behaviour must stay unchanged.
+
+2. McpTransport  
+   • Expose a method that allows the client to register a callback that will be invoked
+     whenever the transport detects an unrecoverable failure of its current connection.
+
+3. HttpMcpTransport  
+   • Implement the new `onFailure` registration.  
+   • Detect connection loss inside the SSE event listener and invoke the registered callback
+     (it must not be triggered for a normal/voluntary close).  
+   • Behaviour of request execution, logging and health checks must stay unchanged.
+
+4. StdioMcpTransport  
+   • Provide a no-op implementation of the new `onFailure` method (the stdio transport does
+     not reconnect).
+
+After these changes the provided integration test must succeed: it starts a server, executes a tool,
+restarts the server, waits, executes the same tool again and expects success both times.  
+All previously existing tests must still pass.

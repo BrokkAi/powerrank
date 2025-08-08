@@ -1,0 +1,50 @@
+Task overview
+The project manages “sessions” that are persisted as JSON with Jackson.  
+A recent defect (#404) appears when Jackson tries to read the on-disk
+representation of a SessionInfo record: the accessor method
+isModified() is seen as another JSON property (“modified”) and Jackson
+fails with a fatal read/parse error.
+
+Required behaviour
+1. SessionInfo (in src/main/java/io/github/jbellis/brokk/SessionManager.java)
+   must still expose the four logical, serialised components
+
+        UUID id
+        String name
+        long   created
+        long   modified
+
+   and it must keep the additional, derived Boolean accessor, but this
+   accessor:
+        • must be renamed to isSessionModified() so that its purpose is
+          explicit and does not collide with the existing “modified”
+          component;
+        • must be ignored by Jackson during (de)serialisation.
+
+   The method must return true when created != modified.
+
+2. Every current call-site that was using isModified() has to use the
+   new name.  That affects
+        • ContextManager#getEmptySessionToReuseInsteadOfCreatingNew(...)
+        • SessionManager#isSessionEmpty(...)
+
+3. No functional change to the record’s actual JSON structure is
+   allowed: after the fix a previously written JSON file must still be
+   readable and a newly written file must contain only the four fields
+   id, name, created, modified.
+
+4. All existing unit tests – including the new extended
+   ContextSerializationTest – must pass.
+
+Files you will probably touch
+• src/main/java/io/github/jbellis/brokk/SessionManager.java  
+• src/main/java/io/github/jbellis/brokk/ContextManager.java  
+• (any other compilation errors that arise from the rename)
+
+Hints
+• Use the @JsonIgnore annotation on the new
+  isSessionModified() method.
+• Do NOT alter the record’s canonical constructor or components.
+
+When you are done, run the complete test suite; both the previous and
+the newly added tests must succeed.

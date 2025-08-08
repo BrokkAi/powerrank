@@ -1,0 +1,31 @@
+Context  
+The in-memory trie that backs Storage-Attached Indexes supports RANGE predicates by scanning a slice of the trie, merging all matching PrimaryKey objects in a priority queue, and finally exposing them through an InMemoryKeyRangeIterator.
+
+Two deficiencies must be fixed:
+
+1. Priority-queue sizing  
+   • The queue’s initial capacity is determined by the size that was required by the previous RANGE lookup.  
+   • In the current implementation that size is kept in a thread-local static variable, which therefore leaks across all indexes that are queried by the same thread and is reset every time a different thread issues the first request.  
+   • The remembered size must instead be stored once per TrieMemoryIndex instance so that every column index keeps its own history, irrespective of the calling thread.  
+   • A minimum capacity of 128 must always be honoured.
+
+2. Avoid unnecessary allocations while scanning the trie  
+   • The code currently converts the sub-trie view into a Java Stream and feeds it to forEach, forcing an Iterator → Stream adapter and a lambda allocation.  
+   • The scan must be performed with a plain Iterator loop.
+
+Required behaviour
+------------------
+For every TrieMemoryIndex:
+
+• Keep an AtomicInteger (or similar) that stores the capacity last used for a RANGE query, initialised to 128.  
+• When rangeMatch(...) finishes collecting results, update that integer to `max(128, numberOfKeysCollected)`.  
+• The next RANGE query against the same TrieMemoryIndex must create its Collector’s priority queue with that recorded value.  
+• No two TrieMemoryIndex instances must share that value and it must not be kept in thread-local state.
+
+• While scanning the trie inside rangeMatch(...), iterate with an Iterator instead of the current Stream/forEach approach, so that no lambda is created.
+
+• InMemoryKeyRangeIterator must still be constructed with the minimum and maximum keys. The minimum key can be obtained by peeking the priority queue (because it is a min-heap); tracking it manually is therefore no longer necessary.
+
+All other semantics of the index (exact matches, contains_value predicates, statistics, etc.) must remain unchanged.
+
+After the changes, every unit test – both the existing ones and the new ones that specifically exercise wide-range workloads – must succeed.

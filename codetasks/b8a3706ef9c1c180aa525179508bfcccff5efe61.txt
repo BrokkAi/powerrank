@@ -1,0 +1,54 @@
+Task Overview
+The journal previously allowed each record to be “tagged” with a set of owning node-ids (hosts).  
+This feature has been retired: records are no longer written with host information, the journal no longer
+tracks host counts, and all public APIs have dropped the corresponding parameters.
+
+Your job is to delete the feature completely and make the journal operate with its new,
+simpler entry format.  After your changes the full test-suite (old and new) must compile and succeed.
+
+What Has Changed Conceptually
+1. An entry now consists of  
+   • a 4-byte “next pointer” (total record length)  
+   • the user key  
+   • the entry payload (user data)  
+   • a CRC for the header (everything up to but not including the payload)  
+   • a CRC for the payload  
+
+   No host count or host ids are present any longer.
+
+2. APIs that previously accepted or returned a host set do not any more.
+
+3. Segment metadata only keeps a total record count; it no longer tracks per-host counters.
+
+Required Behaviour
+• Writing  
+  – When allocate/write is invoked the code must size the reservation with the new header size  
+    (see point 1) and write the entry in the format above.  
+  – CRCs must be calculated exactly as before but over the new header/payload ranges.
+
+• Reading & Validation  
+  – Deserialisation must be able to read the new format, validate both CRCs, and return the key,
+    buffer and user version only.
+
+• Metadata  
+  – Metadata.update() simply increments the record counter; serialisation/deserialisation deals only
+    with the single counter and its CRC.
+
+• Public API  
+  – Methods that used to accept a Set<Integer> hosts must exist only in their new host-free form.  
+    Any remaining call sites must use the new signatures.
+
+• Internal helpers  
+  – Remove helpers concerned with host counts/sizes; introduce a helper returning the new
+    constant headerSize(…) used by allocate() and serializer checks.
+
+Constraints
+• No functionality other than host tagging should change; all file formats, CRC behaviour and thread-safety guarantees remain intact.
+• All existing unit tests and simulator tests must compile and pass.
+• You must not re-introduce any dependency on Agrona collections or host sets.
+
+Focus Areas
+EntrySerializer, ActiveSegment, Segment, Metadata, RecordConsumer and any callers that still use the
+old signatures.
+
+Once your implementation compiles and the tests pass, you are done.

@@ -1,0 +1,64 @@
+### Goal  
+Brokk’s `ContextFragment` identifiers must now be **strings**.  
+Dynamic fragments keep the old numeric sequence (stored as a decimal string).  
+All other fragments – those whose content never changes once created – must use a stable,  
+content-derived hash as their id.  
+After loading history the numeric generator must be restored so that newly created
+dynamic fragments receive an id greater than every numeric id that already exists, while
+ignoring any hashed ids.  
+All unit-tests (old and new) must still succeed.
+
+### What has changed
+1. **id type**
+   * `ContextFragment.id()` is now `String`.
+   * Every DTO that carried an `id`/`logId` field is switched from `int`/`Integer`
+     to `String`.
+2. **Dynamic-id generator**
+   * `ContextFragment.nextId` still counts **integers**, but  
+     `setMinimumId(int)` (renamed from `setNextId`) must only raise the counter
+     when the supplied value is larger than the present one.
+   * All code that used `int` arithmetic with ids must now parse/format
+     numeric strings and skip hashes that do not parse.
+3. **Fragment construction**
+   * Dynamic fragments (`ProjectPathFragment`, `ExternalPathFragment`,
+     `ImageFileFragment`, `VirtualFragment` subclasses that can change) build
+     their id as `String.valueOf(nextId.getAndIncrement())`.
+   * Non-dynamic fragments create a deterministic hash with the helper added in
+     `FragmentUtils`.
+4. **FrozenFragment**
+   * The id of a frozen fragment is that same content hash; it is no longer an
+     arbitrary numeric value copied from the live fragment.
+   * `freeze(...)` must intern on this hash and never affect `nextId`.
+5. **(De)serialisation**
+   * All DTO classes in `FragmentDtos.java` were updated to use `String` ids.
+   * `HistoryIo` now writes a v1 archive that stores every fragment once in
+     `fragments-v1.json` and every context in `contexts.jsonl`, plus any images
+     in `images/<hash>.png`.  
+     Reading must build a global fragment cache keyed by the string id, restore
+     the contexts, and update `ContextFragment.nextId` from the highest numeric
+     id that occurs.
+6. **Context & MainProject**
+   * Methods that inspect ids have been updated to work with strings and ignore
+     hashes when looking for a maximum.
+7. **Tests**
+   * All previous tests still run; new tests check:
+       - ids are strings,
+       - hashed ids stay stable and are shared between contexts (interning),
+       - `nextId` is restored correctly after loading history,
+       - logic that removes fragments or searches for them works with the new
+         id type.
+
+### Required behaviour
+Implement any missing code so that:
+
+* Every fragment returns the string id described above.
+* Hash computation in `FragmentUtils` is deterministic and includes every field
+  shown in the diff.
+* `ContextFragment.setMinimumId` and `getCurrentMaxId` behave as documented.
+* Loading a history archive leaves `ContextFragment.nextId` pointing at the
+  first free numeric id.
+* Equality and hash-code of fragments rely only on the id.
+* All (new and existing) unit tests pass.
+
+Only modify the files listed in the exercise; do not change test code or
+project structure.

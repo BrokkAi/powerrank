@@ -1,0 +1,52 @@
+Context  
+The `langchain4j-mcp` module already tries to reconnect when the underlying
+transport reports that the connection is broken, but nothing proactively
+checks that the server is still alive.  
+A new integration test (`McpAutoHealthCheckIT`) expects the client to
+periodically ping the server, detect an unresponsive/terminated server and
+transparently reconnect once the server is available again.  
+The current implementation does **not** provide this behaviour, so the new
+tests fail.
+
+Task  
+Extend `DefaultMcpClient` (and its `Builder`) so that all unit and
+integration tests – old ones and the new `McpAutoHealthCheckIT` – pass.
+
+Required behaviour
+
+1. Automatic health-check  
+   • By default the client must start one background, daemon thread that, at a
+     configurable interval, invokes the existing `checkHealth()` method.  
+   • If `checkHealth()` throws an exception the client must attempt to restore
+     the connection by re-executing the normal `initialize()` procedure
+     (exactly the same logic that is already used after
+     `connectionClosedFuture` completes).  
+   • Only one reconnection attempt may run at a time.
+
+2. Configuration  
+   Builder options (fluent API) have to be added:  
+   • `autoHealthCheck(boolean enabled)` – default `true`.  
+   • `autoHealthCheckInterval(Duration interval)` – default `30s`, ignored
+     when `autoHealthCheck(false)` is used.
+
+3. Resources  
+   • The scheduler must be shut down in `close()`.  
+   • It must not be created when automatic health checking is disabled.
+
+4. Thread-safety  
+   The reconnection that is triggered by the health checker must be serialised
+   with any other ongoing initialisation so that connection setup runs at most
+   once at a time.
+
+With these changes the following scenarios must succeed:
+
+• A brand-new client created with default settings exposes a non-null internal
+  scheduler.  
+• Killing the MCP server, waiting briefly, restarting it and then issuing a
+  new tool call works without throwing – the client detected the failure,
+  re-connected and executed the tool.  
+• Disabling the feature via the builder prevents the scheduler from being
+  created.
+
+Do not break any existing public API other than adding the above builder
+methods.

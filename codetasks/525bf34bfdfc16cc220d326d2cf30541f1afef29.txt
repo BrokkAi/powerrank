@@ -1,0 +1,39 @@
+Lucene’s approximate-kNN implementation (module lucene/core) must support an optional “patience” early-termination heuristic for HNSW searches:
+
+Functional overview
+-------------------
+1.  During HNSW traversal keep track, after every candidate vector block, of how many **new** documents were actually inserted into the nearest-neighbour queue (the queue that finally yields the k results).
+
+2.  Let  
+    queue saturation = min(prevQueueSize , curQueueSize) / curQueueSize  
+    If this ratio is ≥ `saturationThreshold` for more than `patience` consecutive vector blocks the search should stop instantly (as if `earlyTerminated() == true`).
+
+3.  The heuristic is exposed to end users through a new query type  
+    `PatienceKnnVectorQuery`.  
+    It is a thin wrapper around the existing float / byte / seeded kNN queries, adding two tunables: `saturationThreshold` (double) and `patience` (int).  
+    • Default threshold = 0.995  
+    • Default patience = max(7 , 0.3 × k)  
+    `PatienceKnnVectorQuery` must behave exactly like the wrapped query except for the new early-termination possibility.
+
+4.  “Patience” is implemented internally by a collector decorator
+    `HnswQueueSaturationCollector` that wraps any `KnnCollector`.  
+    ‑ It must forward every method call to the delegate unless stated otherwise.  
+    ‑ `collect(docId, similarity)` has to increment an internal counter only when the delegate really inserted the hit.  
+    ‑ `nextCandidate()` (invoked by the searcher after each vector block) updates the saturation logic and decides whether patience has run out.  
+    ‑ `earlyTerminated()` returns true when either the delegate did so or patience is exhausted.  
+    ‑ When patience, not the delegate, triggers early stopping, `topDocs()` must return the queue contents with `TotalHits.Relation.EQUAL_TO`, i.e. re-run of the precise phase must be skipped.
+
+5.  Search-time integration  
+    • `KnnSearchStrategy` gets a new abstract method `nextVectorsBlock()`.  
+      Existing strategies must keep compiling (they can be no-ops).  
+    • Add subclass `KnnSearchStrategy.Patience` that stores a reference to the `HnswQueueSaturationCollector` so it can forward the `nextVectorsBlock()` call to `collector.nextCandidate()`.  
+    • `HnswGraphSearcher` and `FilteredHnswGraphSearcher` must invoke `results.getSearchStrategy().nextVectorsBlock()` exactly once after every vector block they process (no-op when the strategy is null).  
+    • When building the graph (`HnswGraphBuilder.UniqueStrategy`) `getSearchStrategy()` may return `null` (graph building never uses the new feature).
+
+6.  `PatienceKnnVectorQuery` must create its collectors via a private `CollectorManager` that wraps the delegate manager with `HnswQueueSaturationCollector`, passing the proper threshold and patience.  All other behaviour (rewrite, equals/hashCode, toString, etc.) must stay identical to the wrapped query.
+
+7.  Public surface:
+    – `HnswQueueSaturationCollector` and `PatienceKnnVectorQuery` are annotated `@lucene.experimental`.  
+    – All tests (old and the new ones that exercise these classes) must compile and succeed.
+
+Implement the above while keeping all existing functionality unchanged.

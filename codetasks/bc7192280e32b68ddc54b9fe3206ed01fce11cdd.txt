@@ -1,0 +1,39 @@
+### Goal  
+Extend the SSE streaming support so that  
+1. **Any failure that happens inside the HTTP-client/streaming machinery is reported to the caller** via `ServerSentEventListener.onError(Throwable)`.  
+2. **Any exception that is thrown by a user supplied `ServerSentEventListener` implementation must never break the streaming pipeline.**  
+   Such exceptions have to be caught and only logged; the client must continue working as if the listener were flawless.
+
+### Required behaviour  
+
+Server-side events are consumed through  
+
+```
+HttpClient.execute(HttpRequest request,
+                   ServerSentEventParser parser,
+                   ServerSentEventListener listener)
+```
+
+and delivered to the listener through four callbacks:
+
+* `onOpen(SuccessfulHttpResponse response)` – once, right after a successful 2xx response is obtained.  
+* `onEvent(ServerSentEvent event)` – once per SSE message.  
+* `onError(Throwable t)` – exactly once for every internal failure (HTTP error status, I/O error, timeout, …).  
+* `onClose()` – once when the stream ends normally.
+
+Implement / adapt the client and the parsers so that
+
+* All internal problems (non-success status code, `HttpTimeoutException`, `IOException`, malformed data, …) are forwarded to `onError`.  
+* After such forwarding no exception must leak further; the `CompletableFuture` returned by the underlying JDK `HttpClient` may be completed exceptionally, but nothing must crash the caller’s thread.
+* If the listener itself throws from `onOpen`, `onEvent`, `onError`, or `onClose`, this must not influence the streaming logic; only a warning should be written to the logger.  
+
+A helper that runs a `Runnable` and silently logs any exception is acceptable and will be exercised by the tests.
+
+### Acceptance  
+
+All existing and newly added unit / integration tests have to pass. In particular, tests expecting:
+
+* successful streaming even if the listener throws inside `onOpen`, `onEvent`, or `onError`;
+* correct `onError` invocation when the connection cannot be established;
+
+must succeed, while no previously working behaviour may regress.

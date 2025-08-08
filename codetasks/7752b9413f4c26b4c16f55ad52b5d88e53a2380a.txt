@@ -1,0 +1,50 @@
+Context  
+The project defines an async “streaming-chat” API:
+
+• StreamingChatModel represents a chat model that delivers the answer token-by-token.  
+• Clients pass a StreamingChatResponseHandler that receives
+  – onPartialResponse(String) – every token,  
+  – onCompleteResponse(ChatResponse) – final full response,  
+  – onError(Throwable) – failures.
+
+At the moment there is only a non-blocking helper in
+dev.langchain4j.model.LambdaStreamingResponseHandler which produces a
+handler from two lambdas.  
+Tests that exercise simple applications or unit-tests need a **blocking**
+variant so they can wait until the stream finishes (or fails).
+
+Task  
+Extend class dev.langchain4j.model.LambdaStreamingResponseHandler with
+two public static utility methods that block the caller until streaming
+is finished:
+
+1. onPartialResponseBlocking(StreamingChatModel model,
+                              String message,
+                              Consumer<String> onPartialResponse)
+
+   – Same behaviour as the existing helper that only forwards tokens,  
+   – additionally starts the request on the supplied model,  
+   – blocks the current thread until either the stream completes
+     successfully or terminates with an error,  
+   – uses Throwable::printStackTrace as the default error handler.
+
+2. onPartialResponseAndErrorBlocking(StreamingChatModel model,
+                                      String message,
+                                      Consumer<String> onPartialResponse,
+                                      Consumer<Throwable> onError)
+
+   – Same as (1) but lets the caller supply its own error callback.
+
+Implementation requirements  
+• Use java.util.concurrent.CountDownLatch (or equivalent) to coordinate
+  completion.  
+• The latch must be counted down in both onCompleteResponse(...) **and**
+  onError(...).  
+• After invoking model.chat(message, handler) the method must wait on
+  the latch and then return.  
+• If the waiting thread is interrupted, propagate the
+  InterruptedException to the caller (do not wrap it).  
+• Do not change the public behaviour of existing non-blocking helpers.
+
+When these two methods are correctly implemented, all old and new unit
+tests compile and pass.

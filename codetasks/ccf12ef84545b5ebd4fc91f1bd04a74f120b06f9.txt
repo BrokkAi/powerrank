@@ -1,0 +1,29 @@
+Background  
+Cassandra’s Accord journal metadata is persisted in `Metadata` objects.  
+Developers need an easy-to-read textual representation of those objects, for
+instance when the new stand-alone journal-dump tool prints them to the console.
+Up to now `org.apache.cassandra.journal.Metadata` had no meaningful
+`toString()` implementation, which makes debugging and log inspection
+difficult.
+
+Task  
+Implement `Metadata.toString()` so that it returns a concise summary of the
+most important fields:
+
+• the configured `fsyncLimit`  
+• the number of records already written (`recordsCount`)
+
+The exact format used by the rest of the code base is:
+
+"Metadata{fsyncLimit=<value>, recordsCount=<value>}"
+
+where `<value>` is the current content of the corresponding field.  
+No additional characters or whitespace should be added; the example above shows
+the complete expected layout.
+
+Constraints / Notes  
+– `fsyncLimit` and `recordsCount` are already available as fields of the class  
+  (no new state needs to be tracked).  
+– Only public behaviour must change; do not alter the class’ serialisation
+  logic or any other existing functionality.  
+– All existing and new unit tests must pass.

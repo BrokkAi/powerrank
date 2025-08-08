@@ -1,0 +1,34 @@
+Task
+
+Augment Apache Cassandra so that internal “debug” virtual tables can expose and filter on columns whose on-disk representation is a byte sequence, while presenting them to CQL as ordinary TEXT.  
+Implement the new abstraction “PseudoUtf8Type” and two concrete specialisations (“TokenUtf8Type” and “TxnIdUtf8Type”) together with the small accompanying changes to existing classes that make these types usable, printable and safe.
+
+Required behaviour
+
+1. Any subclass of the new abstract class PseudoUtf8Type  
+   • stores its data exactly as UTF-8 encoded text (i.e. is binary-compatible with UTF8Type)  
+   • is shown to CQL clients as type TEXT (CQL3Type.Native.TEXT).  
+   • participates in type-compatibility checks exactly like UTF8Type/AsciiType (they must all be considered interchangeable).  
+   • converts values to/from JSON and Java strings exactly like UTF8Type.  
+   • may define custom value comparison rules by overriding compareCustom(…) without affecting its CQL appearance.
+
+2. PseudoUtf8Type itself must be impossible to reference in ordinary schema definitions; attempting to create/alter a table with a column of a PseudoUtf8Type after the node has finished starting must raise ConfigurationException.  The type, however, can be instantiated programmatically inside the JVM (needed by the Accord debug virtual tables).
+
+3. CQL literal rendering of any column that uses a PseudoUtf8Type (or one of its subclasses) must use normal TEXT literal syntax, not the “0x… blob” syntax that is produced for generic Custom types.  This is achieved by modifying CQL3Type.Custom#toCQLLiteral.
+
+4. Two concrete singletons have to be provided  
+   • TokenUtf8Type – string value must be a valid token according to the active partitioner; comparison order is the token’s natural order.  
+   • TxnIdUtf8Type – string value must be parseable as accord.primitives.TxnId; comparison order is the TxnId natural order.  
+   Both expose dedicated serializers that perform validation as above.  
+
+5. When requested by UDFs, functions, etc. the new types must return a functioning ArgumentDeserializer and a masked value (empty buffer is OK).
+
+6. The change to UTF8Serializer’s constructor visibility (now protected) must compile, and any code that creates an anonymous subclass thereof must still work.
+
+7. All existing unit tests as well as the new ones added for virtual accord tables must succeed.
+
+Acceptance criteria
+
+• mvn test (or the build command used by the harness) runs cleanly.  
+• No regression in existing public CQL behaviour: users can still create/alter TEXT and ASCII columns freely.  
+• Internal virtual tables that declare columns as `'TokenUtf8Type'` or `'TxnIdUtf8Type'` can be queried and filtered exactly like normal TEXT columns, following their specialised comparison semantics, and their values are printed as human-readable strings.

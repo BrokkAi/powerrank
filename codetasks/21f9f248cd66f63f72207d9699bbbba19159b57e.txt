@@ -1,0 +1,38 @@
+### Background
+
+`JournalKey` is serialized into Cassandra’s partition key and is also compared directly via
+`JournalKey.SUPPORT.compare(...)`.  
+For correct on-disk ordering both orderings **must** be identical: two keys that compare `< 0`
+must also have a partition key whose binary form is `< 0`, and vice-versa.
+
+A difference existed for the “topology update” records because they were constructed with
+`commandStoreId == -1`.  
+The negative value was encoded differently in the two representations, which resulted in the
+partition key and the in-memory comparator disagreeing on the order of those entries.
+Among other things this broke compaction and replay.
+
+### Required behaviour
+
+1. `commandStoreId` is **always non-negative**.  
+   •   Any place that used `-1` to designate “all stores” must now use `0`.  
+   •   Creating a `JournalKey` with a negative `commandStoreId` must throw
+       `IllegalArgumentException`.
+
+2. The serialization produced by `AccordKeyspace.JournalColumns.decorate(JournalKey)` and the
+   ordering defined by `JournalKey.SUPPORT.compare(...)` must yield the **same
+   lexicographical ordering** for every possible key (the test suite will verify this with a
+   large random sample).
+
+3. Topology-update operations (`saveTopology`, `replayTopologies`, …) as well as the unit test
+   generators must be updated to pass `0` instead of `-1`.
+
+4. When compacting journal segments, an internal sanity check should confirm that the
+   monotonic sequence of `JournalKey` instances being written matches the monotonic sequence
+   of their associated `DecoratedKey`s; if the two orders ever diverge an
+   `IllegalArgumentException` must be raised.
+
+### Scope of the task
+
+You will receive the full source tree and a list of files that may be edited.
+Implement the changes described above so that **all existing and newly-added tests pass**.
+No APIs may be removed or have their signatures changed.

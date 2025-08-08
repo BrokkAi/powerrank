@@ -1,0 +1,42 @@
+### Problem
+
+Lucene’s vector search implementation needs to expose how much **off-heap** memory an index *could* occupy when all data structures for a given vector field are paged into memory (HNSW graph, raw vectors, quantized vectors, …).  
+The information is reported
+
+* **per vector field** – the caller passes the field’s `FieldInfo`.
+* **per index structure** – the returned `Map<String,Long>` is keyed by the file-extension that stores that structure (e.g. `"vec"`, `"vex"` …).
+* as **bytes** – the `Long` value is the size in bytes.
+
+Several parts of the codebase (composite readers, wrappers, asserting codecs, etc.) must forward or aggregate this information.
+Existing and newly added tests expect the following behaviour:
+
+1. `KnnVectorsReader.getOffHeapByteSize(FieldInfo)`  
+   • new public API.  
+   • Default implementation returns an empty map (no off-heap data).  
+   • Implementations that really hold off-heap data must return the correct breakdown.
+
+2. `KnnVectorsReader.mergeOffHeapByteSizeMaps(Map<String,Long>, Map<String,Long>)`  
+   • Static helper that merges two such maps, **summing** values for identical keys.
+
+3. All wrappers (`PerFieldKnnVectorsFormat.FieldsReader`, `SlowCodecReaderWrapper`,  
+   `SlowCompositeCodecReaderWrapper`, `SortingCodecReader`, the test-only
+   `AssertingKnnVectorsReader` …) have to delegate to, or aggregate from, the underlying
+   `KnnVectorsReader` instances.
+
+4. Concrete readers that were previously silent about memory usage must now implement
+   `getOffHeapByteSize`.  
+   Each of them already tracks the lengths of their off-heap files; you only need to return those lengths in a map keyed by the matching file extension.
+
+5. The simple-text implementation stores everything on-heap; it must return an **empty** map.
+
+The public contract:
+
+```
+Map<String,Long> getOffHeapByteSize(FieldInfo fieldInfo)
+```
+
+* must never be `null` (unless the field itself is unknown – then the implementation may return `null` or throw an `IllegalArgumentException`, depending on what makes sense for that reader),
+* must sum to the total desired off-heap size for that field,
+* must be mergeable through `mergeOffHeapByteSizeMaps`.
+
+All existing functionality must keep working; only the new API and its propagation have to be added so that the new unit tests compile and succeed.

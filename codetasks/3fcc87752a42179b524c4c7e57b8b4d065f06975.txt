@@ -1,0 +1,37 @@
+Task
+
+Lucene already contains an approximate (but very fast) cosine implementation in org.apache.lucene.util.SloppyMath.cos.  
+Add the corresponding sine implementation, move every remaining user of the former “sloppySin” helper to the new
+method and delete the old helper.
+
+Functional requirements
+
+1. Implement
+       public static double sin(double angleRadians)
+   in org.apache.lucene.util.SloppyMath.
+
+   • The method must be fast (same spirit as SloppyMath.cos).  
+   • The absolute error must stay below ≈ 1 × 10-12 for all inputs that the existing
+     SloppyMath tests exercise (they go up to the constant
+     SloppyMath.SIN_COS_MAX_VALUE_FOR_INT_MODULO).  
+   • For NaN or ±∞ the result must be NaN, exactly like java.lang.StrictMath.sin.
+
+   Re-use of the existing cosine code is allowed – accuracy, speed and correct
+   special-case handling are what matter.
+
+2. Remove the package-private GeoUtils.sloppySin method and switch all usages to
+   the new SloppyMath.sin.  In current sources the only remaining call site is in
+   org.apache.lucene.geo.Rectangle; make it invoke SloppyMath.sin instead.
+
+3. No public API other than SloppyMath.sin should change.
+
+Success criteria
+
+• All JUnit and randomized tests supplied with the project (including the new
+  SloppyMath unit tests) must pass.  
+• Compilation produces no warnings or errors related to the refactor.  
+• Public behaviour of existing SloppyMath methods (cos, asin, haversin*, …) stays
+  unchanged.
+
+Focus only on the production code; benchmarking classes added in the commit are
+for reference and are not run by the test suite.

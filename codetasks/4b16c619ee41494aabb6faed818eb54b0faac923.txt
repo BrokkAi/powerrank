@@ -1,0 +1,19 @@
+Background  
+SAI maintains an “index descriptor” for every SSTable, whose on-disk components are “discovered” the first time the descriptor is loaded or later re-loaded.  
+The discovery API used to receive a `Descriptor` plus a `TableMetadata`, but the metadata parameter is never used any more, while the `SSTableReader` is regularly required.  
+This refactor replaces the old pair of parameters with a single `SSTableReader` so the discoverer can access everything it needs directly.  
+The change ripples through several classes that either implement the discovery itself or invoke it.  
+While doing so, some extra debug statements were added to make index-tracking decisions clearer.
+
+Task  
+1. Replace the method  
+   `SSTableIndexComponentsState discoverComponents(Descriptor descriptor, TableMetadata metadata)`  
+   by  
+   `SSTableIndexComponentsState discoverComponents(SSTableReader sstable)`  
+   in `IndexComponentDiscovery` and in every concrete implementation.  
+2. Update every caller (`IndexDescriptor.load`, `IndexDescriptor.reload`, `DefaultIndexComponentDiscovery`, the SAI context manager, tests, etc.) to use the new signature.  
+   • `reload` must now receive the `SSTableReader` instead of the table metadata and must verify that the supplied reader belongs to the same descriptor (`Preconditions.checkArgument`).  
+3. Add the new debug lines that were introduced in the diff (they reference skipped SSTables and incomplete component sets).  
+4. Nothing else about SAI’s behaviour should change; all existing and new unit tests must still pass.
+
+You are free to reorganise code as long as the external API and behaviour described above remain intact.

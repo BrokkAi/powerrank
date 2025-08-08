@@ -1,0 +1,49 @@
+Byte-based paging in Cassandra relies on each replica and on the coordinator counting the same amount of bytes while iterating over partitions/rows.  
+At replica side the counter is applied to the raw iterator, whose rows still contain
+all tombstone information, while on the coordinator the iterator is first reconciled
+and purged and therefore no longer includes the tombstone cells.  
+Because the existing DataLimits.Counter implementation uses Row.dataSize(), the
+coordinator stops counting too early when tombstones were purged and considers the
+replica “exhausted”, which makes the query return too few rows and breaks every
+internally paged aggregation.
+
+Required behaviour
+
+1. Every Row must be able to return not only its current size (still exposed by
+   dataSize()) but also the size it had before any purge happened – i.e. including
+   the bytes of cells that were shadowed by a tombstone.
+   • A new method `int originalDataSize()` is added to the Row interface for this
+     purpose.
+   • For rows that have never been purged the value is identical to dataSize().
+
+2. When a BTreeRow is purged it has to remember that original size and
+   subsequently return it through originalDataSize(), while continuing to return
+   the new, smaller size through dataSize().
+
+3. All byte-based counters (the CQL counter used by DataLimits) must use
+   originalDataSize() instead of dataSize() so that the coordinator counts the
+   same bytes that replicas counted before purging.
+
+4. Wrappers that expose a Row (e.g. RowWithSourceTable) must delegate the new
+   method.
+
+5. The change must not alter the behaviour of any other part of the code base;
+   all previously green unit tests must still pass and the newly added tests that
+   verify correct paging/aggregation counts must succeed as well.
+
+Summary of the visible API changes
+
+• interface Row  
+  – new method `int originalDataSize()`
+
+• class BTreeRow  
+  – must store the pre-purge size and implement originalDataSize()  
+  – all factory/clone/build paths that may create a purged row must be able to
+    pass that value along.
+
+• Any component that counts bytes for paging (currently
+  DataLimits.Counter.CQLCounter and its subclasses) must switch from
+  row.dataSize() to row.originalDataSize().
+
+After implementing this behaviour, both the existing test-suite and the new
+paging/aggregation/guardrail tests must pass.

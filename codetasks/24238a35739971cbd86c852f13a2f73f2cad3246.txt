@@ -1,0 +1,38 @@
+Implement support for the new, simplified way to read enumerated configuration
+options and make the index-version enum accessible for reflective use.
+
+Background  
+`Config#getEnum(..)` used to require the caller to pass the result of
+`<Enum>.values()` as its first parameter.  
+That overload is being retired; the code base (and the new/updated tests)
+now uses two replacement overloads that rely on reflection to obtain the
+enum constants:
+
+1. `<T extends Enum<T> & ConfigEnum>  
+   T getEnum(String section, String subsection, String name, T defaultValue)`
+
+2. `<T extends Enum<T> & ConfigEnum>  
+   T getEnum(String section, String subsection, String name)`
+
+Required changes
+
+1. Add the two overloads named above to `org.eclipse.jgit.lib.Config`.
+   • Their semantics must be identical to the old methods, the only
+     difference being that callers no longer supply the `values()` array.  
+   • A simple and fully compatible implementation is to delegate to the
+     existing (still available) overloads by obtaining the enum constants
+     through `defaultValue.getDeclaringClass().getEnumConstants()` (for the
+     variant with a default) or through reflection on the return type (for
+     the variant without a default).  
+   • The variant without a default must return `null` if the variable is not
+     set, and otherwise return the matching enum constant.
+
+2. `org.eclipse.jgit.dircache.DirCache.DirCacheVersion`
+   must be changed from package-private to `public` so that the reflective
+   code inside `Config` can invoke `DirCacheVersion.values()`.
+
+3. No observable behaviour may change.  All existing call sites that still
+   use the old overload must keep working, and all new/updated call sites
+   must compile and behave exactly as before.
+
+When you are done, all tests (old and new) must compile and pass.

@@ -1,0 +1,27 @@
+### Goal  
+Extend Lucene’s block‐based document-id iterator so that callers can quickly discover how far the current continuous run of matching documents extends.  In other words, after positioning the iterator on a document *d*, the new method `docIDRunEnd()` must return the first document id **strictly greater than *d*** that is **not** matched by the iterator (or `NO_MORE_DOCS` when the current run reaches the end of the segment).
+
+### Scope of the change  
+`IndexedDISI` already supports three internal block formats:
+
+* **SPARSE** – at most one matching id per 64-doc block  
+* **DENSE** – arbitrary bit pattern inside a 64-doc block  
+* **ALL** – every doc of a 65 536-doc super-block matches  
+
+The iterator can therefore be in one of the three modes above, and the end of a run depends on the current mode and state.  
+`docIDRunEnd()` must be implemented for each mode and exported through all wrappers that expose an iterator originating from `IndexedDISI` (DocValues views, etc.).
+
+### Functional requirements
+1. While positioned on a valid document id returned by `docID()`  
+   `docIDRunEnd()` returns the exclusive upper bound of the consecutive run that starts at the current position.  
+   • If only the current id matches, it returns `docID() + 1`.  
+   • If the run extends to the last document in the segment, it returns `NO_MORE_DOCS`.  
+2. The method must be callable multiple times without advancing the iterator and always return the same value until `nextDoc()`/`advance()` is invoked.  
+3. The implementation must respect the semantics of the three block formats and must not move the iterator or perform any I/O.  
+4. All concrete subclasses and wrappers produced by `Lucene90DocValuesProducer` must forward the call so that the new capability is visible at every public iterator returned by the codec.
+
+### Non-functional requirements
+* Maintain the existing performance characteristics: the new method must run in O(1) with no additional allocations.
+* All pre-existing public behaviour of the iterators must be preserved.
+
+Passing the complete test-suite (old and new) is considered proof of correctness.

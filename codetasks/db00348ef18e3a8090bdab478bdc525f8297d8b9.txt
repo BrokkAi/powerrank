@@ -1,0 +1,37 @@
+Problem description
+
+Lucene’s `PostingsEnum` recently got a new method
+
+    int docIDRunEnd() throws IOException
+
+which must return the exclusive upper bound of the current “run” of
+consecutive document-ids that the iterator will return.  
+If the iterator is positioned on doc X, the return value **R** must obey
+
+  • R > X  
+  • Every document id in the half–open interval [X ; R) will be visited
+    consecutively by subsequent `nextDoc()` calls;  
+  • Either the iterator is exhausted at R (NO_MORE_DOCS) or the next
+    document after X…R-1 is ≥ R.
+
+For implementations that cannot detect longer runs, returning
+`docID()+1` is always correct, but for block based postings it is
+possible to return the end of the current dense block so that
+higher-level checks (and potential optimisations) can be performed more
+efficiently.
+
+Task
+
+Provide a working implementation of `docIDRunEnd()` for the block based
+enumerator that is created by
+`lucene/core/.../lucene101/Lucene101PostingsReader.BlockPostingsEnum`.
+
+Your code must
+
+  • honour the contract described above,  
+  • never move the iterator or change its state,  
+  • be safe for any postings list, including ones containing a single
+    document, very large lists and empty blocks,  
+  • compile and make all existing as well as new tests pass.
+
+No other behaviour of Lucene must change.

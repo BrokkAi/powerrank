@@ -1,0 +1,16 @@
+### Goal  
+Unify the way completion-suggesters keep their FSTs in memory: from now on they must **always be loaded off-heap**.  All code paths that let callers select a different loading mode have to disappear and the default behaviour must become “off-heap”.
+
+### What has changed  
+1. `CompletionPostingsFormat.FSTLoadMode` and every public constructor/​method that exposed it are removed.  
+2. All `Completion*PostingsFormat` implementations offer a single no-arg constructor.  
+3. `CompletionFieldsProducer`, `CompletionsTermsReader`, `NRTSuggester` (and its builder) always load the FST off-heap and therefore no longer receive a load-mode parameter.  
+4. Any test that used to pick a random load mode now simply instantiates a postings format directly.
+
+### Required outcome  
+• The API surface must reflect the new design (no enum, no parameters related to it).  
+• FST data of completion suggesters is read with an `OffHeapFSTStore` in all cases.  
+• Existing functionality (indexing, merging, searching, suggesting) keeps working with the new fixed strategy.  
+• All provided unit and integration tests – both the unchanged ones and the updated ones that accompany this change set – compile and pass.
+
+Focus only on behaviour visible through the public classes mentioned above; no other internal code needs modification beyond what is necessary for compilation and correctness.

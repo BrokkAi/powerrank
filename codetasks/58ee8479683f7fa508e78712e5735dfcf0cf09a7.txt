@@ -1,0 +1,28 @@
+### Problem Description
+
+The project manages memory‐mapped files and other off-heap resources using direct `ByteBuffer`s.  
+In several locations these buffers must be explicitly de-allocated (unmapped) once they are no longer
+needed.  Up to now this was done via a reflection based helper that lived in
+`org.apache.cassandra.io.util.FileUtils`.  
+The implementation is being removed and every call site has been switched to
+`org.apache.cassandra.utils.memory.MemoryUtil.clean(ByteBuffer)` instead.
+
+Your task is to provide the new `MemoryUtil.clean` implementation so that
+
+* a **direct** buffer that is **not** a slice or duplicate is really cleaned
+  (i.e. the underlying memory is released / unmapped);
+* attempting to clean a non-direct buffer performs no action;
+* attempting to clean a view (slice / duplicate) of another buffer performs no
+  action and must not make the backing buffer unusable;
+* calling the method must never throw, apart from propagating unchecked
+  exceptions coming from the underlying JVM facilities.
+
+The project already exposes an initialized `sun.misc.Unsafe` instance in
+`MemoryUtil`; you must rely on that instance and call
+`Unsafe.invokeCleaner(ByteBuffer)` which is available since JDK 9.
+Use the `sun.nio.ch.DirectBuffer` interface to detect whether the passed buffer
+is a view (it has a non-null `attachment()`).
+
+All existing unit and long tests – including the new ones that verify memory
+reclamation and correct behaviour with slices/duplicates – must pass after your
+changes.

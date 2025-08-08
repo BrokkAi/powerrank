@@ -1,0 +1,149 @@
+# Structured outputs – extend type support & parsing  
+
+LangChain4j’s AI-service layer can return structured Java values instead of plain text.  
+The library already handled POJOs but now needs to cope with many more kinds of return
+types, produce the corresponding “format-instructions” for models that do **not**
+support JSON-schema and, when the current language-model **does** support JSON-schema,
+generate the right schema object.
+
+Your task is to finish the implementation so that **all unit and integration tests
+in the repository pass**.  In particular, the following functional requirements must
+be met.
+
+---
+
+## 1. New kinds of return types  
+
+An `@AiService` method may now declare any of the return types (or their `Result<T>` wrapper):
+
+* Primitives and boxed primitives  
+  `boolean/Boolean`, `int/Integer`, `long/Long`, `float/Float`, `double/Double`
+* Enums and collections of enums  
+  `E`, `List<E>`, `Set<E>`
+* String collections  
+  `List<String>`, `Set<String>`
+* POJO collections  
+  `List<Pojo>`, `Set<Pojo>`
+
+The infrastructure has to recognise those types, choose an
+`OutputParser`, build a JSON-schema when the target model announces the
+`RESPONSE_FORMAT_JSON_SCHEMA` capability, and fall back to text
+instructions otherwise.
+
+---
+
+## 2. Output parsing rules  
+
+Each new parser must be able to consume either
+
+```
+<raw value>
+```
+
+or  
+
+```
+{
+  "value": <raw value>
+}
+```
+
+for scalars, and  
+
+```
+value1
+value2
+```
+
+or  
+
+```
+{
+  "values": [ <raw values> ]
+}
+```
+
+for collections.  
+Whitespace must be ignored.  
+Invalid or empty input must raise `OutputParsingException`.
+
+Specifics:
+
+* Boolean – only `true` / `false` (any casing) are accepted.  
+* Integer & Long – support plain numbers, scientific notation
+  (`"1e3"` → `1000`) and detection of numeric overflow (throw if outside
+  the type range).  
+* Float & Double – support plain and scientific notation, `"Infinity"`,
+  `"-Infinity"`.  
+* Enum parsing is case-insensitive and ignores surrounding `[` `]`.
+* Collection parsers must keep the original order and de-duplicate for
+  `Set` implementations.
+
+`OutputParser#formatInstructions()` must describe the exact format the
+model has to respond with when JSON-schema is not used.
+
+---
+
+## 3. JSON-schema generation  
+
+`OutputParser#jsonSchema()` returns the JSON-schema for supported types:
+
+```
+boolean              -> {"type":"object","properties":{"value":{"type":"boolean"}},"required":["value"]}
+integer / long       -> {"type":"object","properties":{"value":{"type":"integer"}},"required":["value"]}
+float   / double     -> {"type":"object","properties":{"value":{"type":"number"}},"required":["value"]}
+enum                 -> {"type":"object","properties":{"value":{"enum":[...]}},"required":["value"]}
+col-of-X             -> {"type":"object","properties":{"values":{"type":"array","items":<schema of X>}},"required":["values"]}
+pojo                 -> already existed – must still work
+```
+
+For types where JSON-schema is **not** (yet) supported
+(`byte/short/BigInteger/BigDecimal/Date/…`) the method must return
+`Optional.empty()` and the service must revert to text instructions.
+
+---
+
+## 4. Service integration  
+
+`ServiceOutputParser`:
+
+* delegates to `OutputParserFactory` to obtain a parser for the concrete
+  (possibly generic) return type,
+* uses it to parse the model output,
+* asks the parser for a JSON-schema; if present and the model supports
+  `RESPONSE_FORMAT_JSON_SCHEMA` the schema is attached to the chat
+  request instead of appending text instructions,
+* still generates plain-text instructions when JSON-schema is absent.
+
+---
+
+## 5. Exceptions  
+
+Parsing failures must throw `OutputParsingException` with the message
+
+```
+Failed to parse "<original text>" into <TargetType>
+```
+
+`IllegalConfigurationException` remains unchanged for illegal service
+signatures.
+
+---
+
+## 6. Backwards compatibility  
+
+All existing behaviour (previously supported types, streaming, etc.)
+must keep working exactly as before.
+
+---
+
+### Hint
+
+Pay attention to generic type resolution (`List<Person>`,
+`Result<List<Person>>`, …) and ensure `OutputParserFactory` always
+returns **a parser instance** (never `null`) for every supported type.
+
+---
+
+Once you are done **all tests in `langchain4j` and all sub-modules must be
+green**.

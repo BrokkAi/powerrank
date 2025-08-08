@@ -1,0 +1,34 @@
+Problem description
+
+Lucene offers the constant IOContext.READONCE for situations where a file will be opened and consumed exactly once in the same thread.  Several components detect this mode by testing
+
+    context == IOContext.READONCE
+
+Using object identity is fragile: as soon as a caller wraps, copies or otherwise recreates the context the information is lost, even though semantically the access pattern is still “read-once”.
+
+Add a proper FileOpenHint that can be carried by any IOContext instance and migrate the affected code so it relies on that hint instead of an identity comparison.
+
+Functional requirements
+
+1. Create a new enum ReadOnceHint that implements IOContext.FileOpenHint.  
+   A single element — INSTANCE — is sufficient; presence of this value in the hint set marks the context as read-once.
+
+2. IOContext.READONCE must be built with this hint so existing callers that use the constant keep working.
+
+3. Any logic that currently decides “read-once” by comparing the context with the READONCE singleton must switch to
+
+       context.hints().contains(ReadOnceHint.INSTANCE)
+
+4. Behaviour of all existing Lucene and test-framework code must stay unchanged apart from the above detection mechanism; all unit and integration tests must still pass.
+
+Files that are known to rely on the old identity check (the list may be incomplete):
+
+• lucene/core/…/MMapDirectory.java  
+• lucene/test-framework/…/MockDirectoryWrapper.java  
+• lucene/test-framework/…/LuceneTestCase.java  
+
+Update them – and any other locations revealed by the compiler – to use the new hint.
+
+Deliverables
+
+Submitting a patch that compiles without warnings and lets the full Maven/Gradle test suites succeed is considered a complete solution.

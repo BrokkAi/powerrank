@@ -1,0 +1,45 @@
+### Problem Statement
+
+Introduce support for an in-query, top-N rescore operation.
+
+1. **DocAndScoreQuery**  
+   A lightweight `Query` that is backed by a **fixed** list of document id / score pairs which were
+   produced earlier in the execution chain.  
+   • It is created from a `TopDocs` instance and the corresponding `IndexReader`.  
+   • The query must be able to run in every segment that contains at least one of the stored
+     documents; for such segments it must expose a `ScorerSupplier` whose iterator returns
+     exactly the stored ids and whose `score()` returns the stored score multiplied by the
+     incoming boost.  
+   • `Weight.count()` must return the segment’s number of matching documents so that
+     `IndexSearcher` can apply `ScoreMode.COMPLETE_NO_SCORES`.  
+   • The query is **reader-bound**: if it is executed with another reader an
+     `IllegalStateException` must be thrown.  
+   • Implement `equals`, `hashCode`, `toString`, `visit` and make the query cacheable.  
+   • Provide two static helpers  
+     – `createDocAndScoreQuery(IndexReader, TopDocs, int reentryCount)` – builds the query from a
+       `TopDocs` array (already ordered by decreasing score).  
+     – `findSegmentStarts(List<LeafReaderContext>, int[] docs)` – returns, for every reader leaf,
+       the first position in `docs` that belongs to that leaf plus a sentinel entry at the end.
+
+2. **RescoreTopNQuery**  
+   A wrapper `Query` that  
+   • Executes an inner query,  
+   • For every hit obtains a second score from a configurable `DoubleValuesSource`,  
+   • Keeps only the best *n* documents according to that second score, and  
+   • Returns a `DocAndScoreQuery` produced from those *n* documents during
+     `rewrite(IndexSearcher)`.  
+   Behavioural requirements:  
+   • `n ≥ 1` (otherwise throw `IllegalArgumentException`).  
+   • The rescoring must work even if the search is executed with
+     `ScoreMode.COMPLETE_NO_SCORES`.  
+   • If the `DoubleValuesSource` does **not** need the original scores,
+     `getValues()` must be obtained with `null` as the scores argument.  
+   • The class must correctly implement `equals`, `hashCode`, `visit`, `toString`.  
+   • Provide a convenience factory
+     `createFullPrecisionRescorerQuery(Query in, float[] targetVector, String field, int n)` which
+     returns a `RescoreTopNQuery` whose value source computes the full-precision similarity between
+     `targetVector` and the stored vectors in `field`.
+
+3. **General constraints**  
+   • All public APIs must be fully thread-safe and adhere to Lucene’s coding conventions.  
+   • Existing functionality must remain unaffected; all unit tests (old and new) have to pass.

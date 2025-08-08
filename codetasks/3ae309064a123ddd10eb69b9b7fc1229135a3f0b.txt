@@ -1,0 +1,24 @@
+We want to extend Brokk’s Swing diff-tool in two main areas:
+
+1. Document synchronisation  
+   • Editing either side of a FilePanel had been corrupting new-lines; when the two javax.swing.text.Documents become even slightly out of sync, the incremental “diff-event” copy must be abandoned and the whole document copied instead.  
+   • A new hybrid algorithm is required:
+     – INSERT events  
+       • If offset ≤ destination length and the source/destination length difference is ≤ inserted length, copy the inserted substring incrementally.  
+       • Otherwise fall back to a full copy of the source document into the destination.  
+     – REMOVE events  
+       • Remove incrementally only when the requested range is fully contained in the destination; otherwise fall back.  
+     – CHANGE events are always handled by the fall-back copy.  
+     – Any BadLocationException must trigger the fall-back.  
+   • The helper copyTextFallback(AbstractDocument src, AbstractDocument dst) already exists and must be used.
+
+2. Unsaved-changes workflow  
+   • BufferDiffPanel must maintain a dirty flag (true when any FilePanel side has unsaved edits).  
+   • The tab title shows “*” while dirty.  
+   • BrokkDiffPanel supplies:  
+     – hasUnsavedChanges() – true if the currently loaded panel or any cached panel is dirty.  
+     – saveAll() – calls BufferDiffPanel.doSave() on every dirty panel and refreshes their tab titles.  
+     – refreshTabTitle(BufferDiffPanel) – replaces/clears the trailing “ *”.  
+   • The toolbar now contains a “Save” / “Save All” button (text is “Save All” when >1 file is open).  
+     – The button is enabled only when hasUnsavedChanges() is true.  
+   • On window close the user is prompted if there are unsaved changes; YES saves all, NO closes, CANCEL aborts the close.

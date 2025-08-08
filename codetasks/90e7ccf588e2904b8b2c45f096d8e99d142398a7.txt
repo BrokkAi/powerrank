@@ -1,0 +1,21 @@
+Your task is to bring the build back to green.
+
+The test-suite already captures the new behaviour that the project expects.  
+
+Required functional behaviour
+-----------------------------
+verifyPhase
+• If `pendingBlocks` is empty **and** `blocksAppliedWithoutBuild` is 0 → immediately return  
+  `new Step.Fatal(TaskResult.StopReason.SUCCESS)`.
+
+• If `blocksAppliedWithoutBuild` > 0 and the verification command is missing/blank **or** the build
+  succeeds → call `reportComplete("Success!" /* or similar final message */)` and return  
+  `new Step.Fatal(TaskResult.StopReason.SUCCESS)`.
+
+• If the build fails → create a new `LoopContext` with a `UserMessage` describing the failure and
+  return `new Step.Retry(...)`.
+
+Existing behaviour for interruption and read-only edit handling must stay unchanged, but now use the
+`report` / `reportComplete` helpers for console output.
+
+Modify the finite state machine as needed to achieve this and make the tests pass.

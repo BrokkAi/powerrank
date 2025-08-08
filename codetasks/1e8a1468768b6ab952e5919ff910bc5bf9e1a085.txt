@@ -1,0 +1,83 @@
+Context  
+Lucene already contains a byte-level “scalar quantisation” that, for every float in a vector,  
+ 1. maps the value into a 7-bit signed byte (–128..127) and  
+ 2. calculates a per-vector “corrective offset” that must be added to all subsequent dot-product
+    computations so that the overall score is still correct after the lossy mapping.
+
+Until now that logic lived solely in
+  • lucene/core/src/java/org/apache/lucene/util/quantization/ScalarQuantizer  
+and was executed element-by-element.  
+The goal of this task is to expose the same algorithm through
+org.apache.lucene.internal.vectorization.VectorUtilSupport so that it can later be SIMD-
+accelerated. Two new operations have therefore been added to that interface:
+
+float minMaxScalarQuantize(float[]  vector,
+                           byte[]   dest,
+                           float    scale,
+                           float    alpha,
+                           float    minQuantile,
+                           float    maxQuantile);
+
+float recalculateScalarQuantizationOffset(byte[] vector,
+                                          float  oldAlpha,
+                                          float  oldMinQuantile,
+                                          float  scale,
+                                          float  alpha,
+                                          float  minQuantile,
+                                          float  maxQuantile);
+
+The first one must perform the quantisation and return the corrective offset, the second one
+must recompute the corrective offset for an already-quantised vector when new
+(minQuantile,maxQuantile,alpha,scale) parameters are supplied.
+
+What you have to provide
+Implement the above two operations for every VectorUtilSupport implementation so that
+
+• For any input the produced dest[] bytes are bit-for-bit identical across all providers  
+  (the tests compare the arrays coming from the default “Lucene” provider with those coming
+   from the “Panama” provider).
+
+• The returned corrective offsets are numerically equal (within the usual small floating-point
+  tolerance tested).
+
+Exact algorithm
+For each element v in the original float vector
+
+    // clamp the value into the requested quantile range
+    float dx      = v - minQuantile;
+    float dxc     = clamp(v, minQuantile, maxQuantile) - minQuantile;
+
+    // quantise and store the byte
+    int   q       = Math.round(scale * dxc);   // scale = 127/(maxQuantile-minQuantile)
+    dest[i]       = (byte) q;
+
+    // de-quantised value that will be used for the correction
+    float dxq     = q * alpha;                 // alpha = (maxQuantile-minQuantile)/127
+
+    // accumulate the corrective offset for dot-products
+    // ( equation derived in the original ScalarQuantizer javadoc )
+    offset += minQuantile * (v - minQuantile/2f) + (dx - dxq) * dxq;
+
+minMaxScalarQuantize has to execute the above on the supplied float[]/byte[] pair and return
+the final offset.
+
+recalculateScalarQuantizationOffset receives a previously quantised byte[] that was produced
+with oldAlpha/oldMinQuantile.  
+For every byte b you must first de-quantise it
+
+    float v = b * oldAlpha + oldMinQuantile;
+
+and then feed that v through the exact same steps shown above (except that nothing is written
+to a dest array) using the *new* scale/alpha/minQuantile/maxQuantile, accumulating the offset
+that is finally returned.
+
+Corner cases / constraints
+• vector and dest must have identical length (throw IllegalArgumentException otherwise).  
+• The methods must work for any vector size, including 0-length.  
+• You do not have to implement any SIMD code – a straightforward scalar loop is fine as long
+  as the numerical results are identical.  
+• All pre-existing public behaviour of ScalarQuantizer must stay unchanged; it now delegates
+  to the new VectorUtil.* helpers you are implementing, so correctness there depends on your
+  code.
+
+Once both operations behave as described all unit tests, old and new, will pass.

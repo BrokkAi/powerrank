@@ -1,0 +1,32 @@
+### Problem
+
+The query-parser must be able to transform a parse-tree back into an equivalent textual query.  
+For range queries this round-trip is currently broken:
+
+* `AbstractRangeQueryNode#toQueryString(EscapeQuerySyntax)` omits the field name and does not follow Lucene’s canonical syntax (`field:[lower TO upper]`).  
+* `FieldQueryNode` and `PointQueryNode` already know how to produce an escaped term, but the helper that does this work is `protected`, so it cannot be used by the range node.  
+* There is no public contract for “return the term as an escaped CharSequence”.
+
+### Required behaviour
+
+1. `AbstractRangeQueryNode#toQueryString(EscapeQuerySyntax)` must create a string that:
+   * starts with the range’s field name followed by a colon,
+   * uses `[` / `]` (inclusive) or `{` / `}` (exclusive) around the bounds,
+   * separates the bounds with `" TO "`,
+   * delegates to the bound nodes to obtain their escaped representation,
+   * represents un-bounded sides with the literal string `"..."`,
+   * can be parsed back by `StandardQueryParser` into a tree identical to the original one.
+
+2. A new public method  
+   ```java
+   CharSequence getTermEscaped(EscapeQuerySyntax escaper)
+   ```  
+   must be added to the `ValueQueryNode` interface.  
+   `FieldQueryNode` and `PointQueryNode` have to expose their existing implementation of this method publicly.
+
+3. All existing and newly added unit tests must pass, proving:
+   * correct string rendering of term and point ranges,
+   * successful round-trip parsing,
+   * correct escaping of special characters.
+
+Implement these changes without altering any other public behaviour of the query-parser library.

@@ -1,0 +1,46 @@
+Context  
+Apache Cassandra’s journal code now has to distinguish between (a) genuine on-disk corruption and (b) entries that were only partially written when the JVM stopped.  
+When a partially written allocation is encountered during replay we want to:
+
+1. Detect it by the CRC mismatch that is already raised.
+2. Accept it as “maybe recoverable” if the unwritten area really does still contain only zeros
+   (what the allocator initially filled it with).
+3. Skip over those bytes and continue scanning the segment.
+
+What you must implement
+-----------------------
+
+1. A new checked exception  
+   `org.apache.cassandra.journal.EntrySerializer.MaybeRecoverableJournalError`
+
+   • Extends `java.io.IOException`.  
+   • Has a public final `int knownLength` giving the allocation size that was decoded before the
+     CRC failed.  
+   • `getMessage()` must include the original message and the value of `knownLength`
+     (see the tests for the exact format).
+
+2. Journal deserialisation changes  
+   In `EntrySerializer.read(...)` throw `MaybeRecoverableJournalError` – not
+   `RecoverableJournalError` – when the CRC check fails (the failure is signalled by
+   `Crc.InvalidCrc`).  All other error handling stays unchanged.
+
+3. Helper for zero-filled ranges  
+   `StaticSegment.areAllBytesZero(ByteBuffer buffer, int start, int length)`
+
+   • Returns true iff every byte in the requested slice of `buffer`
+     (`start … start + length - 1`) is zero.  
+   • Must work for length up to at least a few kilobytes and for both heap
+     and direct buffers.  Efficiency matters (the method is executed while reading the log),
+     but no unsafe/reflective tricks are required.
+
+4. Schema generator convenience overload  
+   `SchemaGenerators.trivialSchema(String keyspace, Supplier<String> tableName, int population, SchemaSpec.Options options)`  
+   Produce a schema identical to the existing overload that takes a literal `String`
+   table name, but obtain the name by invoking the supplied `Supplier<String>` exactly once
+   for each schema returned.
+
+All new public methods are already referenced from tests; your job is to supply their
+behaviour so that both the old and the newly added tests compile and pass.
+
+You are free to add any private helpers you need, but you must not modify the public
+method signatures shown above.

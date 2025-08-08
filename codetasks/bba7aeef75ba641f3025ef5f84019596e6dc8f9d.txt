@@ -1,0 +1,34 @@
+Background  
+Apache Lucene’s Faiss‐based vector format stored vectors in off-heap (native) memory through an intermediate ByteBuffer. Because a Java ByteBuffer is limited to 2 GB, the previous implementation could not index more than 2 GB of vector data for a single field in a single segment.  
+
+Task  
+Remove the 2 GB bottleneck. The Faiss implementation must now be able to:
+
+1.  index an arbitrary amount of vector data (well beyond 2 GB) for one field in one segment;
+2.  read that data back and serve k-NN search requests exactly as before.
+
+Requirements  
+• All interaction with native memory has to avoid the 2 GB-capped ByteBuffer.  
+• Use the Foreign Function & Memory API (`java.lang.foreign`) directly:  
+  – allocate native memory segments for floats and longs;  
+  – copy Java arrays into those segments without routing through a ByteBuffer;  
+  – copy data from a segment back into Java arrays when results have to be returned.  
+• Streaming the binary representation of a segment to an `IndexOutput` / `IndexInput` must work for arbitrarily large segments by transferring the data in configurable chunks.  
+• The public behaviour (API, index format, results returned by searches, etc.) must remain unchanged – only the internal memory transfer mechanism is being replaced.  
+• The implementation must be correct for both small and very large collections of vectors (the latter is exercised by the new “monster” test).  
+• All existing and newly-added unit tests must compile and pass.
+
+Scope  
+Changes are confined to the Faiss JNI façade (class `org.apache.lucene.sandbox.codecs.faiss.LibFaissC`) and any helper code you find necessary. No other Lucene component should be modified.
+
+Hints  
+The modern Foreign-Memory API already provides high-level helpers:
+• `Arena.allocate(ValueLayout, long elements)`  
+• `Arena.allocateFrom(ValueLayout, T[] source)`  
+• `MemorySegment.copy(…)`  
+• `MemorySegment.toArray(ValueLayout)`  
+
+You may, of course, break large copies into fixed-size chunks so that a constant‐size temporary buffer is reused.
+
+Deliverable  
+Update the code so that all provided tests, including the new large-vector test, compile and succeed.

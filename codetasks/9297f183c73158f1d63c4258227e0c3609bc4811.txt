@@ -1,0 +1,52 @@
+Task
+
+Extend the internal JavaScript-execution feature of the langchain4j project.
+
+After your changes the following must be true:
+
+1. dev.langchain4j.code.judge0.Judge0JavaScriptEngine  
+   • Receives JavaScript code as plain text and returns what the program prints to the console  
+   • Works through the public constructor  
+     Judge0JavaScriptEngine(String apiKey, int languageId, Duration timeout)  
+     (`apiKey` and `languageId` are still accepted although they are no longer used by the tests)  
+   • When the submitted code writes nothing to the console the returned value is exactly  
+     "No result: nothing was printed out to the console"  
+   • For syntactically wrong code an explanatory error message is returned (the exact wording is
+     not asserted, the tests only check that some non-blank text is returned)  
+   • The implementation MUST NOT perform any network activity.  
+     It has to run completely locally in the JVM that executes the tests.
+
+   You are free to choose any local JavaScript runtime that is part of a standard JDK
+   (e.g. Nashorn via `javax.script.ScriptEngine`) or any other solution that does not
+   require external dependencies or internet access.
+
+2. dev.langchain4j.code.judge0.Judge0JavaScriptExecutionTool  
+   • Exposes the public constant `JAVASCRIPT` with the value 102  
+   • Provides the three public constructors already referenced from the tests  
+   • When `executeJavaScriptCode(String)` is invoked it delegates to an underlying
+     Judge0JavaScriptEngine instance and returns its result  
+   • If the incoming source code is blank an `IllegalArgumentException` is thrown  
+   • If the tool has been created with `fixCodeIfNeeded = true` and the submitted code
+     doesn’t contain any console output, the helper
+     JavaScriptCodeFixer.fixIfNoLogToConsole(...) must be applied before execution
+
+3. All existing public APIs that were present before this task remain source- and
+   behaviour-compatible.
+
+4. Every supplied unit and integration test must pass without adding new test
+   resources or changing the tests.
+
+Hints
+
+• The tests never send real requests to Judge0, therefore the network layer can be
+  removed, bypassed or stubbed – the important part is to evaluate the JavaScript
+  and capture what would be printed to the console.  
+• A very small subset of JavaScript (console.log and basic math) is enough to satisfy
+  the test suite.  
+• Feel free to implement a minimal custom “engine” as long as the public classes,
+  methods and constants behave exactly as stated above.
+
+Deliverable
+
+Update any production source files so that the build (`mvn test`) succeeds with
+all provided tests. No additional output or modifications are required.

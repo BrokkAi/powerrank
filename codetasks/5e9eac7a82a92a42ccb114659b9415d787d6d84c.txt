@@ -1,0 +1,63 @@
+Problem description
+-------------------
+
+Building or compacting an SSTable writes a set of Storage-Attached Index
+(SAI) files through `SSTableIndexWriter`.  
+If the underlying index disappears while the writer is running there are
+two possible scenarios that must be distinguished:
+
+1. The index is **dropped** (table / keyspace / index drop).  
+   In that case the compaction may safely continue, it only has to give
+   up on producing SAI files for the dropped index.
+
+2. The index is only **unloaded** (for example after un-assigning a
+   tenant).  
+   As soon as the schema is unloaded the compaction or background index
+   build must be **aborted**.  Finishing the compaction without the
+   accompanying index files would leave the SSTable permanently
+   un-queryable.
+
+The current implementation treats both cases the same and therefore
+allows a compaction to finish after an unload, causing the corruption
+described above.
+
+Required behaviour
+------------------
+
+• `StorageAttachedIndex`
+  – Keep two independent flags: `dropped` and `unloaded`  
+  – Provide `BooleanSupplier isDropped()` and  
+    `BooleanSupplier isUnloaded()`.  
+  – Set `dropped = true` in all paths that currently invalidate the
+    index because it was removed or the table was dropped.  
+  – Set `unloaded = true` when the index is only removed from memory
+    (`SecondaryIndexManager.unloadAllIndexes()`).
+
+• `SSTableIndexWriter`
+  – Accept both suppliers in its constructor.  
+  – Whenever the writer checks whether it should abort (`maybeAbort()`
+    today) it must:
+      • Do nothing when the index is still present.  
+      • If the index was **dropped**:  
+        ‑ abort the writer, clean up on-disk components, return `true`
+        to its caller so the compaction can go on without the index.
+      • If the index was **unloaded**:  
+        ‑ abort the writer, clean up on-disk components, then throw a
+        runtime exception so the compaction / index build itself is
+        aborted.
+
+• `V1OnDiskFormat`
+  – Instantiate `SSTableIndexWriter` with the new constructor supplying
+    `index.isDropped()` and `index.isUnloaded()`.
+
+• Any other code that previously used `isIndexValid()` must be migrated
+  to the new API.
+
+When these changes are in place:
+– A compaction started before an index **drop** finishes successfully
+  while simply omitting the dropped index’s files.  
+– A compaction started before an index **unload** fails fast and leaves
+  the data in a consistent state.
+
+All existing tests as well as the new tests that simulate both scenarios
+must pass.

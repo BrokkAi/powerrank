@@ -1,0 +1,47 @@
+Context  
+The code base supports Approximate-Nearest-Neighbor (ANN) searches with an optional “rerank” phase.  
+Query writers can specify the number of candidates to rerank through the CQL option `rerank_k` (class `ANNOptions`).  
+Until now only positive values ≥ `limit` were accepted; smaller values were rejected and the engine always executed the
+second (exact) pass.
+
+Goal  
+Introduce “rerank-less” search:  
+• If a user supplies a non-positive `rerank_k` (zero or negative) the request must be accepted.  
+• With such value the engine must completely skip the reranking pass whenever the underlying graph contains
+compressed vectors; for pure-float graphs the query should behave as before, only using `limit` as the number of
+candidates.  
+• All other semantics (guardrails, pruning, hybrid queries, etc.) remain unchanged.
+
+Required behaviour
+
+1. Validation  
+   ‑ `ANNOptions` must reject a `rerank_k` only when it is both
+     – strictly positive, **and**
+     – smaller than the requested `LIMIT`.
+     Non-positive values are always allowed.  
+   ‑ Guardrail checks that control the *maximum* permitted value are still applied (even to negative numbers).
+
+2. Transport / serialization  
+   Non-positive `rerank_k` values have to be preserved
+   (they are **not** mapped to “no option” / `null`).
+
+3. Search execution  
+   Wherever a search receives `rerankK ≤ 0`
+   ‑ use `limit` instead of the supplied number when a value is needed, and  
+   ‑ bypass the reranking phase completely when the searcher is able to work only with quantised vectors (i.e. for
+     compressed / PQ data on disk).  
+   In cost calculations or in-memory graph searchers use `max(0, rerankK)` or simply `limit` so that negative values
+   do not turn into illegal array sizes, etc.
+
+4. Tracing / metrics  
+   Tracing messages and metrics must reflect whether a query was executed in “rerank-less” mode (visible in the commit
+   as the extra boolean printed).
+
+5. Compatibility  
+   Because `rerank_k ≤ 0` was previously refused, this change is not wire-compatible with older nodes, but it only
+   concerns query-time options.  The solution must therefore fail fast if a coordinator that accepts such value sends
+   it to an older replica.
+
+All existing functionality (positive `rerank_k`, guardrail limits, brute-force fallback, hybrid predicates, etc.) must
+continue to work; the new unit tests that exercise zero / negative `rerank_k` values as well as the previous ones must
+pass.

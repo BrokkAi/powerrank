@@ -1,0 +1,20 @@
+Context  
+The project defines a Java client for the Ollama LLM API.  
+Until now the client could not activate Ollama’s “thinking” mode (internal chain-of-thought that is returned separately from the final answer).  
+Several integration tests that rely on this feature have been added.
+
+Required behaviour  
+1. It must be possible to ask the model to return its chain-of-thought by supplying a think=true flag in the request that is sent to Ollama.  
+   • The flag must be serialised in the JSON body exactly as "think": true | false.  
+2. The new flag must also be available in higher-level “parameters” objects, so that normal parameter-merging rules still work (overrideWith, equals, hashCode, toString, etc.).  
+3. When Ollama sends a response that contains an additional top-level field thinking, that field must be captured and exposed through the Message object (getter: getThinking()).  
+4. None of the previously supported properties or tests may regress.
+
+What you have to do  
+Implement the missing pieces so that:  
+• OllamaChatRequest can contain an optional Boolean think and the builder can set it.  
+• InternalOllamaHelper propagates the value coming from OllamaChatRequestParameters into the final OllamaChatRequest.  
+• OllamaChatRequestParameters supports a Boolean think with full builder support, parameter overriding, equality, hashCode and toString consistency.  
+• Message is able to (de)serialise an optional “thinking” JSON field.
+
+When you are finished, `mvn test` must be green, including the newly added thinking integration tests.

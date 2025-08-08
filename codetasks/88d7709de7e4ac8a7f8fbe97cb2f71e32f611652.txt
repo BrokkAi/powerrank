@@ -1,0 +1,36 @@
+Lucene stores the *live docs* bit-set of a segment in an internal, read-only
+wrapper that is produced by `FixedBitSet.asReadOnlyBits()`.  
+Several fast-paths in the scoring layer expect to deal with the real
+`FixedBitSet` instance; if they instead see the generic `Bits` interface they
+fall back to a much slower code path.
+
+The current implementation of these fast-paths is buggy:
+
+1. `ScorerUtil.likelyFixedBitSet` only recognises instances of  
+   `FixedBitSet` itself, so it never triggers for the typical
+   live-docs wrapper.
+2. `FixedBits`, the immutable view returned by `FixedBitSet.asReadOnlyBits()`,
+   exposes its data directly and therefore cannot supply the specialised
+   `Bits#applyMask` implementation that makes masking fast.
+3. `FixedBitSet.copyOf` fails to recreate the original mutable set when the
+   source happens to be a `FixedBits` instance.
+
+The task
+========
+Repair these shortcomings so that Lucene can once again profit from the
+efficient code paths:
+
+• Rename and re-implement the helper in `ScorerUtil`
+  – it must recognise the *exact* runtime class used by
+  `FixedBitSet.asReadOnlyBits()` (not merely `FixedBitSet` itself) and return
+  the original object in that case; for every other non-null implementation it
+  must return a `FilterBits` wrapper; `null` must stay `null`.
+
+• Make `FixedBits` delegate all operations (`get`, `length`, `applyMask`, …)
+  to the underlying `FixedBitSet` instead of re-implementing them from the raw
+  `long[]` array.
+
+• Give `FixedBitSet.copyOf` the ability to recover a mutable `FixedBitSet`
+  when the input is a `FixedBits` instance.
+
+When you are done, all existing and newly added unit tests must succeed.

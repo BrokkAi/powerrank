@@ -1,0 +1,32 @@
+Background  
+Lucene’s vector search implementation stores an HNSW¹ graph per segment.  
+When segments are merged the individual graphs have to be merged as well.  
+A new merging strategy was introduced that needs a small utility able to
+select a subset of nodes (the “join-set”) from a source graph.  
+The utility is referenced from the new `org.apache.lucene.util.hnsw.MergingHnswGraphBuilder`
+and therefore must be available during both production and test execution.
+
+Task  
+Implement `org.apache.lucene.util.hnsw.UpdateGraphsUtils` with the public
+method
+
+```
+public static Set<Integer> computeJoinSet(HnswGraph graph) throws IOException
+```
+
+Requirements
+1. The returned set must always contain strictly fewer elements than
+   `graph.size()`.
+   (A trivial implementation returning the empty set satisfies this quantitative
+   requirement.)
+2. The implementation must not corrupt the graph nor rely on any
+   undeclared side effects; it may only inspect the graph through the
+   `HnswGraph` public API.
+3. The method must be deterministic for a given input graph.
+4. Make sure the code compiles on Java 8+, has no extra dependencies and
+   all existing and new unit tests pass.
+
+You may add any private helpers inside the same class, but do **not**
+modify other files or public APIs.
+
+¹ Hierarchical Navigable Small World graph.

@@ -1,0 +1,15 @@
+Problem Description  
+
+Apache Cassandra’s Accord layer can fail during node start–up if the accord-journal begins to query the column-family’s secondary index (the “route” 2-i index) before the index has finished initialising.  
+The appropriate fix is to block the journal until the index is reported as queryable, with a bounded, configurable retry strategy.
+
+Required behaviour  
+
+1. Accord must expose an independent retry strategy dedicated to this wait-loop (see `AccordSpec`).  
+2. When an `AccordJournalTable` is backed by the 2-i “route” index it must, at start-up, wait until `ColumnFamilyStore#indexManager.isIndexQueryable(Index)` returns `true`.  
+   • Poll according to the retry strategy defined in (1).  
+   • If the strategy indicates that no more retries are allowed, abort with an `IllegalStateException`.  
+3. `AccordJournal` must trigger that check during its own start-up sequence so that any subsequent replay/compaction work can safely query the index.  
+4. All other behaviour already present in Accord/Cassandra must remain unaffected.
+
+The implementation must make the whole test-suite (existing and newly added tests) pass.

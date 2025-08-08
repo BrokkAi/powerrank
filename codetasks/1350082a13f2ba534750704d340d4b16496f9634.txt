@@ -1,0 +1,49 @@
+### Problem
+
+The accord journal stores a sequence of `AccordTopologyUpdate` objects that describe how the
+topology of a cluster evolves over time.  
+Every `TopologyImage` in that sequence contains the complete `Journal.TopologyUpdate`
+that is valid for its epoch, even when it is *bit-for-bit identical* to the
+previous one.  
+For large journals this produces a lot of redundant data and hurts the
+compactor as well as replay performance.
+
+Add an optimisation that represents *unchanged* consecutive images as a
+compact **no-op record** instead of a full `TopologyImage`.
+
+The change must be completely transparent to current readers and writers:
+
+* Writers must **emit a no-op** whenever two consecutive images carry an
+  equivalent `Journal.TopologyUpdate`.
+* Readers must **re-inflate** such a no-op back to a normal
+  `TopologyImage` that references the previous (identical) update so that
+  in-memory state is unchanged.
+* Serialisation, deserialisation, size calculations and replay logic must all
+  understand the new record type.
+* All existing behaviour and tests must remain correct.
+
+
+
+#### Key functional requirements
+
+1. Introduce a new enum value `Kind.NoOp` inside `AccordTopologyUpdate.Kind`.
+2. `AccordTopologyUpdate.Serializer`
+   * must be able to write and read the new kind
+   * `serializedSize` must return the correct value for it.
+3. `TopologyImage`
+   * has to remember which kind it represents
+   * needs helper methods that turn it into a *real* image
+     (`asImage(...)`) or into a *no-op* (`asNoOp()`).
+4. The journal **compactor / re-serializer** must output a
+   `Kind.NoOp` record when an image’s `update` is *equivalent* to the update
+   of the previously written record (use `isEquivalent(...)` that already
+   exists on `Journal.TopologyUpdate`).
+5. The **replayer** that consumes the compacted stream must recognise the
+   no-op, copy the previous update into it, and pass on an ordinary
+   `TopologyImage` to the consumer.
+6. All other code paths that create a `TopologyImage`
+   (bootstrap, accumulation during replay, etc.) have to specify the correct
+   `Kind` so that serialisation works.
+
+The implementation must compile and make every provided unit and
+distributed test succeed.

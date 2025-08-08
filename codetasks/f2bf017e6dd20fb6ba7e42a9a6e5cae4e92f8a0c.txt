@@ -1,0 +1,37 @@
+Background  
+In an almost empty cluster a repair cycle can complete so quickly that the associated
+JMX metrics are created and destroyed before the test framework (or any monitoring
+tool) has time to observe them.  
+When that happens the Auto-Repair in-JVM tests become flaky because they poll the
+metrics and never see the “repair in progress” flag.
+
+Required behaviour  
+AutoRepair must keep the scheduler thread alive for (at least) the interval defined
+by the static constant
+
+    AutoRepair.SLEEP_IF_REPAIR_FINISHES_QUICKLY      //  default 3 s
+
+counting from the moment the repair cycle started.  
+In other words:
+
+elapsed = now – startOfSchedule
+
+• If  elapsed ≥ SLEEP_IF_REPAIR_FINISHES_QUICKLY :  continue immediately.  
+• Otherwise            :  sleep for the remaining time
+                          (SLEEP_IF_REPAIR_FINISHES_QUICKLY – elapsed).
+
+Additional constraints  
+• The extra wait must happen before the repair statistics are persisted so that
+  nodeRepairTimeInSec continues to reflect the real repair run-time and not the
+  artificial sleep.  
+• No existing metric values may regress.  
+• The code must be thread-safe and must not block the repair executor longer than
+  necessary.  
+• All distributed and unit tests—both the old ones and the new ones that accompany
+  this ticket—must pass.
+
+Implementation notes (not exhaustive)  
+The logic belongs in AutoRepair.cleanupAndUpdateStats(…) which already receives the
+repair start timestamp.  Compute the elapsed duration with the supplied time
+function, perform the optional sleep, then update the collected statistics exactly
+as before.  Ensure every caller passes the correct start time (in milliseconds).

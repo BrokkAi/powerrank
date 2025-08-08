@@ -1,0 +1,28 @@
+### Problem
+
+Extend the Google Vertex AI Gemini integration so that applications can declare and expose the model’s **capabilities**, in particular the capability to return structured JSON that follows a given JSON Schema.  
+A new acceptance-test suite exercises these capabilities; all of them (old and new) must succeed after your changes.
+
+### Required behaviour
+
+1. `VertexAiGeminiChatModel`
+   • Keeps an immutable collection of the capabilities that the model supports (e.g. `Capability.RESPONSE_FORMAT_JSON_SCHEMA`).  
+   • Implements `supportedCapabilities()` from `ChatModel`, returning that collection.  
+   • The collection must **never be null** and must not be affected by external mutations.
+
+2. `VertexAiGeminiChatModel.Builder`
+   • Allows the caller to specify the capabilities via  
+     `supportedCapabilities(Set<Capability>)` **and**  
+     `supportedCapabilities(Capability…​)`  
+   • If the caller does not set anything, the collection defaults to an empty set.  
+   • Passes the chosen set to the model constructor.
+
+3. Defensive copying  
+   Wherever a collection of capabilities is stored or returned, copy it to protect the internal state from modification.
+
+4. The rest of the public surface and previously existing functionality (tool-calling, logging, safety settings, etc.) must keep working exactly as before.
+
+### Additional notes
+
+• No other models need to be changed; only Gemini must expose the new functionality.  
+• Documentation files shown in the diff are already correct and do not need to be modified.

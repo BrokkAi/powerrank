@@ -1,0 +1,24 @@
+Background  
+During an SSTable-transaction Cassandra stores, for every touched table, a “txn” file containing one `LogRecord` per SSTable.  
+Each `LogRecord` keeps the last-modified timestamp (`updateTime`) of the SSTable’s components that were present when the record was written.  
+On startup Cassandra uses those records to verify that nothing was changed outside the JVM and to decide which files must be cleaned up.
+
+Problem  
+After a compaction finishes the STATS component of the newly written SSTable can still be updated asynchronously (e.g. when metrics are flushed).  
+If the node shuts down between the compaction and that asynchronous write, the STATS file receives a more recent `mtime` than the one stored in the txn file.  
+During the next start–up verification the txn file therefore looks “corrupted”, the node refuses to start and forces the operator to remove files manually.
+
+Required behaviour  
+1. When a `LogRecord` is created from the set of components currently on disk, the STATS component must be ignored when the record’s  
+   • `updateTime` is determined and  
+   • number of files covered by the timestamp is counted.  
+   (The file itself is still considered to exist and be cleaned up – only its timestamp is ignored.)
+
+2. For unit-tests only, there must be a way to force the old behaviour (include STATS in the timestamp calculation).
+
+3. While verifying an existing txn file on start-up, if the only mismatch is that `updateTime` in the file equals the timestamp that would be produced *when STATS were included*, the record must be accepted and a warning must be logged instead of failing the verification.  
+   This allows nodes upgraded from versions that still wrote the “wrong” timestamp to start without manual intervention.
+
+4. None of the new rules may change the behaviour for any other component or record type.
+
+All existing and new tests that accompany this change must pass.

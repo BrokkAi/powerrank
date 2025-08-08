@@ -1,0 +1,47 @@
+### Problem
+
+Lucene uses small, reusable “buffers” to transmit batches of `<docId, value>` pairs between low-level postings/iterators and high-level scorers.  
+Until now there were two almost-identical classes:
+
+* `DocAndFreqBuffer` – second array stored term frequencies (`int[] freqs`)
+* `DocAndScoreBuffer` – second array stored pre-computed scores (`float[] scores`)
+
+As of this change we only keep **one** buffer implementation that can hold any
+float-valued feature (frequency, score, …):
+
+```
+org.apache.lucene.search.DocAndFloatFeatureBuffer
+```
+
+Every place that used either of the two former classes must compile and run
+against this single new class.
+
+### Required behaviour
+
+1. `DocAndFloatFeatureBuffer`
+   • Keeps parallel `int[] docs` and `float[] features`.  
+   • Grows both arrays together (`growNoCopy(int minSize)`).  
+   • Can filter entries with a `Bits` instance (`apply(Bits liveDocs)`).  
+   • Public fields `docs`, `features` and `int size` mirror the deleted
+     classes’ API so that call-sites can write into them directly.
+
+2. API updates
+   • `PostingsEnum.nextPostings` signature now receives the new buffer and
+     must write frequencies as **floats** into `features`.  
+   • `Scorer.nextDocsAndScores` behaves the same but writes scores into
+     `features`.  
+   • All callers (bulk scorers, Boolean/MaxScore/Term scorers, CheckIndex,
+     tests, …) must compile with this new type and read frequencies/scores
+     from `features` instead of `freqs`/`scores`.
+
+3. Frequency handling
+   `TermScorer` and similar classes that previously read `freqs[i]` now have to
+   read `features[i]` and treat it as a float representation of the frequency.
+
+4. Obsolete code
+   `DocAndFreqBuffer` and `DocAndScoreBuffer` are removed.
+
+### Acceptance
+
+Running the complete Maven/Gradle build (including unit and integration tests)
+must succeed with no compilation errors and no test regressions.

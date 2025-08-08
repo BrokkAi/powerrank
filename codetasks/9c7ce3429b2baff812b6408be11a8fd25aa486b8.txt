@@ -1,0 +1,34 @@
+### Context  
+The `langchain4j-mcp` module provides a client (`McpClient`) that can query an MCP server for the list of available tools.  
+The existing implementation always asks the server for the list and has no notion of changes pushed by the server via the MCP notification channel.
+
+### New behaviour to implement  
+1. **Server-driven invalidation**  
+   • When the client receives the JSON-RPC notification  
+   ```
+   {
+     "jsonrpc": "2.0",
+     "method": "notifications/tools/list_changed"
+   }
+   ```  
+   the previously cached list of tools must be considered **out-of-date**.
+
+2. **Local caching**  
+   • `McpClient.listTools()` must return the most recent list already obtained from the server whenever the cache is valid.  
+   • If the cache is marked “out-of-date”, the first call to `listTools()` must re-fetch the list from the server (using the normal `list_tools` request) and update the cache.  
+   • While that refresh is in progress, concurrent calls to `listTools()` must not trigger an additional request; they must wait for the refresh to finish and then return the refreshed list.
+
+3. **Thread safety**  
+   The whole mechanism must work correctly when several threads call `listTools()` concurrently or when a notification arrives while a refresh is running.
+
+4. **No behavioural regressions**  
+   All existing public behaviours of the client (tool execution, resource and prompt handling, logging, etc.) must remain unchanged.
+
+### Summary  
+Augment the MCP client so that it  
+
+* keeps the tool list locally,  
+* invalidates it when the MCP server sends `notifications/tools/list_changed`,  
+* lazily refreshes the list once per invalidation, shielding concurrent callers from duplicate requests.
+
+All supplied unit and integration tests, old and new, must pass.

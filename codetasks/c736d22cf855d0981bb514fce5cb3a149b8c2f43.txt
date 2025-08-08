@@ -1,0 +1,30 @@
+Background  
+Apache Cassandra’s gossip subsystem maintains, for every peer, an `EndpointState` that bundles the peer’s heartbeat (`HeartBeatState`) and an `EnumMap<ApplicationState, VersionedValue>` with additional information (STATUS, TOKENS, …).  
+Several threads may update the same `EndpointState` concurrently:
+
+• the periodic local-heartbeat task increments the heartbeat counter  
+• incoming gossip messages may update the application-state map, sometimes together with a fresh heartbeat that has already been observed on the sender side  
+• management operations (forced removal, shutdown, …) can bump the generation or force the version to `Integer.MAX_VALUE`
+
+Until now `EndpointState` stored the heartbeat and the application map in two separate mutating fields.  
+Because each update was done in a different CAS operation (or even a plain write) the following race was possible:
+
+1. Thread A copies the application map, adds a new entry and is about to CAS it back.  
+2. Thread B bumps the heartbeat version (or generation) by mutating the live `HeartBeatState` instance.  
+3. Thread A wins its CAS; the application map is updated but the reference to the (still mutable) heartbeat instance that thread B already changed is copied as well, unintentionally discarding thread B’s mutation.  
+
+As a result peers can observe stale heartbeat information and the cluster never reaches convergence.
+
+Task  
+Re-implement the relevant pieces so that **all modifications of an `EndpointState` are performed atomically with respect to each other**:
+
+1. Treat `HeartBeatState` as an immutable value object (generation and version must never be mutated after construction).  
+2. Store heartbeat and application states together in a single atomic container so that a single compare-and-set updates both at once.  
+3. Provide helper methods that callers can use instead of direct field mutations, e.g.  
+   – increment heartbeat version  
+   – bump generation  
+   – force the highest possible version  
+   – replace heartbeat with the empty instance  
+   – atomically apply a batch of application-state updates, optionally together with a new heartbeat received from a peer  
+4. Adapt existing call sites in the gossip code to use the new APIs.  
+5. All existing functionality (serialization, failure detection, node removal, etc.) must keep working; all supplied unit tests (old and new) must pass.

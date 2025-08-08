@@ -1,0 +1,27 @@
+### Problem
+
+The Azure AI Search module offers `AzureAiSearchContentRetriever` which allows users to upload `TextSegment` instances to an Azure Search index by calling  
+`add(List<TextSegment> segments)`.
+
+Each `TextSegment` may carry user–defined metadata (`TextSegment.metadata()`).  
+This metadata must be stored in Azure together with the textual content so it can later be used for filtering and scoring.
+
+Currently the metadata is **lost** during the upload process:
+
+1. `AzureAiSearchContentRetriever.add(...)` converts every `TextSegment` into a `dev.langchain4j.store.embedding.azure.search.Document`.
+2. Only the `id` and `content` fields of the `Document` are populated; the metadata is ignored.
+3. Down-stream searches therefore never return the attributes that were attached to the original segment.
+
+### Required behaviour
+
+1. `AzureAiSearchContentRetriever.add(List<TextSegment>)` must populate the `metadata` section of every created `Document` so that all attributes contained in `TextSegment.metadata()` reach Azure Search.
+2. `dev.langchain4j.store.embedding.azure.search.Document.Metadata` needs a convenient way to accept a `dev.langchain4j.data.document.Metadata` instance and convert it into the internal collection of `Attribute` objects (`key` / `value` pairs).
+3. All existing functionality—including segment upload, search, filtering, etc.—must keep working, and all unit tests (old and newly added ones) must pass.
+
+### Technical notes
+
+* `Document` already contains an inner static class `Metadata` with an `attributes` collection of `Attribute` (each has `key` and `value`).
+* The retriever builds `Document` objects in its `add(...)` method just before calling `searchClient.uploadDocuments(...)`.
+* The public API surface must stay binary compatible; no breaking changes are allowed.
+
+Implement the metadata propagation so that uploaded documents carry all segment attributes and the new tests validating this behaviour succeed.

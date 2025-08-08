@@ -1,0 +1,111 @@
+### Problem: Robust asynchronous session management
+
+Brokk stores the complete conversation and workspace state of every “session” in a
+single _zip_ file located under  
+`<project>/.brokk/sessions/<session-id>.zip`.  
+Each zip must contain
+
+* the serialized `ContextHistory` for the session (handled by
+  `HistoryIo.*Zip`)
+* a UTF-8 `manifest.json` that holds a
+  ```java
+  record SessionInfo(UUID id, String name, long created, long modified)
+  ```
+  describing the session.
+
+The existing, synchronous implementation occasionally creates broken zip
+archives when two pieces of code touch the same session concurrently.  
+The goal of this exercise is to replace that code with a thread-safe,
+asynchronous implementation that prevents corruption and to offer a simple
+utility that guarantees _serial execution per key_.
+
+Your task is to make the whole tree compile again and to make **all the supplied
+tests pass** (both the old ones and the new ones that accompany this change).
+
+---
+
+#### 1.  SerialByKeyExecutor
+
+File to create:  
+`src/main/java/io/github/jbellis/brokk/util/SerialByKeyExecutor.java`
+
+Provide a thin wrapper around an arbitrary `ExecutorService` that
+
+* accepts tasks together with a **string key**
+* guarantees that tasks submitted with the **same key** are executed one after
+  another, in submission order
+* allows tasks with _different_ keys to run in parallel
+* returns a `CompletableFuture<T>` for every submitted task
+* never blocks the caller thread
+* cleans up its internal bookkeeping once the last task for a key terminates
+  (successfully or exceptionally)
+* offers  
+  `int getActiveKeyCount()` – the number of keys that still have at least one
+  running or queued task.
+
+---
+
+#### 2.  SessionManager
+
+File to create:  
+`src/main/java/io/github/jbellis/brokk/SessionManager.java`
+
+All session housekeeping previously living in `MainProject` has been moved into
+this class.  Implement the public API that is already used everywhere in the
+code base:
+
+```
+new SessionManager(Path sessionsDir)          // constructor
+List<SessionInfo> listSessions()
+SessionInfo newSession(String name)
+void        renameSession(UUID id, String newName)
+void        deleteSession(UUID id)
+SessionInfo copySession(UUID originalId, String newName)           // deep copy
+void        saveHistory(ContextHistory ch, UUID sessionId)
+@Nullable ContextHistory loadHistory(UUID sessionId,IContextManager cm)
+
+static Optional<String> getActiveSessionTitle(Path worktreeRoot)
+void close()                                    // shuts its executors down
+```
+
+Important functional requirements:
+
+1. All disk I/O **must** be routed through one internal
+   `SerialByKeyExecutor` instance so that no two tasks operate on the same zip
+   file concurrently.
+2. Every session action has to refresh the in-memory cache (`sessionsCache`)
+   before returning to the caller.
+3. `copySession` must create a brand-new session id, copy the entire zip,
+   write a fresh manifest, return the corresponding `SessionInfo`, and make that
+   session immediately visible through `listSessions()`.
+4. `saveHistory` has to
+   * persist `ContextHistory` via `HistoryIo.writeZip`
+   * update (or create) `manifest.json` with an increased `modified` timestamp
+   * run completely asynchronously (i.e. fire-and-forget from the caller’s
+     perspective).
+5. `loadHistory` restores the history with `HistoryIo.readZip`, adjusts
+   `ContextFragment`’s global id counter exactly like the old code did and may
+   execute in the calling thread (but use the serial executor to avoid parallel
+   access to the same file).
+6. `getActiveSessionTitle` reads `<worktree>/.brokk/workspace.properties`
+   (`lastActiveSession`) and returns the session’s current name by inspecting
+   the corresponding manifest.  
+   It works for both plain and git worktrees (see helper method in old code).
+7. The class owns a bounded thread pool (size 3, daemon = **false**) that is
+   shut down gracefully in `close()`.
+
+---
+
+#### 3.  Integrate SessionManager
+
+The diff already contains all call-sites that now use
+`project.getSessionManager()`.  Make sure:
+
+* `MainProject` creates exactly one `SessionManager` (pointing at
+  `<masterRoot>/.brokk/sessions`) and returns it from
+  `getSessionManager()`.
+* `WorktreeProject` delegates `getSessionManager()` to its
+  `MainProject` parent.
+* Both projects close their `SessionManager` in their own `close()`.
+
+`IProject` has been updated; nothing else is required there.

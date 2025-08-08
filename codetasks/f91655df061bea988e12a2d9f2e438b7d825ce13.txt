@@ -1,0 +1,26 @@
+Problem description
+
+Apache Cassandra allows operators to plug-in a “disk error handler” that is created at start-up by DiskErrorsHandlerService.  
+Until now startup continued even when the custom handler could not be created or its init() method failed – Cassandra simply kept using the previously installed (often the NO_OP) handler.  This masked configuration errors.
+
+Required behaviour
+
+1. Whenever a non-NO_OP handler is configured (via the system property cassandra.custom_disk_error_handler) and  
+   a. the handler class cannot be instantiated,  
+   b. its init() method throws, or  
+   c. the chosen class is the internal NO_OP handler itself (or has no accessible zero-arg constructor),  
+   the node must fail to start.  DiskErrorsHandlerService must surface this problem by throwing org.apache.cassandra.exceptions.ConfigurationException, it must NOT silently replace the handler with the no-op implementation.
+
+2. The live handler that is already installed must stay unchanged when the new handler cannot be initialised. It must only be replaced after the new one is successfully instantiated and init() completes without error.
+
+3. When a new handler is installed successfully, the previously active handler (if it is not the shared NO_OP instance) should be closed. Any exception raised during close() must be logged but must not abort startup.
+
+4. The public no-op implementation (DiskErrorsHandler.NoOpDiskErrorHandler) must not be selectable from outside – its constructor must therefore be private.
+
+Implementation constraints
+
+• Re-work DiskErrorsHandlerService.set(…) so that it throws ConfigurationException when the new handler cannot be initialised and so that the previous handler is preserved in that situation.  
+• Amend DiskErrorsHandlerService.configure() so that any ConfigurationException from set(…) – or any other problem while constructing the handler – is propagated to the caller unchanged.  
+• Ensure close() of the outgoing handler is attempted only after the new handler has become the active one; log and ignore any exception it throws.
+
+All existing functionality must continue to work and every supplied test (current and new) must pass.

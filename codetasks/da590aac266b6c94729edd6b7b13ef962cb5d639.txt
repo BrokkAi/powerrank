@@ -1,0 +1,31 @@
+### Problem
+
+Extend Lucene’s `DictionaryCompoundWordTokenFilter` so that it can optionally **consume** the characters that were used by a longest-match decompounding.  
+When this option is active, any later sub-word whose characters overlap with a longest match must **not** be emitted.
+
+Example:
+
+• Dictionary: `{ "wein", "schwein" }`  
+• Input token: `"schweinefleisch"`  
+• If the filter finds `"schwein"` first and the new option is enabled, the substring `"wein"` may no longer be reused; therefore only the tokens
+
+```
+schweinefleisch  schwein  fleisch
+```
+
+are produced, **not** `"wein"`.
+
+### Required behaviour
+
+1. A new boolean parameter `reuseChars`  
+   • Default: `true` (backwards-compatible behaviour).  
+   • The parameter is exposed  
+     – as a constructor argument of `DictionaryCompoundWordTokenFilter`,  
+     – as the setting `"reuseChars"` of `DictionaryCompoundWordTokenFilterFactory`.  
+2. The option is only meaningful when `onlyLongestMatch == true`.  
+   If `reuseChars == false` but `onlyLongestMatch == false`, the code must throw an `IllegalArgumentException`.
+3. When `onlyLongestMatch == true` and `reuseChars == false`, once a longest sub-word has been selected the iteration must jump over the characters it consumed so that overlapping matches are skipped.
+4. All existing behaviour (including default decompounding, parameter handling, etc.) must remain unchanged unless the new option is explicitly set.
+5. All unit tests—old and newly added—must pass.
+
+Implement the above in the Lucene analysis/compound component, updating any relevant constructors, factory, validation logic, and token generation loop.

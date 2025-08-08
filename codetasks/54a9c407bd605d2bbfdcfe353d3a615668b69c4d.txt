@@ -1,0 +1,44 @@
+Implement a utility that can turn the internal B-Tree representation used inside Apache Cassandra into a human-readable string.  
+The new class must be named
+
+    org.apache.cassandra.utils.btree.BTreePrinter
+
+and expose the following public API.
+
+    public final class BTreePrinter {
+        /** 
+         * Produce a textual representation of the supplied tree.
+         * If the tree is empty the method must return the string
+         * literal "empty".
+         */
+        public static String print(Object[] btree);
+    }
+
+Functional requirements
+-----------------------
+1. The printer must never throw for a legitimate tree produced by the
+   existing B-Tree/IntervalBTree implementation.
+2. Every key contained in the tree (i.e. every element that would be
+   returned by an in–order traversal) has to appear – via its
+   `toString()` – in the string returned by `print`.
+   • Order, formatting and additional information are **not** checked by
+     the tests, only the presence of every key’s textual representation
+     is required.
+3. For an empty tree `print` must return the exact string  
+   `"empty"` (without the quotes).
+
+Implementation constraints
+--------------------------
+• The class belongs in package  
+  `org.apache.cassandra.utils.btree`.  
+• Only public static method `print` is required; the remainder of the
+  class can be implemented as you see fit.  
+• It may rely on the public helpers already offered by `BTree`
+  (e.g. `isLeaf`, `isEmpty`, `sizeOfLeaf`, `shallowSizeOfBranch`,
+  `size`, `height`, …) but must not modify any existing production
+  classes.  
+• Recursion is acceptable; depth is small.  
+• Do not introduce external dependencies.
+
+Correctness is judged by the existing unit-tests ‑ both the historic
+ones and the new tests added for this task. All of them must pass.

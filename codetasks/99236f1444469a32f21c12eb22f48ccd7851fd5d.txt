@@ -1,0 +1,57 @@
+Your task is to complete the Brokk Git helper so that all unit-tests in
+`GitRepoTest` pass.
+
+Focus on the class  `src/main/java/io/github/jbellis/brokk/git/GitRepo.java`
+(and anything it references) and implement the behaviour described below.
+
+Required behaviour
+------------------
+
+1. Branch-name sanitising  
+   Method: `String sanitizeBranchName(String proposedName)`
+
+   The method must return a valid, unique branch name derived from the user
+   supplied string.
+
+   Rules that must be respected by the returned value (and therefore by the
+   implementation).
+
+   • Trim leading / trailing white-space and convert to lower-case.  
+   • Convert every run of white-space to a single hyphen `'-'`.  
+   • Remove any character that is **not** a letter, digit, hyphen or forward
+     slash.  
+   • After that, replace every remaining forward slash with a hyphen.  
+   • Remove leading/trailing hyphens.  
+   • If the resulting string is empty, use the literal `"branch"` instead.  
+   • The result must not collide with an existing branch name in the
+     repository.  
+     – If it would collide, keep appending `-2`, `-3`, … until it is unique.
+   • The method must leave the repository state untouched; creating the later
+     branch is *not* part of this method.
+
+2. Collecting commit messages between two branches  
+   Method: `List<String> getCommitMessagesBetween(String branchName,
+                                                   String targetBranchName)`
+
+   Return the short commit messages (what `git log --oneline` prints after the
+   hash) that are reachable from `branchName` **but not** from
+   `targetBranchName`, ordered from oldest to newest.
+
+   The list must
+
+   • be empty if either branch cannot be resolved or both names point at the
+     same commit;  
+   • contain only the commits that would be shown by  
+     `git log <targetBranchName>..<branchName>`  
+     (i.e. commits that are in `branchName` but not in `targetBranchName`);  
+   • be returned oldest-first (reverse of the order produced by JGit’s
+     `RevWalk`).  
+   Use JGit only; do not execute external git commands.
+
+3. Compile-time contract changes  
+   Interface `IGitRepo` now declares default methods  
+   `checkMergeConflicts(...)` and `getCommitMessagesBetween(...)`.  
+   No concrete implementation is required except the `GitRepo`
+   implementation demanded in (2), but your code must compile.
+
+You do **not** have to touch any GUI classes or test classes.  

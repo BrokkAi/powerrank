@@ -1,0 +1,92 @@
+Implement a new ‟adaptive” SSTable compressor that fulfils the public contract exercised by the unit-tests.
+
+Functional requirements ‑ AdaptiveCompressor
+--------------------------------------------
+1. Construction  
+   • `static AdaptiveCompressor create(Map<String,String> opts)`  
+     Creates an instance for general use (compaction/streaming).  
+   • `static AdaptiveCompressor createForFlush(Map<String,String> opts)`  
+     Same but tuned for mem-table flushes.  
+   • `static AdaptiveCompressor createForUnitTesting()`  
+     Returns a deterministic instance that does **not** consult any
+     Cassandra subsystems; it must work in the standalone test JVM.  
+   • Option keys recognised (all strings):  
+       • `min_compression_level` – lowest adaptive level, inclusive  
+       • `max_compression_level` – highest adaptive level, inclusive  
+       • `max_compaction_queue_length` – only meaningful for the “general”
+         variant  
+     Illegal values (out-of-range levels or negative queue length) must
+     raise `IllegalArgumentException`.  
+   • Valid logical compression levels are the integers 0 … 15
+     (inclusive) and are mapped to some underlying Zstd/Deflate/etc.
+     levels by the implementation.
+
+2. Compression / decompression  
+   The compressor must satisfy the `org.apache.cassandra.io.compress.ICompressor`
+   API that the existing test-suite already uses for the standard
+   compressors:
+   • `initialCompressedBufferLength(int chunkLen)` must never return a
+     size that is too small for the subsequent `compress()` call.  
+   • `void compress(ByteBuffer src, ByteBuffer dst)` – read **all** bytes
+     between `src.position()` and `src.limit()` and write the produced
+     frame into `dst`, then leave `dst` ready for reading
+     (`position()==0`, `limit()==compressedSize`).  
+   • `int uncompress(byte[] in, int inOfs, int inLen,
+                     byte[] out, int outOfs)` – inflate into the
+     supplied array and return the number of uncompressed bytes.  
+   • `void uncompress(ByteBuffer in, ByteBuffer out)` – the equivalent
+     `ByteBuffer` version.  
+   Any loss of data, buffer over-/under-flow or corrupt frame must be
+   reported as `IOException`.
+
+   A specific underlying codec is **not** mandated; any lossless codec
+   is acceptable as long as every frame produced by `compress` can be
+   recovered byte-for-byte by `uncompress` and the performance is
+   sufficient for the tests.
+
+3. Dynamic level selection  
+   Each **thread** that uses the compressor keeps its own state:
+   • current logical compression level  
+   • an exponential moving average of the ratio
+     `compressionTime / (compressionTime + idleTime)` measured between
+     consecutive `compress()` invocations.  
+   • bookkeeping timestamps needed for the calculation above.
+
+   The algorithm executed **before** every compression must:
+   • Determine the current “write pressure” via the supplier that was
+     passed to the constructor (value range 0.0 … 1.0).  
+   • Translate that pressure linearly into a *target* level between the
+     configured min and max.  
+   • If the target is lower than the current level **and** the current
+     EMA of `relativeTimeSpentCompressing` exceeds 0.1, decrease the
+     level by one.  
+   • If the target is higher than the current level **or** the current
+     EMA is below 0.02, increase the level by one.  
+   • Clamp the level so it never leaves the configured range.  
+
+4. Metrics access for tests  
+   The tests inspect internal state: expose  
+   `State getThreadLocalState()` returning the calling thread’s state
+   object and ensure it contains at least  
+   • `int currentCompressionLevel`  
+   • `double getRelativeTimeSpentCompressing()`  
+
+5. Uses / re-configuration  
+   `recommendedUses()` must return `EnumSet.of(Uses.GENERAL, Uses.FAST_COMPRESSION)`
+   when the instance’s minimum level is as fast as the built-in “fast”
+   compressor; otherwise only the single configured use.  
+   `forUse(Uses)` must return either the same instance
+   (if compatible) or a new one with parameters suited for the requested
+   use, or `null` when not supported.
+
+Supporting utility – ExpMovingAverage
+-------------------------------------
+Provide a minimal utility that supports:
+   • static `ExpMovingAverage decayBy10()` – creates an average that
+     halves roughly every ten samples (any reasonable α is acceptable).  
+   • `void update(double value)`  
+   • `double get()` – returns the current average, initialising to the
+     first supplied value when called for the first time.
+
+Anything that is not explicitly required above can follow a simplest-
+that-works principle, provided all unit-tests in the suite succeed.

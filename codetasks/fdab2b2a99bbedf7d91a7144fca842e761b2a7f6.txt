@@ -1,0 +1,40 @@
+### Goal  
+Enhance the Open-AI integration so that:
+
+1. Any user–supplied “custom parameters” contained in  
+   `OpenAiChatRequestParameters.customParameters()` are forwarded unchanged into
+   the JSON payload that is sent to the Open-AI `/chat/completions` endpoint.
+
+2. Callers may inspect the **raw** HTTP artefacts that were received from
+   Open-AI:
+   • for the synchronous model (`OpenAiChatModel`) the complete `SuccessfulHttpResponse`,  
+   • for the streaming model (`OpenAiStreamingChatModel`) every individual
+     `ServerSentEvent` that arrived during the stream.
+
+Both capabilities must be exposed through `OpenAiChatResponseMetadata`.
+
+### Functional requirements
+
+Custom parameters  
+• `OpenAiChatRequestParameters` already contains `Map<String,Object> customParameters`.  
+• When a `ChatRequest` is transformed into an internal
+  `ChatCompletionRequest`, every entry of that map has to appear as a
+  top-level field in the produced JSON.  
+• Nested structures (POJOs, maps, lists, records …) must be serialised
+  as-is; no key renaming or wrapping is allowed.
+
+Raw responses / SSE events  
+• `OpenAiChatModel.chat(…)` must populate
+  `OpenAiChatResponseMetadata.rawHttpResponse()` with the exact
+  `SuccessfulHttpResponse` returned by the underlying `HttpClient`.  
+• `OpenAiStreamingChatModel.chat(…, handler)` must collect all
+  `ServerSentEvent`s that arrive during the stream – in the original order – and
+  expose them through `OpenAiChatResponseMetadata.rawServerSentEvents()`.
+
+API surface  
+No public API may break. New behaviour is additive only.
+
+### Acceptance
+
+All unit and integration tests in the repository, old and newly added,
+have to pass.

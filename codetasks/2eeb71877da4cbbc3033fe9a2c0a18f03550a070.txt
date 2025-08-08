@@ -1,0 +1,34 @@
+Implement support for “multi-range stabbing” queries on numeric DocValues that behave like the existing multi-range query for Sorted-Set DocValues, but work on the long-valued variants:
+
+1.  A builder class  
+    DocValuesMultiRangeQuery.SortedNumericStabbingBuilder  
+    – collects an arbitrary number of inclusive `[lower..upper]` ranges expressed as long values,  
+    – `add(long lower, long upper)` returns the builder,  
+    – `build()` returns  
+        • `MatchNoDocsQuery` when no ranges were added,  
+        • `SortedNumericDocValuesField.newSlowRangeQuery` when a single range was added,  
+        • an instance of the new query (see next bullet) when two or more ranges were added.  
+
+2.  A query class  
+    SortedNumericDocValuesMultiRangeQuery extends Query  
+    – created by the builder,  
+    – stores the merged / deduplicated set of ranges (overlapping or adjacent ranges must be collapsed, reversed ranges with `lower > upper` are ignored), sorted by `lower`,  
+    – matches a document when at least one of the document’s values in the target SortedNumeric (or single-valued Numeric) doc-values field lies inside one of the stored ranges,  
+    – is a constant-score query and implements `createWeight` with a two-phase iterator so that a missing field returns `null` from `scorerSupplier`,  
+    – supplies correct `equals`, `hashCode`, and a user-friendly `toString(String field)` that prints  
+      `field:[l1..u1, l2..u2, …]` (omit the leading `field:` when the parameter equals the query’s field name).  
+
+3.  A lightweight value holder  
+    DocValuesMultiRangeQuery.LongRange  
+    – public fields `long lower, upper`,  
+    – value-based `equals`, `hashCode`, `toString()` returning the form `"lower..upper"`.
+
+Required behaviour verified by the test-suite:
+
+• Both single-valued (NumericDocValuesField) and multi-valued (SortedNumericDocValuesField) indexes must be supported.  
+• The order in which ranges are added does not influence equality or results.  
+• Duplicate or overlapping ranges do not change the results and do not break `equals`/`hashCode`.  
+• When the queried field is absent from a segment, the query must not score any document in that segment.  
+• The existing Sorted-Set implementation and all other functionality must keep working unchanged.
+
+All public facing APIs must remain in the `org.apache.lucene.sandbox.search` package so that every provided test passes.

@@ -1,0 +1,34 @@
+### Goal  
+Add a light-weight “health check” capability to MCP clients.
+
+### Required behaviour  
+
+1. `dev.langchain4j.mcp.client.McpClient` now exposes  
+   ```java
+   void checkHealth();
+   ```  
+   The call must  
+   • verify that the underlying transport is still in a valid state, and then  
+   • send a *ping* request through the MCP protocol and wait for the matching *pong* (empty) response.  
+   If anything goes wrong (transport broken, server not reachable, timeout, …) the method must throw an exception; otherwise it must return normally.  
+
+2. Public reference implementation  
+   `dev.langchain4j.mcp.client.DefaultMcpClient` must provide the above semantics and must  
+   • remove the operation’s future from its internal map after completion or failure,  
+   • honour a configurable `pingTimeout` (builder option, default 10 s).  
+
+3. MCP protocol additions  
+   Two new message types have to be understood by both client and server side handling code:  
+   • `McpPingRequest` – JSON-RPC style call whose `"method"` is `"ping"` and that carries no params,  
+   • `McpPingResponse` – the corresponding reply whose `"result"` is an empty JSON object.  
+
+4. Transport layer  
+   `dev.langchain4j.mcp.client.transport.McpTransport` receives a new hook  
+   ```java
+   void checkHealth();
+   ```  
+   The default must be a no-op, but concrete transports may override it.  
+   • `StdioMcpTransport` must fail the check when the managed process is no longer alive.  
+   • `HttpMcpTransport` can keep the default no-op implementation.  
+
+5. Existing public API, behaviours and all tests (old and newly introduced) must keep working.

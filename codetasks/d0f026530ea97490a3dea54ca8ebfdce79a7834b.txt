@@ -1,0 +1,26 @@
+Context  
+The Ford-Fulkerson based optimisation that RangeStreamer sometimes uses to pick the “best” streaming
+sources can be extremely slow on large or highly-vnoded clusters.  Operators want to be able to disable
+that optimisation at runtime without having to change any code.
+
+Your task  
+1. Introduce a new system property called  
+   cassandra.skip_optimal_streaming_candidates_calculation  
+   – It must be handled through CassandraRelevantProperties.  
+   – The property is boolean and must default to false.
+
+2. When the flag is true RangeStreamer must **not** try to build the “optimised work map”.  
+   In the current code that means the path that normally calls getOptimizedWorkMap(…) has to be
+   skipped and the simpler convertPreferredEndpointsToWorkMap(…) has to be used instead.  
+   The property is evaluated once for every call, so tests can flip its value in the same JVM.
+
+3. All existing behaviour must stay unchanged when the flag is absent or set to “false”.  
+   Strict-source bootstraps, RF==1 keyspaces and keyspaces with transient replicas must still bypass
+   the optimisation exactly as they do today.
+
+4. The new property must be reset-able via CassandraRelevantProperties so tests (and users) can switch
+   it on and off in the same process.
+
+Passing criteria  
+All unit tests – the ones that were already in the tree and the new ones introduced with this change –
+must succeed with the default flag value and with the flag toggled to true.

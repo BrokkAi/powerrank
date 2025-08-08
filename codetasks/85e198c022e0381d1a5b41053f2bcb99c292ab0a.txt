@@ -1,0 +1,43 @@
+### Problem
+
+The KD-tree writer in Cassandra’s Storage-Attached Index (SAI) must know the **total number of points** that will be written, **not** just the number of distinct rows.  
+At the moment several components still forward a row count, which can be wrong when a single row supplies multiple
+points (duplicates, tombstones, etc.).  
+Your task is to update the SAI write-path so that the real point count is propagated all the way down to the
+`BKDWriter`.
+
+### What has to work
+
+1. `BKDTreeRamBuffer` must expose the exact number of in-memory points it currently holds.
+2. `NumericIndexWriter` must:
+   • accept that total point count when it is created,  
+   • validate it,  
+   • forward it to the internal Lucene `BKDWriter` constructor.
+3. All places that instantiate `NumericIndexWriter` must now pass the **point count** instead of a row count.
+4. The public API should remain source-compatible wherever the method/constructor is *already* used with the
+   new signature.
+5. All unit tests (both the existing ones and the new ones in this change set) must pass.
+
+### Functional requirements
+
+• `BKDTreeRamBuffer`  
+  – Add a `long numPoints()` accessor that returns the current point counter.
+
+• `NumericIndexWriter`  
+  – Constructors must replace the `int numRows` parameter with `long totalPointCount`.  
+  – Reject negative values (`IllegalArgumentException`).  
+  – Use that value when creating the internal `BKDWriter` (`long pointCount` constructor argument).  
+  – Provide the same two public constructors as before, only differing in parameter type/name.
+
+• Call sites  
+  – Wherever `NumericIndexWriter` is created, supply the correct point count.  
+  – The most important callers are `SegmentBuilder`, `MemtableIndexWriter`,
+    and the various tests in `...kdtree` packages.
+
+### Non-functional requirements
+
+• Do not change existing semantics except for supplying the correct count.  
+• Keep public APIs stable apart from the intentional signature change.  
+• Ensure everything compiles with `-Xlint:all` and the whole test suite passes.
+
+Implement these changes so that all provided tests succeed.

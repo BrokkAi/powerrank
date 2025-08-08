@@ -1,0 +1,30 @@
+### Problem
+
+`TermOrdValComparator` maintains a custom `DocIdSetIterator` (the *competitive iterator*) that can copy the IDs of all competitive documents into a `FixedBitSet` by calling its `intoBitSet(int upTo, FixedBitSet bitSet, int offset)` method.  
+Two edge-cases can currently make that method violate invariants that are enforced deeper in the search code base and lead to an `AssertionError` or an `IndexOutOfBoundsException`.
+
+1. The caller may supply an `upTo` value that is larger than the segment’s `maxDoc()`.  
+   If we forward this value unchanged, inner loops can try to visit non-existent
+   document IDs (`doc >= maxDoc()`).
+
+2. When the competitive iterator still relies on the `docsWithField` iterator
+   (this happens for sparse fields before any term filtering is active), the
+   current position of `docsWithField` is not guaranteed to be on or after the
+   bit-set’s baseline `offset`.  
+   `DocIdSetIterator.intoBitSet` asserts that `offset <= docID()`; violating
+   this pre-condition yields an `AssertionError`.
+
+### Required behaviour
+
+Update the competitive iterator inside `TermOrdValComparator` so that:
+
+1. It **never passes an `upTo` value greater than `maxDoc()`** to any subsequent
+   logic.
+
+2. Before delegating to `docsWithField.intoBitSet(...)` it **ensures that
+   `docsWithField.docID() >= offset`**, advancing the iterator to `offset` if
+   necessary.
+
+All other behaviour of the comparator (sorting order, missing-value handling,
+etc.) must remain unchanged, and the entire Lucene test-suite – including the
+newly added regression test – must pass.

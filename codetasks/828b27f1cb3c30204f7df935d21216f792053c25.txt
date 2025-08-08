@@ -1,0 +1,40 @@
+Task overview  
+Several `formatValue` helpers that turn a Metadata Filter into the textual predicate sent to the database do not correctly escape user supplied string literals.  Because of this a crafted metadata value such as
+
+    "foo'; DROP TABLE my_table ; --"
+
+would be concatenated to the SQL that LangChain4j generates and could delete the embedding table.  
+You must harden the mapper classes so that they properly quote/escape strings and, at the same time, keep the previous behaviour for all other value types.  
+All existing tests plus the new injection-related tests introduced in this commit have to pass.
+
+Files to change  
+1. langchain4j-mariadb/src/main/java/dev/langchain4j/store/embedding/mariadb/MariaDbFilterMapper.java  
+2. langchain4j-pgvector/src/main/java/dev/langchain4j/store/embedding/pgvector/PgVectorFilterMapper.java  
+3. langchain4j-milvus/src/main/java/dev/langchain4j/store/embedding/milvus/MilvusMetadataFilterMapper.java  
+
+Required behaviour  
+MariaDB & PostgreSQL (PGVector)  
+• When the supplied value is a `String`, duplicate every single quote character (`'`) then wrap the result in single quotes.  
+• When the supplied value is a `UUID`, keep the old behaviour (surround with single quotes, no escaping).  
+• When the supplied value is a collection, escape every element using the same rules and place them inside parentheses separated by commas.  
+• All other data types must be rendered exactly as before (`toString()`).
+
+Milvus  
+• When the supplied value is a `String`, escape any double quote character (`"`) by prefixing it with a backslash (`\"`), then surround the whole literal with double quotes.  
+• `UUID` and the rest stay unchanged.
+
+Nothing else in the public surface of the mappers must change.
+
+Acceptance  
+The following existing suites must succeed:
+
+• langchain4j-pgvector – PgVectorEmbeddingStoreConfigIT  
+• langchain4j-mariadb – MariaDbEmbeddingStoreConfigIT  
+• langchain4j-milvus – MilvusEmbeddingStoreIT  
+
+The new tests contained in those suites verify that:
+
+1. Supplying a malicious string does not break the embedding table.  
+2. A regular query containing a double quote in Milvus works.  
+
+All other unit and integration tests must still pass.

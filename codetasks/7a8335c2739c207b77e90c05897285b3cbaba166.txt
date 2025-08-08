@@ -1,0 +1,34 @@
+Cassandra’s Storage-Attached Index (SAI) already “skips” to the first partition that may contain a match by calling  
+KeyRangeIterator.skipTo(firstPrimaryKey).  
+That, however, always lands on the very first row of the partition, so a query whose
+RowFilter also narrows the clustering key still forces the storage engine to scan every
+preceding clustering – disastrous for very wide partitions.
+
+Required behaviour
+Add an intra-partition optimisation to the initial skip so that, whenever it is safe to do
+so, SAI jumps directly to the first clustering that could satisfy the command, not to the
+partition start.
+
+Skip inside the partition when ALL of these hold  
+1. The command’s comparator contains at least one clustering component.  
+2. The first DataRange does not select the whole partition.  
+3. The command has no static-column predicates (those require looking at the static
+   row first).  
+4. The first key-range returned by queryController.dataRanges() represents a single
+   partition (left == right and instanceof DecoratedKey).
+
+If the above is true:
+
+• Obtain the ClusteringIndexFilter that that DataRange would use for the
+  partition key.  
+    – If it is a ClusteringIndexSliceFilter, pick the first slice’s start bound
+      (ignoring an empty bound).  
+    – If it is a ClusteringIndexNamesFilter, pick the smallest requested row.  
+• When the chosen bound contains values for every clustering component, build a
+  PrimaryKey consisting of the partition key plus that clustering and pass it to
+  resultKeyIterator.skipTo(…).  
+• Otherwise (or if any pre-condition failed) fall back to the old behaviour,
+  i.e. skipTo(firstPrimaryKey).
+
+No other observable behaviour must change; all existing and new unit tests,
+including the IntraPartitionSkippingTest suite, must succeed.

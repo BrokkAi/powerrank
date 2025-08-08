@@ -1,0 +1,31 @@
+A new helper is required that can be called from the GUI to **pre-check whether a merge, rebase-merge or squash-merge will introduce conflicts, without changing the repository’s real branches or leaving the repository in an abnormal state**.
+
+Add a method that is callable through the IGitRepo API and fully implemented in GitRepo:
+
+String checkMergeConflicts(String worktreeBranchName,
+                           String targetBranchName,
+                           io.github.jbellis.brokk.gui.GitWorktreeTab.MergeMode mode)
+                           throws GitAPIException
+
+It must work as follows.
+
+General
+• worktreeBranchName – the branch that will eventually be merged/rebased.  
+• targetBranchName   – the branch that will receive the changes (or the upstream for the rebase).  
+• mode               – one of GitWorktreeTab.MergeMode.{MERGE_COMMIT, SQUASH_COMMIT, REBASE_MERGE}.
+
+Return value
+• Return null   → no conflicts detected.  
+• Return a non-null human readable string → conflicts or other pre-merge problems; the string must explain what went wrong and, if possible, list the conflicting files.  
+• If worktreeBranchName or targetBranchName cannot be resolved, return a message
+  “Error: Worktree branch '…' could not be resolved.” /  
+  “Error: Target branch '…' could not be resolved.”
+
+MergeMode is one of REBASE_MERGE, MERGE_COMMIT, and SQUASH_COMMIT, corresponding
+to the GitHub PR merge behaviors of similar names.
+
+Across all modes
+• Always remember the original branch, and restore it before returning or on exception.  
+• Never leave the repository in REBASING, MERGING, MERGING_RESOLVED etc. state.  
+• Temporary branches must be forcibly deleted even if the merge/rebase fails.  
+

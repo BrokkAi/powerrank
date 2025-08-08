@@ -1,0 +1,39 @@
+Brokk maintains a conversational history for an LLM-powered coding assistant.  
+SEARCH / REPLACE (S/R) edit blocks that are embedded in AI responses must be
+hidden whenever these old messages are re-sent to the language-model, but the
+original text (including the raw blocks) must still be stored in the task
+history and shown to the user.
+
+Your task
+1. Add dynamic redaction of S/R edit blocks when a previous AiMessage is
+   forwarded to the model.
+2. Make sure no other behaviour (GUI rendering, markdown conversion, existing
+   history storage, …) changes.
+
+Required behaviour
+ContextManager.getHistoryMessagesFor…​ (the method that builds the message list
+for a new LLM request) must:
+
+• keep UserMessage / CustomMessage objects unchanged;  
+• for every AiMessage
+  – if the text contains no edit blocks, pass it through unchanged;  
+  – if the message is empty or blank after trimming, drop it;  
+  – otherwise replace every complete S/R block with the literal
+    “[elided SEARCH/REPLACE block]”.  
+    Consecutive elided blocks must be separated by exactly a single newline
+    (the parser already preserves surrounding text/new-line structure).
+
+Implement this logic as the new static helper
+
+    Optional<AiMessage> ContextManager.redactAiMessage(AiMessage msg,
+                                                       EditBlockParser parser)
+
+so that:
+• the Optional is empty when the message should be dropped;
+• non-block text (before, between, after blocks) is preserved verbatim;
+• if a message consisted only of blocks it must still return a non-empty
+  Optional whose text is exactly the placeholder (or that placeholder repeated
+  with newlines for multiple blocks).
+
+Do not alter how messages are stored in TaskEntry: CodeAgent
+must continue to save the full raw text, including unredacted blocks.

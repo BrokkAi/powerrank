@@ -1,0 +1,22 @@
+Brokk can already create new files and modify existing ones, but it cannot yet treat an edit that empties a file as a real deletion, nor does it stage that deletion in Git.  Extend the code-base so that:
+
+1. When an EditBlock turns a previously non-blank file into a blank one, that file is
+   • physically deleted from the working tree, and  
+   • staged for removal in Git
+
+2. The public API exposes this capability through IGitRepo and is exercised from EditBlock.
+
+Detailed requirements
+
+EditBlock  
+• Add a static helper `boolean isDeletion(String original, String updated)`
+  – returns true iff original contains something non-blank and updated is only whitespace.  
+
+• Change `replaceInFile` so that it  
+  – after computing the updated contents, calls isDeletion;  
+  – if it is a deletion, deletes the file from disk, calls GitRepo::remove to stage the deletion and returns without rewriting the file;
+
+Git abstraction  
+• Add void `remove(ProjectFile file)`  to IGitRepo.  
+• Implement it in GitRepo using JGit as the equivalent of  git rm --cached <file>
+  The working-tree file is already deleted by EditBlock, so setCached(true) must be used.

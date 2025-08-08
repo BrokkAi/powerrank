@@ -1,0 +1,48 @@
+Background  
+Lucene is able to “dynamically prune” numeric sort queries: once the
+priority queue is full it builds a specialised DocIdSetIterator that only
+returns documents that are still competitive with the current bottom/top
+values.  
+Up to now this optimisation was only enabled when the field was also
+indexed as a point, because the code relied on PointValues to build the
+iterator.  Numeric-only indexes (created for instance with
+`NumericDocValuesField.indexedField(…)`) could not benefit from it even
+though the index contains a `DocValuesSkipper` able to seek inside the
+DocValues.
+
+What has to be done
+-------------------
+1. Dynamic pruning must also work when the field has no points but the
+   segment exposes a `DocValuesSkipper` for that field.  
+   • As soon as pruning is enabled (`pruning != Pruning.NONE`) and
+     `reader.getPointValues(field)` returns null, try
+     `reader.getDocValuesSkipper(field)`.  
+   • If the skipper is not null, build a competitive iterator that relies
+     on it in the same way the current point-based implementation does:  
+       – it must only return doc IDs whose numeric value is within the
+         current `[minValue, maxValue]` range (inclusive),  
+       – it has to be refreshed whenever the bottom/top value or the hits
+         threshold changes,  
+       – it must respect the existing missing-value and
+         `Pruning.GREATER_THAN_OR_EQUAL_TO` semantics.  
+   • When no skipper is available keep the present behaviour.
+
+2. Implement the iterator on top of `DocValuesRangeIterator`, feeding it
+   with the `DocValuesSkipper` obtained above and a TwoPhaseIterator that
+   checks the value against the range.  The resulting iterator is exposed
+   through `LeafFieldComparator.competitiveIterator()`.
+
+3. Bug-fix: the internal `upTo` cursor of
+   `DocValuesRangeIterator.Approximation` has to be initialised with
+   `skipper.maxDocID(0)` (not -1) so the very first block is correctly
+   considered.
+
+Acceptance
+----------
+• All existing tests, plus the new suites that index numeric fields with
+  `NumericDocValuesField.indexedField` only, must pass.  
+• Sorting with pruning enabled must skip the same (or more) non-competitive
+  documents whether the field is indexed as points, as doc values only, or
+  as both.  
+• Segments without a skipper or with multi-dimensional points continue to
+  behave exactly like before.

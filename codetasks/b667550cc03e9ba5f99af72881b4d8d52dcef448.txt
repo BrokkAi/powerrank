@@ -1,0 +1,28 @@
+### Background
+Cassandra’s compaction framework lets a `CompactionTask` report life-cycle events (`onInProgress`, `onCompleted`) through a `CompactionObserver`.  
+For parallel shard-based compactions the same logical operation is represented by several tasks, so a helper class named `SharedCompactionObserver` already exists: each task registers itself, the helper reports **one** “start” and **one** “finish” event for the whole operation.
+
+### Newly required behaviour
+1. **Multiple observers per operation**  
+   In addition to the strategy’s own observer (UCS) an extra, optional observer (e.g. CNDB’s “composite” observer) must also be notified.  
+   • Both have to receive exactly one `onInProgress` and one `onCompleted` notification per operation.  
+   • If either callback throws, the other observer must still be invoked; after every observer has been called the first thrown exception (or an aggregate) must be re-thrown.
+
+2. **API changes**
+   • `SharedCompactionObserver` must accept two observers (primary mandatory, secondary optional) instead of only one.  
+   • `UnifiedCompactionStrategy` methods that build background tasks must accept an **additional** optional observer and forward it all the way down to every task that is created.  
+   • When parallelism > 1 the strategy must construct a `SharedCompactionObserver` that wraps **itself** plus the additional observer, so both are registered for the whole parallel job.  
+   • For single-shard / non-parallel tasks the additional observer must be attached directly to the task.
+
+3. **Utility exposure**  
+   The strategy must expose a `getCompactionInProgress()` accessor returning the number of jobs currently tracked by its internal `BackgroundCompactions`.
+
+### Acceptance criteria
+All existing unit tests and the newly added tests covering:
+• correct propagation to both observers,  
+• correct behaviour when one observer throws,  
+• correct interaction with parallel/non-parallel task creation,  
+• correct counting of in-progress jobs,  
+must pass without modification.
+
+No other functionality or public contracts may regress.

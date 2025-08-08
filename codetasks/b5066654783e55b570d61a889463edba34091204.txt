@@ -1,0 +1,54 @@
+### Goal
+Improve journal robustness against partial-write corruption by:
+
+1. Extending the per-segment `Metadata` to track the last fsynced byte offset.
+2. Adjusting serialization / deserialization logic that formerly relied on total
+   sizes so that it now uses an **absolute end offset**.
+3. Ensuring readers never look past the recorded fsync boundary.
+
+All public API and existing behaviour that is unrelated to these changes must
+remain intact.
+
+### Functional Requirements
+1. `Metadata`
+   • Persist both `recordsCount` *and* `fsyncLimit` followed by a CRC that
+     covers the two integers.  
+   • Provide a factory that returns an empty/default instance.  
+   • When metadata is rebuilt from an existing segment, populate
+     `fsyncLimit` with the final position reached by the sequential reader.  
+   • `persist()` must write the two fields and their CRC in the new format.
+
+2. `EntrySerializer`
+   • The first `int` stored in a record is no longer the **length** but the
+     absolute byte position where the record ends.  
+   • While deserialising, compute `totalSize` as
+     `endOffset - startPosition` and validate it is strictly positive and
+     completely available in the source buffer.  
+   • If `endOffset` is `0`, treat the record as non-existent (tail padding) and
+     return `-1`.  
+   • When the buffer does not yet contain the whole record, keep the previous
+     EOF handling logic.
+
+3. `ActiveSegment`
+   • On segment creation use the new empty‐metadata factory.
+
+4. `StaticSegment.SequentialReader`
+   • Never expose bytes that lie beyond `fsyncLimit`.  
+   • If the stored limit is lower than the mapped buffer’s capacity, shrink the
+     buffer’s limit accordingly during construction.
+
+5. Backwards compatibility
+   • Segments written with the previous format (metadata without `fsyncLimit`
+     and size-based record headers) are **not** required to be readable.  
+     Only the new format must work correctly and withstand abrupt shutdown
+     scenarios that leave a zeroed tail in the file.
+
+### Non-functional Requirements
+• All existing unit tests as well as the new tests included in the repository
+  must pass.  
+• No public method signatures may be altered except to add the new metadata
+  field or to introduce the new factory.  
+• Follow the project’s existing style and concurrency practices.
+
+Implement these changes across the affected classes; no modifications are
+needed outside the journal package.

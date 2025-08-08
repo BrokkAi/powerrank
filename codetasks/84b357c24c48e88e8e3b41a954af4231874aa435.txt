@@ -1,0 +1,30 @@
+### Problem
+
+Enhance `org.apache.lucene.util.ArrayUtil` so Lucene can dynamically expand `float[]` buffers while enforcing an upper-bound on the final capacity.
+
+A new public utility method is required:
+
+```
+public static float[] growInRange(float[] array, int minLength, int maxLength)
+```
+
+Behaviour:
+
+1. `minLength` must be non-negative.  
+   • If it is negative, throw an `AssertionError` identical to the one used by the existing `int` overload.
+
+2. `minLength` may **not** exceed `maxLength`.  
+   • If it does, throw `IllegalArgumentException` with a message consistent with the `int` overload.
+
+3. If the supplied array is already large enough (`array.length >= minLength`) return it unchanged.
+
+4. Otherwise calculate the next size using the standard Lucene growth policy:  
+   `int potential = oversize(minLength, Float.BYTES);`
+
+   Grow to `potential` unless it would cross `maxLength`; in that case grow exactly to `maxLength`.
+
+5. Perform the actual copy with the existing `growExact(float[], int)` helper.
+
+Semantics, exceptions, and assertion messages must mirror the behaviour of `growInRange(int[], …)`.
+
+The new method is now used by several classes (`MaxSizedFloatArrayList`, `NeighborArray`) and a comprehensive test-suite. All unit tests, old and new, must pass.

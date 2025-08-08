@@ -1,0 +1,33 @@
+Implement support for OpenSSH host certificates in JGit’s Apache-SSHD based server-key database.
+
+Behaviour to add
+
+1. Known-hosts syntax  
+   Lines that start with the marker “@cert-authority” declare a CA key that may sign host certificates.  
+   • While processing a host certificate only entries that carry this marker are relevant.  
+   • While processing a normal (non-certificate) host key these lines must be ignored – they neither authorise nor modify the result of the search.  
+   • Lines that are both “@cert-authority” and “@revoked” revoke every certificate signed with that CA.
+
+2. lookup(…)  
+   This method is only used to reorder the SSH signature proposal.  
+   It must return host keys, never CA keys, therefore every “@cert-authority” line has to be skipped.
+
+3. accept(…)  
+   • If the server transports a regular public key the current behaviour is unchanged – the key is looked up only in non-CA, non-revoked entries.  
+   • If the server transports an OpenSshCertificate
+     – Extract the certificate’s CA public key.  
+     – Look that key up only in non-revoked “@cert-authority” entries that match one of the candidate host names / ports.  
+     – Succeed when such an entry is found and fail otherwise.  
+     – A failure must be final: do not prompt the user, do not add anything to known_hosts, return false immediately.
+
+4. Revocation handling  
+   When a matching entry is flagged “@revoked” raise the existing RevokedKeyException.  
+   The user facing message must differentiate between a revoked certificate (“knownHostsRevokedCertificateMsg”) and a revoked plain key (“knownHostsRevokedKeyMsg”).
+
+5. File modifications  
+   “@cert-authority” lines can never be written automatically.  The database must not propose to add them and must not modify the known_hosts files when dealing with host certificates.
+
+Constraints
+
+• Only org.eclipse.jgit.internal.transport.sshd.OpenSshServerKeyDatabase and its resources are subject to change; all unit tests in org.eclipse.jgit.ssh.apache.test must pass.  
+• Implementation must rely on Apache-SSHD’s OpenSshCertificate class that is already on the classpath.

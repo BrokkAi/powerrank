@@ -1,0 +1,20 @@
+Implement support for the optional regular-expression flag  
+
+    RegExp.CASE_INSENSITIVE_RANGE   // value 0x0400  
+
+in Lucene’s automaton-based regexp engine.
+
+Required behaviour
+------------------
+1. The flag is a “matching” flag, similar in spirit to `CASE_INSENSITIVE` and `ASCII_CASE_INSENSITIVE`, but it **only affects character-class ranges** of the form `[c-d]`.  
+2. When the flag is present, every code-point that lies between the range’s lower and upper bound (inclusive) must also contribute every code-point that is considered a case-folding equivalent of that character.  
+   • Case folding must follow the rules already implemented in `CaseFolding.expand`.  
+   • The resulting class must be minimal: adjacent code-points that end up consecutive after expansion must be merged into the same `[start,end]` interval so the DFA remains minimal.  
+3. If the flag is **not** present, range parsing keeps the historical behaviour; other existing flags continue to work exactly as before.  
+4. Supplying an inverted range (lower > upper) must trigger the same `IllegalArgumentException` that normal range parsing emits.  
+5. A public constant `CASE_INSENSITIVE_RANGE` (value `0x0400`) has to be added to `RegExp` and documented like the other flags.
+
+Constraints
+-----------
+• The change must not degrade performance for expressions that do **not** use the new flag.  
+• All current unit tests as well as the newly added tests for the flag have to pass.

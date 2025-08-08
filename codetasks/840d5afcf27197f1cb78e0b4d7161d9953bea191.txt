@@ -1,0 +1,19 @@
+Problem  
+
+A race condition appears when several threads execute BM25-scored queries at the same time.  
+The root cause is that InvertedIndexSearcher kept a single DocLengthsReader instance and shared it between all queries, while the underlying IndexInputReader is not thread-safe. Parallel reads therefore corrupt the stream and the results returned by BM25 scoring become wrong.
+
+Required behaviour  
+
+1. A DocLengthsReader must never be shared by different threads.  
+   • Every query that needs document lengths has to create its own DocLengthsReader.  
+2. The file handle that backs the doc-lengths component may be shared, but each reader must have its private IndexInputReader obtained from that handle.  
+3. Resource management must stay correct:  
+   • DocLengthsReader closes only the IndexInputReader it created.  
+   • The FileHandle is closed once, when the InvertedIndexSearcher itself is closed.  
+   • Any iterator that creates a DocLengthsReader is responsible for closing it when iteration ends, even on error/early termination.  
+4. DocLengthsReader is explicitly marked as not thread-safe.
+
+Functional impact  
+
+After the change, concurrent BM25 searches, even thousands in parallel, must always return the same, correct top-scoring documents, and all existing SAI query types and index maintenance operations must continue to work.

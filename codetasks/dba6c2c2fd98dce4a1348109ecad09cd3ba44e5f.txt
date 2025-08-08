@@ -1,0 +1,48 @@
+Background  
+Lucene’s PointInSetQuery represents “field ∈ {point₁ … pointₙ}”.  
+When the query is rewritten to a Weight, Lucene instantiates one
+Scorer per leaf.  If the leaf’s `PointValues` prove that **no document
+could possibly match**, the `Weight` is expected to return `null` from
+`scorerSupplier(LeafReaderContext)` so that the search layer can skip
+that segment entirely.
+
+Currently PointInSetQuery always builds a Scorer, even for segments
+whose indexed points are completely outside the query set, which hurts
+latency.
+
+Task  
+Enhance PointInSetQuery so that it **early-exits on non-matching
+segments**:
+
+1.  While the query is being built, compute the *minimum* and *maximum*
+    encoded point that occur in the user-provided set (per dimension).
+    Store these bounds in the query instance.
+
+2.  In the logic that turns the query into a Weight/Scorer
+    (namely the implementation that inspects the segment’s
+    `PointValues`), compare the query bounds with the segment’s
+    `minPackedValue` and `maxPackedValue`.
+
+    • If the segment contains zero docs for this field
+      (`PointValues.getDocCount() == 0`) → return `null`.
+
+    • Otherwise, if for **any** dimension the segment’s maximum is
+      strictly lower than the query’s minimum, or the segment’s minimum
+      is strictly greater than the query’s maximum, the segment cannot
+      match → return `null`.
+
+3.  In every other situation, behave exactly as before and build the
+    appropriate Scorer.
+
+Constraints / behaviour that must not change
+
+• The query must still reject duplicated points at construction time
+  (it already does).  
+• All comparisons are unsigned byte-wise, exactly the same order that
+  BKD trees use.  
+• Memory accounting (`ramBytesUsed()`) must continue to include any new
+  arrays you allocate.  
+• All existing and newly added unit tests must pass.
+
+Implement the above so that the test suite – including the new tests
+that verify segment skipping – is green.

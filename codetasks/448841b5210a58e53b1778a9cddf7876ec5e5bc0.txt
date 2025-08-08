@@ -1,0 +1,40 @@
+Background  
+In the string indexer used by SAI the in-memory postings are tracked with
+
+• a BytesRefHash/ByteBlockPool pair (terms),  
+• a RAMPostingSlices structure (per-term postings), and  
+• an Int2IntHashMap named docLengths.
+
+The existing “flush-when-full” checks only look at the two byte pools, while the memory estimate that is surfaced to the rest of the system ignores the array memory that backs both RAMPostingSlices and docLengths.  
+For very large indexes this can lead to two problems:
+
+1. docLengths keeps growing until Int2IntHashMap tries to resize beyond
+   Integer.MAX_VALUE, throwing an overflow exception.  
+2. Reported memory consumption is lower than the real footprint, so the
+   coordinator might miss opportunities to flush earlier.
+
+Required behaviour
+
+1. The indexer must expose a complete memory estimate that also counts  
+   – the three primitive int arrays inside RAMPostingSlices, and  
+   – the key/value arrays inside docLengths (capacity × 2 × 4 bytes).  
+
+2. The indexer must refuse to accept more rows (i.e. requiresFlush() must
+   return true) once docLengths grows past a configurable upper bound
+   (default 300 000 000). This guard is in addition to the existing
+   byte-pool checks.
+
+3. Unit tests rely on a package-visible constructor that allows passing a
+   custom limit for docLengths so they can exercise this new path. Make
+   sure the public constructor keeps the original signature and uses the
+   default limit.
+
+4. A small helper that returns the memory used by the three arrays in
+   RAMPostingSlices is now part of the public surface of that class and
+   must be used by the indexer’s memory calculation.
+
+Deliverables
+
+Implement the above behaviour in the existing classes so that every
+supplied test – new and old – passes without regression, while respecting
+the public API and visibility constraints already present in the code.

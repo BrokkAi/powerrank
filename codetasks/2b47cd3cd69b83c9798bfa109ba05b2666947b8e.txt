@@ -1,0 +1,38 @@
+### Problem
+
+`PatienceKnnVectorQuery`, `SeededKnnVectorQuery` and `HnswQueueSaturationCollector` are meant to be stackable “decorators” for Lucene k-NN vector queries.  
+The current implementation does not allow third–party code (or other Lucene components) to build new query instances when the
+delegate is already a concrete query type (`KnnFloatVectorQuery`, `KnnByteVectorQuery`, `SeededKnnVectorQuery`, …).  
+This makes it impossible to compose the queries freely and causes compilation failures in the updated test-suite.
+
+Your task is to remove those limitations and make the three classes fully extensible.
+
+### Requirements
+
+1. HnswQueueSaturationCollector  
+   • Its constructor must be public so that callers outside the package can wrap an existing `KnnCollector`.
+
+2. SeededKnnVectorQuery  
+   • Keep the existing factory method `wrap(AbstractKnnVectorQuery, Query)`.  
+   • Add public constructors that accept either a `KnnFloatVectorQuery` or a `KnnByteVectorQuery` together with  
+     a `Query` seed and an optional pre-computed `Weight`.  
+   • Internally the new constructors (and the package-private one that takes an `AbstractKnnVectorQuery`) must
+     store the original query parameters (`field`, `k`, `filter`, `searchStrategy`) **verbatim** so that the wrapped
+     query behaves exactly like the delegate apart from seeding.  
+   • `rewrite(IndexSearcher)` has to create a new `SeededKnnVectorQuery` that also preserves those parameters.
+
+3. PatienceKnnVectorQuery  
+   • Keep the current static factory helper methods.  
+   • Add public constructors that accept a  
+     – `SeededKnnVectorQuery`,  
+     – `KnnFloatVectorQuery`, or  
+     – `KnnByteVectorQuery`,  
+     together with the `saturationThreshold` and `patience` values.  
+   • Store the original query parameters (`field`, `k`, `filter`, `searchStrategy`) exactly as on the delegate.  
+   • `rewrite(IndexSearcher)` must keep those parameters unchanged when it needs to recreate the wrapped
+     `SeededKnnVectorQuery`.
+
+4. All new public APIs must appear in the same source files and packages as the original classes and keep
+   their existing behaviour. The external and internal Lucene tests (both existing and newly added ones) must compile and pass.
+
+No other functional or behavioural changes are required.

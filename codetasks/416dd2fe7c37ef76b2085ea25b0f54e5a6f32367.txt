@@ -1,0 +1,60 @@
+Background  
+`PointRangeQuery` is the base class for all *N-dimensional* point‐range queries (e.g. `IntPoint.newRangeQuery`, `LongPoint.newRangeQuery`, …).  
+Today every such query is executed even when the requested range either:
+
+1. certainly matches every document in the index, or  
+2. certainly matches no document at all.
+
+This wastes work and prevents the query cache from storing the much cheaper “trivial” queries that could be used instead.
+
+Task  
+Extend `org.apache.lucene.search.PointRangeQuery` so that it rewrites itself into a cheaper query whenever the range being searched is known, up-front, to:
+
+A. contain every indexed point of the field, or  
+B. contain none of them.
+
+Required behaviour  
+
+1. `rewrite(IndexSearcher)` must inspect the whole index (all leaves) and  
+   a. throw the current `IllegalArgumentException` if any segment has incompatible point metadata (same checks that are already done today);  
+   b. obtain the global minimum and maximum packed values for the field with
+      `PointValues.getMinPackedValue(reader, field)` / `getMaxPackedValue (…)`;  
+   c. decide the *relation* between the requested range and these global extrema.  
+      • If the extrema fall fully inside the requested range (CELL_INSIDE_QUERY) …  
+        – If every document of every segment contains exactly one point for
+          the field, rewrite to `MatchAllDocsQuery`.  
+        – Otherwise, if it is possible to use a `FieldExistsQuery`
+          (i.e. every segment has some stored information that lets this query work,
+          see below), rewrite to `FieldExistsQuery(field)`.  
+        – Otherwise keep the original query (normal execution).  
+      • If the extrema are completely outside the requested range
+        (CELL_OUTSIDE_QUERY) rewrite to `MatchNoDocsQuery`.  
+      • If the range only partially overlaps the extrema
+        (CELL_CROSSES_QUERY) keep the original query.  
+   d. If the field has no indexed points anywhere (both global min/max are
+      `null`), rewrite to `MatchNoDocsQuery`.
+
+2. A helper “can we use `FieldExistsQuery`?” must return *false* for a segment when the `FieldInfo` of the field  
+   – has `DocValuesType.NONE`,  
+   – has no norms, **and**  
+   – has `getVectorDimension() == 0`.  
+   Only if **all** segments return *true* may the optimisation to
+   `FieldExistsQuery` be applied.
+
+3. The existing relation logic that compares the packed values has been
+   promoted to the outer class; avoid code duplication and keep the previous
+   semantics.
+
+4. The optimisation must be completely transparent: any query that used to
+   return N hits must still return the exact same N hits after your changes;
+   only the rewritten form is allowed to differ.
+
+Hints / constraints  
+• Do not alter public APIs other than the documented behaviour change.  
+• The implementation must remain correct for multi-dimensional points.  
+• Performance of the happy path (non-optimised queries) must not regress.  
+• All supplied JUnit tests – both the existing ones and the new ones that
+  verify the optimisation – must pass.
+
+Deliverable  
+Update the Lucene source so that the above behaviour is respected.

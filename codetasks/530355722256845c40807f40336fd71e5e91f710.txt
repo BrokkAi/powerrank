@@ -1,0 +1,53 @@
+The Brokk Markdown extension must now recognise a wider variety of “Search / Replace” (S/R) edit-blocks and expose the information (especially the filename) in the associated EditBlockNode.
+
+Your task  
+Implement the necessary changes in the Java source so that every existing test and the new tests contained in
+  src/test/java/io/github/jbellis/brokk/flex/EditBlockUtilsTest.java
+run successfully.
+
+What must be supported
+
+1.  Un-fenced blocks  
+    a. Classic form  
+       ```
+       file1.txt
+       <<<<<<< SEARCH
+       …search…
+       =======
+       …replace…
+       >>>>>>> REPLACE
+       ```  
+    b. “Conflict” form – the three marker lines may each repeat the filename after the keyword, e.g.  
+       ```
+       <<<<<<< SEARCH file1.txt
+       …
+       ======= file1.txt
+       …
+       >>>>>>> REPLACE file1.txt
+       ```
+
+2.  Fenced blocks (` ``` `)  
+    A block that starts with a code-fence is treated as an edit-block as soon as the body contains the normal S/R
+    markers.  
+    • The opening fence may contain nothing, a language, or a filename.  
+      – If the token after the fence *looks like* a path (contains “.” or “/”), treat it as the filename and start the
+        parser immediately in SEARCH phase – there will be no separate filename line inside the block.  
+      – Otherwise the token is a language identifier and the filename (if any) will be taken from the first non-blank
+        line inside the fence.  
+    • Examples that must be detected: ``` (empty), ```java, ```file1.txt.
+
+3.  Filename detection rules  
+    • If the parser is in FILENAME phase the first non-blank line becomes the filename *unless* that line is already the
+      `<<<<<<< SEARCH …` head marker.  
+    • While in SEARCH phase, if the head marker contains a filename and the node does not yet have one, use it.  
+    • If no filename was found in the marker, fall back to EditBlockUtils.findFileNameNearby (already supplied).  
+    • Utility method EditBlockUtils.looksLikePath(String) must still return true for obvious file names and false
+      otherwise (existing tests cover this).  
+    • A new null/empty-array guard is required in EditBlockUtils.findFileNameNearby.
+
+4.  Parser factory (EditBlockParser.blockStart)  
+    • Detect a fenced line that immediately contains “SEARCH” (```SEARCH …) – already handled.  
+    • Detect a plain head marker line (`<<<<<<< SEARCH …`) and correctly build the node components
+      (opening “<”, keyword, optional trailing text).  
+    • When the line immediately above a head marker is itself just a filename that was inferred by
+      findFileNameNearby, the parser must not absorb that line into the SEARCH text.

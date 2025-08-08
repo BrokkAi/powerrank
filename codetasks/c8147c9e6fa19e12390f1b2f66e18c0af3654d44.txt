@@ -1,0 +1,37 @@
+Task Overview  
+Add support for re-scoring an already collected TopDocs with values that come from any Lucene DoubleValuesSource. Two separate, but related, additions are required:
+
+1. A general‐purpose abstract Rescorer implementation that knows how to visit the documents contained in a TopDocs, pull a value from a supplied DoubleValuesSource, and call a user-implemented combine method to compute the new score.
+
+2. A reusable Comparator<ScoreDoc> so callers and the new rescorer can sort ScoreDoc arrays “Lucene style” (highest score first, and by increasing docID when scores tie).
+
+Functional Requirements  
+
+DoubleValuesSourceRescorer (core/src/java/…/DoubleValuesSourceRescorer.java)  
+• Must extend org.apache.lucene.search.Rescorer.  
+• Construction takes a DoubleValuesSource which is rewritten against the IndexSearcher passed to rescore/​explain.  
+• rescore(IndexSearcher searcher, TopDocs firstPassTopDocs, int topN)  
+  – Visits every ScoreDoc in the supplied TopDocs, fetches the corresponding DoubleValues from the correct LeafReaderContext, and computes a new score using combine(firstPassScore, valuePresent, sourceValue).  
+  – Missing values are signalled by valuePresent == false and sourceValue can be anything (0.0 is fine).  
+  – The original hit order of firstPassTopDocs must be unaffected until all scores are recomputed, but the returned TopDocs must be ordered by the usual rules (highest score first, tie-break on lower docID).  
+  – Only the best topN hits have to be returned, but totalHits must stay identical to firstPassTopDocs.totalHits.  
+• explain(IndexSearcher searcher, Explanation firstPassExplanation, int docID)  
+  – Builds a nested Explanation that shows the first-pass contribution, the DoubleValuesSource contribution (match/no-match) and the final combined score.
+
+• An abstract method  
+      protected abstract float combine(float firstPassScore,
+                                       boolean valuePresent,
+                                       double sourceValue);  
+  which callers implement with their own scoring formula.
+
+ScoreDoc.COMPARATOR (core/src/java/…/ScoreDoc.java)  
+• A public static final Comparator<ScoreDoc> that orders by descending score and, for equal scores, ascending docID.  
+• toString of ScoreDoc is unchanged.
+
+Constraints  
+• All existing unit tests and the newly added TestDoubleValuesSourceRescorer must pass.  
+• Behaviour must be deterministic and independent of the incoming TopDocs ordering.  
+• Throw meaningful IllegalArgumentException / IllegalStateException when docIDs are not found in the supplied searcher’s leaves.
+
+Deliverables  
+Complete implementations of DoubleValuesSourceRescorer and the new Comparator, plus any minimal supportive code needed so that every provided test class compiles and succeeds.

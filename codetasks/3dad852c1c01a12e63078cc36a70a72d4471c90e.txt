@@ -1,0 +1,53 @@
+### Batch-buffer utilities for postings iteration
+
+Lucene’s new bulk iteration API exchanges small batches of
+`docID`/frequency or `docID`/score pairs through simple buffer objects.
+Two such buffers are now part of the public `org.apache.lucene.search`
+package and several core classes and tests already rely on them.  
+Your task is to supply the missing implementation that makes these
+buffers fully functional so that every existing and newly-added test
+passes.
+
+#### 1.  `DocAndFreqBuffer`
+Location: `org.apache.lucene.search.DocAndFreqBuffer`
+
+Purpose  
+Holds two parallel `int` arrays (`docs` and `freqs`) plus a `size`
+counter indicating how many slots of the arrays currently contain valid
+data.
+
+Required behaviour  
+1. `growNoCopy(int minSize)`
+   • Ensure that both arrays can store at least
+   `minSize` elements.  
+   • If the current capacity is already sufficient do nothing.  
+   • Otherwise allocate new arrays using
+     `org.apache.lucene.util.ArrayUtil.growNoCopy(…, minSize)` and make
+     `docs` and `freqs` reference them.  
+   • The two arrays must always have identical length.
+2. `apply(org.apache.lucene.util.Bits liveDocs)`
+   • Remove (in-place) every entry `i` whose bit `liveDocs.get(docs[i])`
+     is `false`.  
+   • Retain the original order of the surviving entries.  
+   • When the method returns, `size` must equal the number of retained
+     entries and the valid data must occupy the first `size` positions
+     of both arrays.  
+   • No additional array allocations are allowed here.
+
+#### 2.  `DocAndScoreBuffer`
+Location: `org.apache.lucene.search.DocAndScoreBuffer`
+
+Structure is identical to `DocAndFreqBuffer` except that the second
+array stores `float` scores.  
+Only `growNoCopy(int minSize)` has to be implemented with the exact same
+semantics described above.
+
+#### 3.  General constraints
+• Do not modify any public signatures.  
+• Do not introduce external dependencies.  
+• All existing functionality must continue to behave exactly as before;
+only the required buffer logic must be added.
+
+After your changes all unit tests, including the ones that exercise
+`nextPostings`, `nextDocsAndScores`, Boolean and Max-score scorers, must
+succeed.

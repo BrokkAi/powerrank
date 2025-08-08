@@ -1,0 +1,27 @@
+Problem description
+
+Background  
+Self-contained secondary indexes (SAI) maintain a small set of “vector” index files (ANN, VTFREQ, TERMS, …) inside every SSTable.  A footer checksum is written for every index component, but SAI never actually validated that checksum at read time; verify/stream/compaction therefore failed to notice damaged vector files.
+
+Since on-disk compatibility is governed by the SAI format version (the two-letter code that follows the base SSTable version), we must begin to validate the checksum only for new files, while continuing to ignore it for files that were written by an older Cassandra.  Starting with format “EC” we want
+
+1. all vector index components except the TERMS component to be verified with their footer checksum;  
+2. TERMS should still be validated only for basic structure (header, codec version, etc.) because its checksum was computed incorrectly in the past;  
+3. before version “EC” every vector component is still accepted without reading the checksum so that existing data remain readable;  
+4. nothing changes for non-vector components – their validation path is untouched;  
+5. the IndexFeatureSet flag hasVectorIndexChecksum, which tried to describe the point above, is removed because checksum handling is now decided purely by the on-disk version.
+
+Task  
+Change the SAI code base so that
+
+• calling `validateIndexComponent(component, true)`  
+  – returns true after a full checksum verification for EC+ vector files (except TERMS);  
+  – returns true after a “header only” validation for TERMS in every version;  
+  – skips checksum verification for every vector component that belongs to a version earlier than EC;  
+  – keeps the existing behaviour for all other components.
+
+• `VerifyTest.testVerifyCorruptVectorIndex` must pass: verification fails for a deliberately corrupted vector file on EC+ data and succeeds for the same corruption on an older version.
+
+• The removed feature flag must no longer be used anywhere in the code.
+
+The public API, external file format and every pre-existing test must remain functional.

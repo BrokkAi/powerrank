@@ -1,0 +1,31 @@
+### Objective
+Enhance `PackInserter` so that, when the repository configuration requests it, every new pack file is accompanied by an **object-size index** (`*.objsize`).  
+All existing behaviour must stay intact; the new and former test-suites must both pass.
+
+### Required behaviour
+1. While building a pack, keep the *uncompressed size* and *type* of every object that will become part of that pack.
+2. When `PackInserter.flush()` finalises the pack:
+   • Always write the traditional `*.idx` file.  
+   • Additionally, **if** the current `PackConfig` signals this feature is enabled, write an object-size index:
+     • Temporary name next to the temporary `*.pack`.  
+     • Use `PackObjectSizeIndexWriter` to create it, passing the `minBytesForObjSizeIndex` threshold from the current `PackConfig`.  
+     • Atomically rename the temporary file to `*.objsize` beside the final `*.pack`/`*.idx`, and mark it read-only.
+3. `Pack.hasObjectSizeIndex()` must report `true` directly after a pack is written, and `Pack.getIndexedObjectSize(ObjectId)` must return the size recorded during writing.
+4. Only `.pack`, `.idx` and `.objsize` files may remain in the object directory after a successful flush.
+
+### Configuration hooks
+The JGit system config key
+
+```
+[pack]
+    minBytesObjSizeIndex = <n>
+```
+
+activates the feature.  
+`PackConfig` already exposes `isWriteObjSizeIndex()` and `getMinBytesForObjSizeIndex()`. Honour those values exactly.
+
+### Notes & constraints
+• Do **not** change any public APIs except where the patch already enlarged a private method signature inside `PackInserter`.  
+• Use the existing `PackExt.OBJECT_SIZE_INDEX` to derive the correct file name suffix (`*.objsize`).  
+• `FileUtils.rename(..., ATOMIC_MOVE)` must be employed for the final move, mirroring the handling of the normal index.  
+• Sorting and hashing rules for the pack remain unchanged; the additional file must not influence the pack’s name.

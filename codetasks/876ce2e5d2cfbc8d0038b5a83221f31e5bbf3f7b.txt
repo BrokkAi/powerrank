@@ -1,0 +1,23 @@
+Context  
+The storage engine performs background compactions, some of which are long-running and must never be executed concurrently on the same table.  
+It also splits the token-ring into “shards” to parallelise work, but must never create more parallel compaction tasks than the limit returned by the controller.  
+Finally, as every compaction is executed inside a LifecycleTransaction, that transaction has to be closed even if task creation fails at any stage.
+
+Task  
+1. Serialise long-running table wide operations  
+   ColumnFamilyStore.runWithCompactionsDisabled(…) must guarantee that two invocations on the same ColumnFamilyStore are executed strictly one after another. A caller that enters second must block until the first finishes. The existing concurrency hard-failure/dedlock has to be eliminated.
+
+2. Respect the max parallelism when grouping shards  
+   ShardManager.splitSSTablesAndApply(…) eventually calls a helper that groups the pre-computed shards into at most maxParallelism compaction tasks.  
+   • When shards ≤ maxParallelism every shard becomes a task.  
+   • When shards > maxParallelism shards must be merged so that the final number of tasks equals maxParallelism (no fewer, no more), without dropping any SSTable or range.  
+   • The algorithm must work for any value of shards, token layout or parallelism and must never create an empty task.
+
+3. Close transactions on every failure path  
+   UnifiedCompactionStrategy must always close a LifecycleTransaction that it opened if any subsequent step throws, both in getMaximalTasks(…) and in createAndAddTasks(…).  
+   A leaked transaction causes the new unit tests to fail.
+
+4. Minor: the helper that waits for currently running compactions to finish must double-check that they really stopped; if not it should abort the caller.  
+   The warning message must include keyspace and table name and list the in-flight SSTables at debug level.
+
+All new and existing unit tests must pass. No public API may change.

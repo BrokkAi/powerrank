@@ -1,0 +1,26 @@
+Problem Description  
+Cassandra’s Storage-Attached Index (SAI) must guarantee that a compaction or index build never finishes successfully while the index it is writing for has already been unloaded (for example after a tenant is unassigned).  
+At the same time, it must still be possible to finish those tasks when the index was dropped in the usual way (DROP INDEX, DROP TABLE, …).
+
+Current behaviour  
+The implementation only tracks a single state (“valid / invalid”).  
+When the schema is unloaded, compaction continues, finishes, and finally tries to install index files that have already been removed – leaving the new SSTable without its index and making reads fail.
+
+Required behaviour  
+1. The index lifecycle must distinguish two orthogonal terminal states  
+   a. dropped – the schema still exists but the particular index was dropped (normal case)  
+   b. unloaded – the schema has been physically removed from the JVM because the tenant was unassigned  
+2. Compaction / on-disk index build must  
+   • abort immediately with an exception when the index is unloaded  
+   • silently cancel work and keep going when the index is dropped  
+3. The public API used by the on-disk writer must expose the two new states instead of the single “isValid” flag that existed before.  
+4. All existing and new unit tests must pass.
+
+Scope of work (high level)  
+• Replace the single flag with two independent flags inside StorageAttachedIndex.  
+• Provide BooleanSupplier accessors isDropped() and isUnloaded() that are used by SSTableIndexWriter.  
+• SSTableIndexWriter must be able to receive both suppliers, detect the two situations, and react as required (see 2.).  
+• Update all call sites (compaction and flush paths) and tests accordingly.  
+• Ensure that any aborted writer cleans up partial on-disk artifacts.  
+
+No other functional or behavioural changes are expected.

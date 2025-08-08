@@ -1,0 +1,30 @@
+### Problem  
+
+`ToolExecutionRequest` describes a tool-call that the AI model should execute.  
+The request may contain a JSON string with the arguments for the tool, but many
+tools do **not** require any arguments at all.  
+If the `arguments` field is `null`, empty or contains only whitespace, the
+library must treat it as “no arguments” and supply an **empty map** to every
+place that expects a decoded arguments map.
+
+At the moment this does **not** work: whenever `arguments` is missing / blank
+the code still tries to parse it as JSON, which raises a
+`JsonProcessingException` and breaks execution (e.g. when a tool is annotated
+with `@Tool` and has no parameters).
+
+Your task is to remove that defect so that:
+
+1. `ToolExecutionRequestUtil.argumentsAsMap(String)`  
+   – returns `Collections.emptyMap()` when the provided string is `null`,
+   empty or contains only whitespace.
+
+2. Every conversion layer that turns a `ToolExecutionRequest` into a
+   model-specific structure (for example the Anthropic client mapper) must
+   follow the same rule: an absent / blank `arguments` string must become an
+   empty map instead of being parsed.
+
+After the change:
+• Tools without parameters can be invoked successfully.  
+• Existing functionality that already works must keep working.
+
+All unit and integration tests – old and new – must pass.

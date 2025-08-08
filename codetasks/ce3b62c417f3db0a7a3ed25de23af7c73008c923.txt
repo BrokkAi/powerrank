@@ -1,0 +1,19 @@
+Background  
+`OpenSshServerKeyDatabase` is responsible for verifying a server’s host key against a set of OpenSSH `known_hosts` files and, if necessary, recording a new or changed key.  Two defects have been uncovered:
+
+1. If several `known_hosts` files contain patterns that match the current host, and the user decides to store a **new** key (because none of the matched lines contained that key), the code always rewrites the *first* file even when the matching pattern was located in another file.  
+2. When no existing pattern matches and a completely new line must be appended, the generated host-pattern list may contain duplicates (e.g. `localhost` twice) and may omit the server’s IP address.
+
+Task  
+Repair `OpenSshServerKeyDatabase` so that
+
+• The file that actually contained the matching pattern is the one that is modified or overwritten.  
+• A newly written line contains each host pattern (hostname and IP address, with and without explicit port if appropriate) at most once.  
+• The IP address is considered a candidate pattern even when the connection was initiated with the hostname.  
+• All existing behaviour continues to work; all unit tests (old and new) must pass.
+
+Notes  
+– The defects surface in the public methods `accept`, `getCandidates`, and `createHostKeyLine`; you are free to refactor these or other helpers.  
+– Remember that the default SSH port is 22.  
+– Only the first **hashed** host pattern may be written when host-name hashing is enabled (see the OpenSSH `known_hosts` format).  
+– No regression in handling revoked keys, strict-host-key-checking modes, or user-interaction prompts is allowed.

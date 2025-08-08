@@ -1,0 +1,44 @@
+### Problem
+
+The sandbox query `SortedSetDocValuesMultiRangeQuery` (used through
+`DocValuesMultiRangeQuery.SortedSetStabbingBuilder`) currently only
+accepts *ranges* expressed as two `BytesRef` values
+(`lowerInclusive, upperInclusive`).  
+Many usages produce “ranges” whose lower and upper bounds are identical.
+Treating such *single-value* cases like a normal range is wasteful:
+
+* building code has to pass both bounds even though they are equal, and  
+* the query implementation performs two costly `TermsEnum.seekCeil`
+  operations although the second one can never move.
+
+Add first-class support for single-value clauses and make the query skip
+the redundant second seek when a clause is known to match exactly one
+ordinal.
+
+### Functional requirements
+
+1. `DocValuesMultiRangeQuery.SortedSetStabbingBuilder`
+   must expose an additional  
+   `add(BytesRef singleValue)` method that registers a clause matching
+   exactly this one value.
+2. A helper constructor for the internal immutable value holder
+   (currently called `ByteRange`) must allow creation from the single
+   value.
+3. `SortedSetDocValuesMultiRangeQuery`
+   must recognise such single-value clauses and perform **only one**
+   `TermsEnum.seekCeil` call when lower and upper values are equal.
+4. All existing behaviour for real ranges must remain unchanged.
+5. All provided unit tests, including the new ones that rely on the
+   optimisation, must pass without modification.
+
+### Notes
+
+* A clause created through the new one-argument `add` must be considered
+  identical (for equality / hashing) to a two-argument clause whose
+  lower and upper bounds are the same.
+* The performance optimisation is purely internal; query semantics are
+  unchanged: the clause still matches documents whose sorted-set
+  doc-value contains **exactly** that single term.
+
+Implement the above so that the full Maven/Gradle test suite supplied
+with the exercise passes.

@@ -1,0 +1,55 @@
+### Problem
+
+Cassandra’s Replica Filtering Protection (RFP) merges the results returned by each
+replica and, if it detects divergence, issues *extra* “protected” reads to the
+no-longer-filtered replicas so that their data can be compared and repaired.
+When a CQL query contains `LIMIT`, however, the current RFP implementation will
+still **consume every row in the partition** before it decides whether or not it
+needs an additional read.  
+If the user asked for only a handful of rows, reading the whole partition
+unnecessarily activates **Short Read Protection (SRP)** and extra disk/network
+work is performed even though the data is never returned to the client.
+
+Your task is to modify RFP so that
+
+1. it consumes **the whole partition** only when that is strictly required, and  
+2. otherwise stops reading after it has consumed the number of rows dictated by
+   the query’s `LIMIT`.
+
+As a result, SRP must be triggered **only** when it is really needed.
+
+### Functional requirements
+
+1. When the read command  
+      • has an unlimited row limit, **or**  
+      • targets more than one partition, **or**  
+      • contains a filter on a static column,  
+   the existing behaviour stays unchanged: the whole partition is consumed.
+
+2. Otherwise, the first-phase iterator must stop after `limits().count()` rows
+   from the current partition have been returned.  
+   Continuing to the next partition (if any) must resume from the next call to
+   `hasNext()`/`next()`.
+
+3. The *merge listener* that caches the rows already read must be told to
+   checkpoint (populate its builders) every time we intentionally stop reading a
+   partition early, so that subsequent protected reads can be built from the
+   cached data.
+
+4. Metrics:
+   • The existing `tableMetrics.rfpRowsCachedPerQuery` must still receive
+     accurate updates even when partitions are read partially.  
+   • The existing SRP metrics must **not** increase when the new early-stop
+     path is taken.
+
+5. `PartitionIteratorMergeListener.columns(..)` must be accessible from the new
+   code path.
+
+6. All provided unit and distributed tests, old and new, must pass.
+
+### Non-functional requirements
+
+• The new code is **not thread-safe**; enforce this contract explicitly.  
+• Do not increase the number of allocations per read more than strictly
+  necessary.  
+• Follow the project’s existing style and error-handling conventions.

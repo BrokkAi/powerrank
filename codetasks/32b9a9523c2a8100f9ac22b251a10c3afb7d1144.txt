@@ -1,0 +1,29 @@
+### Problem Statement  
+
+`SubmoduleUpdateCommand` is responsible for making the work-tree of every registered submodule match the commit recorded in the super-project’s index/HEAD.  
+The current implementation cannot cope with the following situation:
+
+* The submodule’s **gitdir** (`<super-project>/.git/modules/<path>`) still exists and contains a valid repository.
+* The corresponding **work-tree** (`<super-project>/<path>`) has been deleted (for instance after `git clean -f -d`).
+
+When `SubmoduleUpdateCommand` tries to update such a submodule it decides to *clone* it.  
+The clone fails because the target gitdir is *not empty*, and the whole update aborts with an exception.
+
+Your task is to extend JGit so that `SubmoduleUpdateCommand` behaves like native Git/cgit in this case:
+
+1. Detect that the gitdir already exists and is non-empty while the work-tree is missing.  
+   This must be treated as a “restored” submodule, *not* as a fresh clone.
+
+2. Restore the work-tree by creating a `.git` **file** inside `<path>` that points to the existing gitdir (the usual “gitdir: …” indirection).
+
+3. Once the repository is usable:
+   * Perform a `fetch` if `SubmoduleUpdateCommand` was created with `.setFetch(true)` **or** if we just restored the submodule.
+   * Check out the recorded commit **unconditionally** (ignore any previously configured update mode such as `merge` or `rebase`).  
+     The same unconditional checkout must also be used for freshly cloned submodules.
+
+4. A new update mode constant `checkout` (value `"checkout"`) has been added to Git since JGit 7.2.  
+   Introduce `ConfigConstants.CONFIG_KEY_CHECKOUT` so it can be referred to from configuration and the implementation.
+
+5. All existing functionality (normal update, clone, merge, rebase, path filters, progress callbacks, etc.) must keep working.
+
+When you are finished, all unit tests in the project – both the existing ones and the new ones that check the scenarios above – must succeed.

@@ -1,0 +1,26 @@
+JGit’s `PackIndex` exposes the lightweight class `PackIndex.MutableEntry`, which represents one entry of a pack-index iterator and internally reuses a single `MutableObjectId` to avoid object churn.  
+For upcoming multi-pack-index work the iterator must be able to
+
+1. compare two `MutableEntry` instances by their SHA-1 without first converting them into immutable `ObjectId`s, and  
+2. copy the current SHA-1 into a caller-supplied `MutableObjectId`, again without allocations.
+
+Task  
+Add the required API to `PackIndex.MutableEntry` so that all current and newly added unit tests compile and pass.
+
+Required behaviour
+
+• `int compareBySha1To(MutableEntry other)`  
+  – returns a negative, zero, or positive value according to the lexicographical ordering of the two entries’ object ids.  
+  – must not allocate any new `ObjectId` instances.
+
+• `void copyOidTo(MutableObjectId dest)`  
+  – copies the entry’s object id into `dest`.  
+  – must not allocate any new objects; simply populate the supplied destination.
+
+Constraints
+
+• No regression: all existing public behaviour of `MutableEntry` and related classes must stay unchanged.  
+• New code must honour the object-reuse intention (no new `ObjectId` allocations in the two new methods).  
+• All JUnit tests in the repository, including those introduced in the referenced commit, must succeed.
+
+You are free to refactor internally if needed, but the public surface described above must be provided unchanged.

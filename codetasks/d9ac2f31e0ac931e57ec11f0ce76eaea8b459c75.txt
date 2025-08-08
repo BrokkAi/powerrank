@@ -1,0 +1,32 @@
+Background  
+In a partial-clone capable repository JGit maintains an “object-size index” (file
+extension defined by `PackExt.OBJECT_SIZE_INDEX`).  
+For packs produced by *in-memory* inserters (§ `PackInserter`) this index is
+already written during `flush()`.  
+When a pack is received through an `ObjectDirectoryPackParser`, however, no
+index is produced, therefore later look-ups such as
+`Pack#getIndexedObjectSize(ObjectId)` fail for these packs.
+
+Task  
+Extend `ObjectDirectoryPackParser` so that it always creates the object-size
+index exactly like the `PackInserter` path does.
+
+Requirements
+1. When `PackConfig#isWriteObjSizeIndex()` is true the parser shall  
+   • build the index after the ordinary *.idx* file has been written, using  
+     `PackObjectSizeIndexWriter.createWriter(OutputStream,intMinimumSize)` and  
+   • include every object whose inflated size is ≥ the configured
+     `PackConfig#getMinBytesForObjSizeIndex()` threshold.  
+2. The index file must be written atomically next to the final *.pack* and
+   *.idx* files and made read-only, mirroring the way the main index is handled.  
+3. All temporary files created while parsing have to be deleted (or scheduled
+   for deletion on exit) if parsing fails or is aborted.  
+4. After a successful parse `Pack#hasObjectSizeIndex()` must return `true`
+   and `Pack#getIndexedObjectSize(ObjectId)` must return  
+   • the stored size for indexed objects,  
+   • –1 for objects below the threshold, objects of other types, or objects not
+     contained in the pack.  
+5. Behaviour of every existing public API besides the above must remain
+   unchanged.
+
+All supplied unit tests, old and new, must pass.

@@ -1,0 +1,35 @@
+Brokk now distinguishes between a fragment’s long description (description()) and a concise label (shortDescription()).  
+
+Your job is to wire this new field through every place where fragments are created, frozen, (de-)serialised, dropped or printed so that both the existing test-suite and the new tests contained in this exercise succeed.
+
+What has changed
+
+1. ContextFragment already exposes shortDescription().  
+   • For most live fragments it is identical to description().  
+   • For the virtual FrozenFragment it is a new, dedicated field.
+
+2. FrozenFragment  
+   • Needs an extra instance field that stores the short description.  
+   • shortDescription() must return this value instead of the long one.  
+   • The value is part of the “content hash” that identifies identical frozen fragments – therefore the hash calculation must be updated to include it.  
+   • All factory helpers (fromLive, fromDto, etc.) and the private constructor must accept / propagate the new parameter.
+
+3. Serialisation  
+   • FragmentDtos.FrozenFragmentDto adds a shortDescription column.  
+   • When a DTO is produced the shortDescription has to be written; when a DTO is read it has to be restored (fall back to description when the field is absent/null to maintain backward compatibility).
+
+4. Mapping helpers  
+   • DtoMapper.{toFrozenFragmentDto,fromFrozenFragmentDto,toFragmentDto} have to read / write / forward the short description.
+
+5. ContextManager.drop  
+   • Now receives a Collection<? extends ContextFragment>.  
+   • It must convert these to their ids, update the live context and write a human readable line to io.systemOutput that lists the fragments’ short descriptions, comma separated.
+
+6. WorkspacePanel.doDropAction and WorkspaceTools.drop also hand full fragments to ContextManager.drop; do not regress this behaviour.
+
+7. Tests  
+   • ContextSerializationTest now also asserts that shortDescription survives a complete serialise → deserialise round-trip.
+
+Implementation details
+• Dropping fragments prints the message “Dropped <shortDesc1>, <shortDesc2>, …” (exact format needed by tests).  
+• Backwards compatibility: loading an old JSON/YAML that does not contain shortDescription must still work – in that case the field is taken from description.

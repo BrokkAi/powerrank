@@ -1,0 +1,29 @@
+### Goal
+Upgrade the code-base so that Lucene can efficiently gather document ids into a `FixedBitSet` while flushing soft-deletes or mixed DocValues updates.  
+All existing tests and the new test `TestMixedDocValuesUpdates.testLongRunValuesReset` must pass.
+
+### Background
+1. `DocIdSetIterator` recently gained the helper  
+   `void intoBitSet(int upTo, FixedBitSet target, int offset)`  
+   which is able to copy all doc ids smaller than *upTo* into a mutable bit-set.
+2. Lucene’s soft-delete and DV-update flushing logic must now rely on this helper instead of iterating one id at a time.
+3. A `FixedBitSet` returned from `FixedBitSet.ensureCapacity` must always be large enough to allow a subsequent `set(numBits)` call without resizing.
+
+### Required Behaviour
+1. `IndexedDISI`
+   • While writing postings, use the iterator’s `intoBitSet` to collect bits block-by-block.  
+   • Correctly maintain jump tables, block cardinalities and the final “NO_MORE_DOCS” block.
+
+2. `ReadersAndUpdates`
+   • When soft-delete updates and on-disk values are merged, call `intoBitSet` on both sources, combine them and keep all iterator invariants (`docID()`, `cost()`, …) intact.  
+   • The merge has to respect removals: if an update erases the value that is still present on disk, the bit must be cleared again.
+
+3. `FixedBitSet.ensureCapacity`
+   • The method’s contract is strengthened: the returned instance must be able to address **numBits** *inclusive*, i.e. a later `set(numBits)` must never trigger an `IndexOutOfBoundsException`.
+
+### Acceptance Criteria
+• All unit tests, including the new long-running mixed DV update test, succeed.  
+• No performance regression in soft-delete flushing (the code must use `intoBitSet` instead of individual `nextDoc()` calls).  
+• API contracts (`intoBitSet`, `ensureCapacity`) are fulfilled everywhere they are used.
+
+You may change any production code, but do not modify the tests.

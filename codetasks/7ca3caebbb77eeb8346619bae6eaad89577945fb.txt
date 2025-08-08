@@ -1,0 +1,35 @@
+Task summary  
+The Brokk code-base already lets a client delete a secondary work-tree with  
+
+git worktree remove <path>  
+
+but that command fails if the work-tree is dirty, locked, or otherwise non-empty.  
+We now want an API that
+
+1. allows the caller to say whether the removal should be forced and
+2. lets the caller know, in a typed way, when a non-forced removal
+   failed only because “force” was required.
+
+Required behaviour
+
+File: src/main/java/io/github/jbellis/brokk/git/IGitRepo.java  
+• Replace the old default method  
+  void removeWorktree(Path path)  
+  with  
+  void removeWorktree(Path path, boolean force)  
+  (default implementation may still throw UnsupportedOperationException).
+
+File: src/main/java/io/github/jbellis/brokk/git/GitRepo.java  
+• Implement the new signature.  
+• Error handling  
+  – If the command fails and force==false, inspect the stderr/stdout text.  
+    When it contains any of the typical markers  
+        “use --force”, “not empty”, “dirty”, “locked working tree”  
+    throw the new checked exception WorktreeNeedsForceException.  
+  – In every other failure case throw GitRepoException (unchanged name).  
+• Constructors of GitRepoException and GitStateException must now be
+  public so the tests can create/catch them.  
+• Create public static class WorktreeNeedsForceException
+  extends GitRepoException.
+
+Other code already modified (GUI, etc.) must continue to compile.

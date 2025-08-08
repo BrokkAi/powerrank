@@ -1,0 +1,62 @@
+Title
+SAI index-build crashes when a row produces no indexable terms
+
+Background
+The Storage-Attached Index (SAI) organises the data of each SSTable in “segments”.  
+For every row added to a segment, SegmentBuilder.add(List<ByteBuffer> terms,
+PrimaryKey key, long sstableRowId) keeps track of
+
+• row-id and key ranges (min / max)  
+• the smallest and largest term seen in the segment.
+
+SegmentMetadataBuilder later persists those ranges.
+
+Problem
+If the chosen Lucene/ICU analyzer returns an empty token stream (e.g. an empty
+string, a row that only contains stop-words, …), the `terms` list handed to
+SegmentBuilder.add() is empty.  
+The current implementation still tries to update the term range and leaves
+minTerm / maxTerm unset (`null`).  During flush this explodes with
+
+  java.lang.IllegalStateException: Term range not set
+    at SegmentMetadataBuilder.build(...)
+
+It also allows several other invalid states (out-of-order keys, rowIds added
+after flush, etc.) to slip through because the code relies on JVM *assert*
+statements that are disabled in production.
+
+Task
+Make the segment building code robust when a row yields no indexable terms and
+add defensive checks that fail fast with meaningful messages.
+
+Requirements
+
+1. SegmentBuilder.add(...)
+   • If the supplied `terms` list is empty, ignore the row completely and return
+     0 without mutating any builder state.
+   • Otherwise verify:
+     – the builder has not been flushed yet,  
+     – sstableRowId is ≥ the last rowId that was added,  
+     – key is ≥ the last key that was added,  
+     – `term` objects are non-null,  
+     and abort with an IllegalStateException / IllegalArgumentException when a
+     precondition is violated (do not rely on `assert`).
+
+   • After updating the term range ensure minTerm and maxTerm are non-null.
+
+2. SegmentMetadataBuilder
+   • setKeyRange(), setRowIdRange() and setTermRange() must reject null
+     arguments and ensure the “min” value is ≤ the “max” value using regular
+     argument checks (again, not `assert`).
+
+3. The public behaviour of every other class must stay intact; new and existing
+   unit tests provided by the harness must all pass.
+
+Scope
+Only modify the SAI segment builder / metadata builder logic and related helper
+code. No changes to external APIs are expected.
+
+Outcome
+Index creation, flushing and compaction must succeed even when some rows
+generate zero indexable terms, and illegal usage must surface immediately with
+clear exceptions instead of latent JVM assertions.

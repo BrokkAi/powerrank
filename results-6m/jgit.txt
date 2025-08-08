@@ -1,0 +1,13 @@
+9b51ec8f2ff1a118844227c1ea41f0f0fe05e2ef  MultiPackIndex: Add and implement #resolve() method
+427af12623e75c700107b23e07e7aa3235158b59  Pack: getter for the indexed object size (when available)
+1ff9c2a1cbd5ac718559eef152d954755f257bc8  FileReftableDatabase: consider ref updates by another process
+072e93fded7229f00002232b33ed91a0ef614ddb  midx.MultiPackIndexWriter: a writer for the multipack index format
+c5bf0fba157dad5ce91d97a6c506ef7b86f5c374  [ssh known_hosts] Handle host certificates
+32b9a9523c2a8100f9ac22b251a10c3afb7d1144  Submodules: Update submodule with deleted worktree
+ccef9d428c219d92a6300ec91af4f8245dc32cd4  PackIndex.MutableEntry: new methods to copy its contents
+52dc9fdd0d65fa06d6c98072a16b181a024c533b  BlameGenerator: Use cache only for candidates modifying the path
+46d742588bb037a4a18f0a85e0e4f6834e654cd5  AddCommand: implement --all/--no-all
+3edab4e9fd1b29fe676d8f66b99c93a2db482ad6  [ssh known_hosts] Handle unknown keys better
+e2ddcc96903ee411e6933495ae07251a7c55e4c9  TreeRevFilter: enable Bloom Filter usage with ChangedPathTreeFilter
+8929300aa80fb11fce2e6b3f411de02c716e7afb  PackInserter: write object-size index with the pack
+ce3b62c417f3db0a7a3ed25de23af7c73008c923  [ssh known_hosts] Add tests and fix problems

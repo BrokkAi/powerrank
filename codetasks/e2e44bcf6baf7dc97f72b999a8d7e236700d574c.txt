@@ -1,0 +1,39 @@
+### Problem
+
+Lucene’s `DocIdSetIterator` got a new bulk-loading API  
+```java
+void intoBitSet(int upTo, FixedBitSet dest, int offset)
+```  
+which copies all currently matching document ids that are smaller than `upTo`
+into `dest`, shifted by `offset`.  
+After the call the iterator must be positioned on the first id that is
+`>= upTo` (or on `NO_MORE_DOCS`).
+
+The implementation is still missing for iterators that are based on the
+compact “IndexedDISI” format, and every DocValues iterator that internally
+uses an `IndexedDISI` has to delegate to it.
+
+### Tasks
+
+1. Implement `IndexedDISI.intoBitSet(...)`  
+   – Copy the current `docID()` (if it is `< upTo`) and all following ids
+     into the supplied `FixedBitSet` until the first id `>= upTo` (or
+     `NO_MORE_DOCS`) is reached.  
+   – Leave the iterator positioned on this first **non-copied** id.  
+   – Update all internal counters (`index()`, etc.) exactly as if the same
+     amount of `nextDoc()` calls had been executed one by one.
+
+2. Ensure every `DocValuesIterator` that wraps an `IndexedDISI`
+   (`Numeric`, `Binary`, `Sorted`, `SortedNumeric`, `SortedSet`, …) forwards
+   the call to the underlying `IndexedDISI`.
+
+3. Keep the contract that the iterator’s state is valid for a subsequent
+   `docIDRunEnd()` call when the method returned `true`, and that it is
+   illegal to invoke `intoBitSet` or `docIDRunEnd` after
+   `advanceExact(..)` returned `false`.
+
+### Acceptance criteria
+
+All unit tests in the repository, including the new randomized tests in  
+`TestIndexedDISI`, as well as the additional assertions in
+`AssertingLeafReader`, must pass.

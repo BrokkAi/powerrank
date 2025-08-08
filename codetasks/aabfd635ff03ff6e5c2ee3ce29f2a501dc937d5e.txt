@@ -1,0 +1,36 @@
+### Problem Summary  
+LLM answers are often “noisy”: besides the desired JSON, they may contain explanation text, code snippets, or even other, unrelated `{ … }` / `[ … ]` fragments.  
+Several components of LangChain4j – `JsonExtractorOutputGuardrail`, `PojoOutputParser` and some low-level helpers – must be able to
+
+1. recognise and isolate the first JSON object **or** JSON array in an arbitrary character sequence,  
+2. parse that substring into the requested Java type, and  
+3. report both the parsed value and the exact JSON substring that was used.
+
+If nothing in the text can be parsed into the requested type, the components must fail gracefully (return `Optional.empty()` or throw `OutputParsingException`, depending on the caller).
+
+### Functional Requirements  
+
+1. A new internal utility `JsonParsingUtils` must expose  
+   • `extractAndParseJson(String text, Class<T> type)`  
+   • `extractAndParseJson(String text, ThrowingFunction<String,T> parser)`  
+   The methods return `Optional<ParsedJson<T>>`, where `ParsedJson` is a record holding the parsed value and the raw JSON.  
+   They should  
+   a. first try to parse `text` directly;  
+   b. if that fails, scan the text for the **first syntactically balanced object or array** that *can* be parsed with the supplied parser;  
+   c. if such a fragment is found, return it; otherwise return `Optional.empty()`.
+
+2. `JsonExtractorOutputGuardrail` must delegate JSON detection to the new utility and, on success, keep the *trimmed* JSON as the content field in successful results.
+
+3. `PojoOutputParser` must also rely on the new helper; it should no longer use the previous regex-based approach.
+
+4. Error handling:  
+   • If extraction/parsing ultimately fails, the original fall-back behaviour (reprompting or raising `OutputParsingException`) must stay unchanged.  
+   • Exception types thrown from the new utility must not leak – callers continue to decide what to do when the `Optional` is empty.
+
+5. Existing public APIs and test expectations must remain binary-compatible and semantically intact.
+
+### Constraints  
+
+• The solution has to work for nested/bracketed JSON as well as simple arrays.  
+• Handling must be insensitive to leading/trailing or interleaved non-JSON text.  
+• All new and existing unit tests in the repository must pass.

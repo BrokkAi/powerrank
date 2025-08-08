@@ -1,0 +1,28 @@
+### Context  
+A utility is responsible for transforming the `arguments` field of a `ToolExecutionRequest` (a JSON string) into a `Map<String, Object>`.  
+Up until now it only coped with two irregularities:
+
+1. A trailing comma immediately before the final `}` or `]`.
+2. Standard, well-formed JSON.
+
+When the `arguments` string itself is *wrapped in double quotes* (e.g.  
+`"{\"foo\":\"bar\"}"` or `"{"foo":"bar"}"`), or when it contains *escaped* inner
+quotes, the existing implementation forwards the malformed text to the JSON
+parser and fails.
+
+### Required behaviour  
+`ToolExecutionRequestUtil.argumentsAsMap(String arguments)` must also accept:
+
+1. A JSON object or array wrapped in a pair of leading / trailing double quotes.
+2. Any inner quotes that are back-slash escaped (`\"`) once because of that
+   outer wrapping.
+3. The combinations of (1) and (2) with or without a trailing comma anomaly that
+   was already handled.
+
+After the conversion:
+
+• The resulting `Map` must correctly reflect the JSON content (e.g. the example
+above must yield `{"foo" -> "bar"}`).  
+• Existing, already-accepted input formats must continue to work unchanged.  
+
+All unit tests (old and new) must pass.

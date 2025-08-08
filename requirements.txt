@@ -1,0 +1,9 @@
+litellm
+pytest
+matplotlib
+pyqt6
+pystache
+tqdm
+httpx
+openai
+pygit2

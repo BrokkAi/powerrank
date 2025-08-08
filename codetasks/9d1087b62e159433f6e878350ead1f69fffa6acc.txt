@@ -1,0 +1,41 @@
+LangChain4j – Ollama integration  
+
+Several new tests rely on two new internal utilities that are **referenced** by the
+recent refactoring but are still missing in the code-base:
+
+1. dev.langchain4j.internal.ExceptionMapper  
+   • must expose a public static field `DEFAULT`  
+   • must offer a method  
+     `Throwable mapException(Throwable original)`  
+   • the default implementation has to return the already existing,
+     more specific LangChain4j exceptions instead of the low-level one.
+     At the moment the tests need only one concrete rule:  
+       – When the supplied throwable (or one of its causes) is an
+         `dev.langchain4j.exception.HttpException`
+         whose `statusCode()` is **404**, it has to be converted to
+         `dev.langchain4j.exception.ModelNotFoundException`
+         while preserving the original message and linking the original
+         exception as the cause.  
+     For every other case the mapper must return the input throwable
+     unchanged.
+
+   The file `OllamaClient.java` already calls  
+   `ExceptionMapper.DEFAULT.mapException(...)`.  
+   Your implementation must therefore be thread-safe and have no
+   external dependencies.
+
+2. dev.langchain4j.internal.Utils.copy  
+   The refactor replaced the old `copyIfNotNull` helper with
+   `copy(...)`.  
+   Implement two overloads that create defensive copies or return
+   `null` when the argument is `null`:
+
+     • `static <T> List<T> copy(List<T> source)` – returns a new
+       `ArrayList<>(source)` or `null`.
+
+     • `static <T> Set<T>  copy(Set<T> source)` – returns a new
+       `LinkedHashSet<>(source)` or `null`.
+
+All other behaviour of the library must stay intact; compile-time
+compatibility with the updated sources and successful execution of **all
+existing and newly added tests** are required.

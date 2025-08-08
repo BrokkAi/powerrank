@@ -1,0 +1,33 @@
+### Problem  
+
+The `langchain4j-mcp` module contains a client (`DefaultMcpClient`) that talks to an external “MCP” server started as a child process through the `StdioMcpTransport`.  
+The current implementation shows two gaps:
+
+1.	After the client is closed the public API methods can still be invoked and will try to keep working instead of failing fast.
+2.	Shutting the client down does **not** reliably stop the spawned server process, nor does it close the streams that the two background threads (`ProcessIOHandler` and `ProcessStderrHandler`) use.  
+   If those streams are abruptly broken while the threads are still reading, exceptions bubble up and the JVM may keep running because the process or the background threads remain alive.
+
+### What to implement  
+
+1.	“Closed-guard”  
+    •	The `DefaultMcpClient` must remember that it has been closed.  
+    •	Every public operation (`listTools`, `executeTool`, `listResources`, `readResource`, `listPrompts`, `getPrompt`, `listResourceTemplates`, `checkHealth`) must check that flag and throw `IllegalStateException` when the client has already been closed.  
+
+2.	Clean shutdown of stdio transport  
+    •	The two helper threads reading from the child process (`ProcessIOHandler`, `ProcessStderrHandler`) must implement `java.io.Closeable`.  
+    •	Calling `close()` on the transport must  
+        – mark both handlers as closed,  
+        – close their output / error streams,  
+        – finally destroy the child `Process`.  
+      Closing the streams must not raise visible exceptions.  
+
+3.	Graceful end of background threads  
+    •	The two handler classes must silently ignore the `IOException` that is inevitably thrown when their underlying stream is closed because the client shut down.  
+    •	They must still log and re-throw unexpected errors while the client is running.  
+
+With these changes:
+
+* Any attempt to use a `DefaultMcpClient` after `close()` will fail immediately with `IllegalStateException`.
+* `close()` stops the background threads, releases all streams, and terminates the child process, so the JVM can exit cleanly.
+
+All existing and newly added tests must pass.

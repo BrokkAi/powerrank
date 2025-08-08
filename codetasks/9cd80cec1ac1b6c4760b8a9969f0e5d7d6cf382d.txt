@@ -1,0 +1,54 @@
+Background  
+SAI can add per-query parameters through the WITH ann_options map.  
+Until now only the integer option rerank_k was supported.  
+A new boolean option use_pruning must be introduced so callers can
+explicitly enable or disable the pruning heuristic that the vector
+search engines (DiskANN/JVector and the in-memory graph) use to trade
+off recall for latency.
+
+Task  
+1. Extend the existing ANNOptions model so that it can hold the new,
+   optional flag use_pruning.  
+   • Key name in CQL map: 'use_pruning'.  
+   • Legal values (case-insensitive): the literals “true” or “false”.  
+   • Unknown keys continue to raise InvalidRequestException.  
+   • When the map is absent or the key is not present, the value in
+     JVM system property cassandra.sai.jvector.use_pruning_default
+     (default “true”) acts as the query’s default.
+
+2. Parsing / validation  
+   • Parsing must convert the textual value to Boolean.  
+   • Validation rules of rerank_k stay unchanged.  
+   • use_pruning itself does not need additional validation.
+
+3. CQL round-trip  
+   • The query formatter (toCQLString) must include use_pruning when it
+     is non-null, preserving any existing rerank_k entry.
+
+4. Transport / storage  
+   • Update ANNOptions.serializer so the flag is written, read and
+     sized correctly.  
+   • Backwards compatibility: keep the bit-flag scheme; add one more
+     bit for the new field and ignore unknown bits when *deserialising*.
+
+5. Query execution  
+   • Orderer must expose a boolean usePruning() that returns the value
+     carried by ann_options when present, otherwise the JVM default.  
+   • All vector searches that already receive rerankK also need the
+     extra boolean parameter and must forward it to the underlying
+     graph/searcher.  
+   • Threshold / bounded ANN queries (the code paths used for
+     “WHERE … > ? ORDER BY v ANN OF …”) must always call the same
+     internal search routine with usePruning = false – i.e. these
+     queries never prune.
+
+6. Default constant  
+   • Add public static boolean
+     V3OnDiskFormat.JVECTOR_USE_PRUNING_DEFAULT that reads the system
+     property mentioned above at class initialisation.
+
+7. Equality / hashCode  
+   • Include the new field in equals() and hashCode().
+
+All old behaviour must remain unchanged when use_pruning is not
+supplied, and every new and existing test must compile and pass.

@@ -1,0 +1,30 @@
+### Goal  
+Enhance Cassandra’s snapshot subsystem so that the same **ephemeral** snapshot can be taken repeatedly (e.g. during a force-repair) without failing, while still behaving strictly for all other snapshot types.
+
+### Functional requirements  
+
+1. Attempting to hard-link a component that **already has a link in the target snapshot directory** must _not_ fail if the caller explicitly requests a _forced_ operation.  
+   • If the operation is _not_ forced, the existing behaviour (“duplicate hard-link” is an error) must stay unchanged.
+
+2. Re-taking an **ephemeral** snapshot with the same tag on the same table must  
+   • keep the existing `TableSnapshot` object (so `listsnapshots -e` still shows a single entry),  
+   • add links for any newly flushed/compacted SSTables, silently skipping components that were already linked,  
+   • update the snapshot’s manifest so it becomes the union of the previous and the newly added SSTables, and  
+   • make the “size on disk” reflect the current state (the value can grow between successive takes).
+
+   Trying the same with a **non-ephemeral** snapshot must still raise the usual “snapshot already exists” error.
+
+3. `nodetool listsnapshots -e` must therefore:
+   • never throw because of duplicate hard-links while an on-going repair is forcing the snapshot,
+   • show only one row for the snapshot tag, and
+   • display a size that increases when additional SSTables are snapshotted later on.
+
+### Non-functional requirements  
+
+* All previously supported snapshot operations and their failure modes must remain intact.  
+* Unit and distributed tests that already passed must keep passing.  
+* New classes / methods added for this feature must be properly integrated with existing public API (e.g. `SnapshotOptions`, `SSTableReader`, `FileUtils`, `SnapshotManager`, etc.).
+
+### Acceptance criteria  
+
+A build that includes the changes must compile and all supplied tests (unchanged and new) must run successfully with `ant test` / `gradlew test`.

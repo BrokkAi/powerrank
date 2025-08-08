@@ -1,0 +1,33 @@
+### Goal
+Extend the Brokk Git integration so that merge-conflict detection works reliably even when the user’s work-tree is dirty, and guarantee that **all new and existing unit–tests pass**.
+
+### Required behaviour
+
+1. ​Work-tree cleanliness checks for squash merges  
+   • `GitRepo.squashMergeIntoHead(String branchName)` must **refuse to run** if the current
+     work-tree  
+     – contains any files staged for addition or change,  
+     – has tracked files modified, removed or missing, or  
+     – owns untracked files that would be overwritten by the forthcoming merge.  
+   • In any of these cases the method must throw the new checked exception  
+     `GitRepo.WorktreeDirtyException`, whose message clearly explains the reason
+     (see the new unit tests for the exact wording that is expected).
+
+2. New exception type  
+   Implement `GitRepo.WorktreeDirtyException extends GitAPIException` inside `GitRepo`
+   so callers can distinguish a “dirty work-tree” from ordinary Git failures.
+
+3. Conflict simulation in a **temporary work-tree**  
+   `GitRepo.checkMergeConflicts(String worktreeBranch, String targetBranch, MergeMode mode)`
+   is now required to  
+   • abort immediately with `WorktreeDirtyException` if the **target** work-tree is dirty as
+     defined above;  
+   • create a detached, throw-away work-tree (via `git worktree add --detach …`) that
+     is checked out at the target branch’s tip;  
+   • perform either a rebase or merge **inside that temporary work-tree** with  
+     `setCommit(false)` (and `setSquash(true)` when the caller requested `SQUASH_COMMIT`);  
+   • report conflicts in a human-readable string, or return `null` when no conflicts are
+     detected;  
+   • always clean up: the original repository must be back on its initial branch and in
+     `RepositoryState.SAFE`, and the temporary work-tree directory has to be removed
+     with `git worktree remove --force`.

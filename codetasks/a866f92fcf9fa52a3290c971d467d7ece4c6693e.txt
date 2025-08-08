@@ -1,0 +1,38 @@
+Accord has gained new inspection and tracing capabilities that are surfaced through a set of virtual tables under
+system_accord_debug.  
+Code that backs those tables is now referenced from the test-suite but the implementation is still missing/partial.
+Complete the implementation so that the following are true:
+
+1. Tracing
+   • AccordAgent.trace(txnId, eventType) must return a Tracing instance when tracing has been
+     enabled for the supplied (txnId,eventType) pair, otherwise it must return null.  
+   • Tracing instances must collect ordered messages (commandStoreId + String) that can be
+     appended from any thread.  
+   • Permits (how many events may be recorded per pair) are configured through
+     AccordTracing.setPermits(..) and can be reset/erased by the various *erase* methods.  
+   • A maximum of 10 000 events can be kept globally; when the limit is reached further calls to
+     trace(..) must be ignored.  
+   • AccordTracing.forEach(..) must deliver an immutable view of the current state so that the
+     virtual tables can present an accurate, race-free snapshot.
+
+2. Journal debugging
+   • AccordJournal.debugCommand(commandStoreId, txnId) must return every journal record that
+     belongs to the supplied transaction for that store, in the order they appear in the journal.
+     Each item is returned as a DebugEntry comprising segment, position and an already
+     deserialised CommandChange.Builder.
+
+3. Virtual tables
+   The newly added virtual tables (txn, journal, txn_trace, txn_traces) use the services above.
+   All helper methods added to AccordDebugKeyspace must work and tests that query or mutate
+   those tables must succeed.  
+   In particular the following CQL operations must behave as expected:
+     – UPDATE …txn_trace SET permits = N …  
+     – SELECT from txn_trace / txn_traces  
+     – DELETE rows or partitions from both tables, with or without range predicates.
+
+4. Concurrency / safety
+   The tracing and journal utilities are used from multiple threads.  Implement them with the
+   necessary thread-safety so that the unit tests can run deterministically.
+
+Your solution must compile, must not introduce regressions, and all existing as well as the newly
+added unit tests have to pass.

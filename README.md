@@ -1,4 +1,4 @@
-# Run the evaluation
+# Running the evaluation
 
 ## Prereqs
 
@@ -7,12 +7,12 @@
 favoriteModelsJson=\[{"alias"\\:"o3","modelName"\\:"o3","reasoning"\\:"DEFAULT"},{"alias"\\:"gp2.5-default","modelName"\\:"gemini-2.5-pro","reasoning"\\:"DEFAULT"},{"alias"\\:"flash-2.5","modelName"\\:"gemini-2.5-flash","reasoning"\\:"DEFAULT"},{"alias"\\:"r1","modelName"\\:"deepseek-R1","reasoning"\\:"DEFAULT"},{"alias"\\:"gp 2.5 low","modelName"\\:"gemini-2.5-pro","reasoning"\\:"LOW"},{"alias"\\:"o3-high","modelName"\\:"o3","reasoning"\\:"HIGH"},{"alias"\\:"gp 2.5 high","modelName"\\:"gemini-2.5-pro","reasoning"\\:"HIGH"},{"alias"\\:"Flash 2.5 lite","modelName"\\:"gemini-2.5-flash-lite","reasoning"\\:"DEFAULT"},{"alias"\\:"o4-mini","modelName"\\:"o4-mini","reasoning"\\:"DEFAULT"},{"alias"\\:"Sonnet4","modelName"\\:"claude-4-sonnet","reasoning"\\:"MEDIUM"},{"alias"\\:"q3c","modelName"\\:"qwen3-coder","reasoning"\\:"DEFAULT"},{"alias"\\:"flash-2.5-nothink","modelName"\\:"gemini-2.5-flash","reasoning"\\:"DISABLE"},{"alias"\\:"sonnet3.7","modelName"\\:"claude-3.7-sonnet","reasoning"\\:"MEDIUM"},{"alias"\\:"gp2.5-high","modelName"\\:"gemini-2.5-pro","reasoning"\\:"HIGH"},{"alias"\\:"flash-2.0","modelName"\\:"gemini-2.0-flash","reasoning"\\:"DEFAULT"},{"alias"\\:"sonnet4-nothink","modelName"\\:"claude-4-sonnet","reasoning"\\:"DEFAULT"},{"alias"\\:"flash-2.5-high","modelName"\\:"gemini-2.5-flash","reasoning"\\:"HIGH"},{"alias"\\:"o4-mini-high","modelName"\\:"o4-mini","reasoning"\\:"HIGH"},{"alias"\\:"sonnet4-high","modelName"\\:"claude-4-sonnet","reasoning"\\:"HIGH"},{"alias"\\:"v3","modelName"\\:"deepseek-v3","reasoning"\\:"DEFAULT"},{"alias"\\:"gpt-oss-120b","modelName"\\:"gpt-oss-120b","reasoning"\\:"DEFAULT"},{"alias"\\:"q3c-fp8","modelName"\\:"qwen3-coder","reasoning"\\:"DEFAULT"},{"alias"\\:"grok-3","modelName"\\:"grok-3-beta","reasoning"\\:"DEFAULT"},{"alias"\\:"k2","modelName"\\:"groq-kimi-k2","reasoning"\\:"DEFAULT"},{"alias"\\:"opus4.1","modelName"\\:"claude-4-1-opus","reasoning"\\:"MEDIUM"},{"alias"\\:"grok-3-mini","modelName"\\:"grok-3-mini-beta","reasoning"\\:"DEFAULT"},{"alias"\\:"grok-3-mini-high","modelName"\\:"grok-3-mini-beta","reasoning"\\:"HIGH"},{"alias"\\:"opus4.1-high","modelName"\\:"claude-4-1-opus","reasoning"\\:"HIGH"},{"alias"\\:"gpt-oss-120b-high","modelName"\\:"gpt-oss-120b","reasoning"\\:"DEFAULT"},{"alias"\\:"gpt5","modelName"\\:"gpt-5","reasoning"\\:"DEFAULT"},{"alias"\\:"gpt5-high","modelName"\\:"gpt-5","reasoning"\\:"HIGH"},{"alias"\\:"gpt5-mini","modelName"\\:"gpt-5-mini","reasoning"\\:"DEFAULT"},{"alias"\\:"gpt5-mini-high","modelName"\\:"gpt-5-mini","reasoning"\\:"HIGH"},{"alias"\\:"gpt5-nano","modelName"\\:"gpt-5-nano","reasoning"\\:"DEFAULT"},{"alias"\\:"gpt5-nano-high","modelName"\\:"gpt-5-nano","reasoning"\\:"HIGH"}\]
 ```
 2. Clone and open each project in Brokk first to populate the Build configuration
-   1. git@github.com:apache/lucene.git
-   2. git@github.com:BrokkAi/brokk.git
-   3. git@github.com:eclipse-jgit/jgit.git
-   4. git@github.com:datastax/cassandra.git
+   1. `git@github.com:apache/lucene.git`
+   2. `git@github.com:BrokkAi/brokk.git`
+   3. `git@github.com:eclipse-jgit/jgit.git`
+   4. `git@github.com:datastax/cassandra.git`
       a. Apache's Cassandra repo uses git submodules now which the `run` script doesn't know how to deal with, so this targets DataStax's fork instead.
-   5. git@github.com:langchain4j/langchain4j.git
+   5. `git@github.com:langchain4j/langchain4j.git`
 3. JDKs (when in doubt, use sdkman)  
    1. Lucene requires exactly Java 24\.  
    2. Cassandra requires exactly Java 11\.  
@@ -23,16 +23,26 @@ favoriteModelsJson=\[{"alias"\\:"o3","modelName"\\:"o3","reasoning"\\:"DEFAULT"}
 
 These include the full set of “open round” models for Brokk, and “finalist” models for the others. I recommend doing your first run with a couple faster/cheaper models (o4-mini and ds-v3 are my go-tos) as a sanity check before doing everything.
 
-1. **Brokk**  
-   BRK\_TESTALL\_CMD='sbt test' BRK\_TESTSOME\_CMD='sbt "testOnly{{\#fqclasses}} {{value}}{{/fqclasses}}"' BRK\_CPG\_CACHE=true BB\_DEBUG=1 uv run run.py \--project ../brokk \--model o3,v3,gp2.5-default,gp2.5-high,o3-high,sonnet4,sonnet4-high,o4-mini,o4-mini-high,flash-2.0,flash-2.5,flash-2.5-nothink,flash-2.5-high,sonnet4-nothink,k2,q3c,r1,gpt-oss-120b,grok-3-mini,grok-3-mini-high,grok-3,opus4.1,q3c-fp8,opus4.1-high \--mode code \--runs 3 \--threads 50 \< results-6m/brokk.txt 8m  
-2. **JGit**  
-   BRK\_SUPPRESS\_STDERR=true BRK\_TESTSOME\_CMD='JAVA\_HOME=/home/jonathan/.sdkman/candidates/java/21.0.8-amzn/ mvn \-DskipScriptExecution=true \--quiet test \-Dtest={{\#classes}}{{^first}},{{/first}}{{value}}{{/classes}} \-Dsurefire.failIfNoSpecifiedTests=false' BRK\_CPG\_CACHE=true BB\_DEBUG=1 uv run run.py \--project ../jgit \--model o3,gp2.5-default,sonnet4,o4-mini,flash-2.5,q3c,o4-mini-high,v3,opus4.1 \--mode code \--threads 50 \--runs 3 \< results-6m/jgit.txt  
-3. **LangChain4j**  
-   BRK\_TESTSOME\_CMD='JAVA\_HOME=/home/jonathan/.sdkman/candidates/java/21.0.8-amzn/ ./mvnw \--quiet test \-Dtest={{\#classes}}{{^first}},{{/first}}{{value}}{{/classes}} \-Dsurefire.failIfNoSpecifiedTests=false \-Dspotless.check.skip=true' BRK\_CPG\_CACHE=true BB\_DEBUG=1 uv run run.py \--project ../langchain4j \--model o3,flash-2.5,q3c,gp2.5-default,sonnet4,o4-mini,o4-mini-high,v3,opus4.1 \--mode code \--threads 50 \--runs 3 \< results-6m/langchain4j.txt  
-4. **Cassandra**  
-   BRK\_NO\_CONCURRENT\_BUILDS=true BRK\_TESTSOME\_CMD='JAVA\_HOME=/home/jonathan/.sdkman/candidates/java/11.0.28-amzn && {{\#classes}} ant test \-Dtest.name={{value}}{{^last}} && {{/last}} {{/classes}}' BRK\_CPG\_CACHE=true BB\_DEBUG=1 uv run run.py \-Xmx5G \--project ../cassandra-ds \--exclude CHANGES.txt \--model o3,flash-2.5,gp2.5-default,sonnet4,o4-mini,o4-mini-high,v3,q3c,opus4.1 \--mode code \--runs 3 \--threads 12 \< results-6m/cassandra.txt  
-5. **Lucene**  
+1. **Brokk**
+```
+   BRK\_TESTALL\_CMD='sbt test' BRK\_TESTSOME\_CMD='sbt "testOnly{{\#fqclasses}} {{value}}{{/fqclasses}}"' BRK\_CPG\_CACHE=true BB\_DEBUG=1 uv run run.py \--project ../brokk \--model o3,v3,gp2.5-default,gp2.5-high,o3-high,sonnet4,sonnet4-high,o4-mini,o4-mini-high,flash-2.0,flash-2.5,flash-2.5-nothink,flash-2.5-high,sonnet4-nothink,k2,q3c,r1,gpt-oss-120b,grok-3-mini,grok-3-mini-high,grok-3,opus4.1,q3c-fp8,opus4.1-high \--mode code \--runs 3 \--threads 50 \< results-6m/brokk.txt
+```
+2. **JGit**
+```
+   BRK\_SUPPRESS\_STDERR=true BRK\_TESTSOME\_CMD='JAVA\_HOME=/home/jonathan/.sdkman/candidates/java/21.0.8-amzn/ mvn \-DskipScriptExecution=true \--quiet test \-Dtest={{\#classes}}{{^first}},{{/first}}{{value}}{{/classes}} \-Dsurefire.failIfNoSpecifiedTests=false' BRK\_CPG\_CACHE=true BB\_DEBUG=1 uv run run.py \--project ../jgit \--model o3,gp2.5-default,sonnet4,o4-mini,flash-2.5,q3c,o4-mini-high,v3,opus4.1 \--mode code \--threads 50 \--runs 3 \< results-6m/jgit.txt
+```
+3. **LangChain4j**
+```
+   BRK\_TESTSOME\_CMD='JAVA\_HOME=/home/jonathan/.sdkman/candidates/java/21.0.8-amzn/ ./mvnw \--quiet test \-Dtest={{\#classes}}{{^first}},{{/first}}{{value}}{{/classes}} \-Dsurefire.failIfNoSpecifiedTests=false \-Dspotless.check.skip=true' BRK\_CPG\_CACHE=true BB\_DEBUG=1 uv run run.py \--project ../langchain4j \--model o3,flash-2.5,q3c,gp2.5-default,sonnet4,o4-mini,o4-mini-high,v3,opus4.1 \--mode code \--threads 50 \--runs 3 \< results-6m/langchain4j.txt
+```
+4. **Cassandra**
+```
+   BRK\_NO\_CONCURRENT\_BUILDS=true BRK\_TESTSOME\_CMD='JAVA\_HOME=/home/jonathan/.sdkman/candidates/java/11.0.28-amzn && {{\#classes}} ant test \-Dtest.name={{value}}{{^last}} && {{/last}} {{/classes}}' BRK\_CPG\_CACHE=true BB\_DEBUG=1 uv run run.py \-Xmx5G \--project ../cassandra-ds \--exclude CHANGES.txt \--model o3,flash-2.5,gp2.5-default,sonnet4,o4-mini,o4-mini-high,v3,q3c,opus4.1 \--mode code \--runs 3 \--threads 12 \< results-6m/cassandra.txt
+```
+5. **Lucene**
+```
    BRK\_TESTSOME\_CMD='./gradlew \--quiet test{{\#classes}} \--tests {{value}}{{/classes}}' BRK\_CPG\_CACHE=true BB\_DEBUG=1 uv run run.py \-Xmx8G \--project ../lucene \--exclude lucene/CHANGES.txt \--model o3,flash-2.5,q3c,gp2.5-default,sonnet4,o4-mini,o4-mini-high,v3,opus4.1 \--mode code \--threads 8 \--runs 3 \< results-6m/lucene.txt
+```
 
 Explanation of these variables:
 
@@ -52,7 +62,7 @@ Notes on the datasets:
 
 `run` will dump the results in the same directory as `generate`, `{mode}results/{project}{N}`.
 
-# Clean up and retry
+## Checking for errors
 
 ### litellm
 Litellm sometimes just gives up and says, “fuck you.” Need to clean these up and re-run. Inspect the results like this:  
@@ -68,7 +78,7 @@ Remove them (`... |xargs rm`) and re-run the `run` script.
 2. Check for other random-ass errors by looking for `Openrouter` in the results, but filter out context-length errors which are expected when the model keeps trying right up until it can’t anymore:  
    `find coderesults -type f |xargs grep -l Openrouter |xargs grep -lv "context length"`
 
-Again, remove the bad results and re-run them.
+Again, remove the bad results and re-run them. (The harness will not run tasks for which results already exist.)
 
 ### In theory the `run` harness retries when it hits “check litellm” or “throttling\_error”
 

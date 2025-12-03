@@ -1,17 +1,17 @@
-4b98c9b28cfe598759a9f9afa7f7b9c84178e507  feat: Add checkMergeConflicts method to GitRepo
-d6656e3c46959adbf8a9a88e2222516fe996dc58  feat: Implement file deletion and git remove in EditBlock
-75919d6e90fd36c2772705339a708eaf84b6abbc  fix: Handle HEAD^{tree} not existing in empty repos and tests
-99111fd5fb43b26db7c570188947b63357528ee1  feat: Add ability to create branch from a specific commit
-a09934de9e23861e3d3bdb9411807152216588a1  feat: Add simple SQL analyzer
-c7cc2df570bfe1720fb07501dca8cdaf6f8cb354  feat: Compact Markdown blocks for better text selection and scroll.
-90e7ccf588e2904b8b2c45f096d8e99d142398a7  refactor: simplify FSM state, add report() and reportComplete(), improve logging
-99236f1444469a32f21c12eb22f48ccd7851fd5d  feat: Add merge dialog and conflict checking
-6d24fa3385f3c1f2fb75e7843993e7fa2e80dbfb  enh: Add shortDescription to FrozenFragment and related classes
 530355722256845c40807f40336fd71e5e91f710  feat: feat: support broader S/R blocks - : Factory logic changes & State-machine tweaks
+bfcf0eaff3edd85278e020495232429bc0c47813  refactor: use content hash for id of non-dynamic Fragments
+6d24fa3385f3c1f2fb75e7843993e7fa2e80dbfb  enh: Add shortDescription to FrozenFragment and related classes
+5366d4991a56733a1ad0778b8bcffb253823551b  fix: Corrupt Session zip file (#373)
 ddd83eaca7b54b83ff436aa0aa78d6d23d8c9d28  fix: Improve merge conflict detection with dirty worktrees
+3ae309064a123ddd10eb69b9b7fc1229135a3f0b  feat: Implement hybrid document sync to prevent line joining bug
+a09934de9e23861e3d3bdb9411807152216588a1  feat: Add simple SQL analyzer
+d6656e3c46959adbf8a9a88e2222516fe996dc58  feat: Implement file deletion and git remove in EditBlock
+90e7ccf588e2904b8b2c45f096d8e99d142398a7  refactor: simplify FSM state, add report() and reportComplete(), improve logging
+4b98c9b28cfe598759a9f9afa7f7b9c84178e507  feat: Add checkMergeConflicts method to GitRepo
+c7cc2df570bfe1720fb07501dca8cdaf6f8cb354  feat: Compact Markdown blocks for better text selection and scroll.
+75919d6e90fd36c2772705339a708eaf84b6abbc  fix: Handle HEAD^{tree} not existing in empty repos and tests
+d04c786da9014acf0b1264791ebba238c1252e9f  feat: do not replace EditBlock after runSession; instead elide EditBlocks in History dynamically when send to LLM
 0f1bfb668383567fe7df4589095a6561ddb39e18  enh: Clear code blocks out of taskMessage history (replacing "SEARCH/REPLACE blocks" terms with "edits") (#284)
 7ca3caebbb77eeb8346619bae6eaad89577945fb  feat: Add force option to removeWorktree and handle force exceptions
-5366d4991a56733a1ad0778b8bcffb253823551b  fix: Corrupt Session zip file (#373)
-d04c786da9014acf0b1264791ebba238c1252e9f  feat: do not replace EditBlock after runSession; instead elide EditBlocks in History dynamically when send to LLM
-bfcf0eaff3edd85278e020495232429bc0c47813  refactor: use content hash for id of non-dynamic Fragments
-3ae309064a123ddd10eb69b9b7fc1229135a3f0b  feat: Implement hybrid document sync to prevent line joining bug
+99236f1444469a32f21c12eb22f48ccd7851fd5d  feat: Add merge dialog and conflict checking
+99111fd5fb43b26db7c570188947b63357528ee1  feat: Add ability to create branch from a specific commit

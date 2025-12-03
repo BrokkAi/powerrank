@@ -9,7 +9,6 @@ c02e486c447d046381348b19df1557d382799393  CNDB-13583: Add vector ann and brute f
 f7641a485a8d5c3092fd0bfddcde0931e19499c3  CNDB-13372 Introduce min Paxos backoff time (#1651)
 8923a9a29ca2dd6114defc055dfa715eec296c6b  CNDB-15002: Fix handling of grouped primary keys in ScoreOrderedResultRetriever (#1932)
 876ce2e5d2cfbc8d0038b5a83221f31e5bbf3f7b  HCD-130 incremental repair failure during compaction (#1728)
-9e6e8e185cada2c201580c746a50b7493ff819d2  CNDB-13978: Don't count tombstones in DataLimits.Counter.CQLCounter#bytesCounted (#1735)
 5e9eac7a82a92a42ccb114659b9415d787d6d84c  CNDB-14614: abort compaction task or index build if index is unloaded after tenant unassignment (#1754)
 b667550cc03e9ba5f99af72881b4d8d52dcef448  CNDB-14237-main-cherry-pick: register composite compaction observer as additional obverser on top of UCS (#1783)
 30f9d9683a73dc95171655a23cb136b0d151f0e0  CNDB-14481: Fix IllegalStateException in SegmentMetadataBuilder (#1808)

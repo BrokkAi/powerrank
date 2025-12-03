@@ -1,4 +1,5 @@
 litellm
+aider-chat
 pytest
 matplotlib
 pyqt6
@@ -7,3 +8,4 @@ tqdm
 httpx
 openai
 pygit2
+benchlib

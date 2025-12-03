@@ -2,6 +2,7 @@
 <img width="3213" height="1482" alt="image" src="https://github.com/user-attachments/assets/b14959dc-cdeb-4cf0-935b-6d6b657f4141" />
 
 Full results at https://brokk.ai/power-rankings
+
 In-depth analysis at https://blog.brokk.ai/introducing-the-brokk-power-ranking/
 
 # Running the evaluation

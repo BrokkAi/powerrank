@@ -1,0 +1,17 @@
+4c3cf8bb110e3d747c7c84b23d88b5d11d204b3b (2, 7, 352) wgengine/magicsock: extract IMDS utilities into a standalone package (#18334)
+e1dd9222d4a8e8147f6067b7f3b3956995b5bc6c (8, 10, 276) ipn/ipnlocal, tka: compact TKA state after every sync
+ac74d28190e73af85fe181b81173ef686331f51c (2, 5, 483) ipn/ipnlocal: add validations when setting serve config (#17950)
+378ee20b9a06b12da1b0d4c2ef21a168f0aa619f (1, 7, 632) cmd/tailscale/cli: stabilise the output of `tailscale lock status --json`
+08e74effc0f0099b33ef266a098c52a406b76a5b (1, 4, 354) cmd/cloner: support cloning arbitrarily-nested maps
+7426eca163354e3f9b400c9dff9ad4c9be5c2d03 (2, 8, 278) cmd/tailscale,feature/relayserver,ipn: add relay-server-static-endpoints set flag
+c679aaba32c27681845466df9e6df69fe0704b95 (8, 12, 211) cmd/tailscaled,ipn: show a health warning when state store fails to open (#17883)
+a96ef432cfe36ef2d8c63fee7ab9c7cb95c39708 (2, 5, 224) control/controlclient,ipn/ipnlocal: replace State enum with boolean flags
+d68513b0dbe352ca03165be35ebc5edd626ac83e (1, 5, 168) ipn: add support for HTTP Redirects (#17594)
+536188c1b53b5f1201649d53d6b133d162dcd174 (2, 4, 522) tsnet: enable node registration via federated identity
+cf40cf5ccb1be1ab931b427f7f83bba3214ace79 (1, 2, 102) ipn/ipnlocal: add peer API endpoints to Hostinfo on initial client creation (#17851)
+d4c5b278b3dd67e31498dfbfe321c5e00a801898 (1, 4, 272) cmd/k8s-operator: support workload identity federation
+eb3d35c8b59c853eec0e66a48e22faacc7a82859 (5, 13, 987) cmd/k8s-operator,k8s-operator: define ProxyGroupPolicy reconciler (#18654)
+f48cd466624e06b2110eb6171c712eccfd0b4abe (3, 11, 186) net/dns,ipn/ipnlocal: add nodecap to resolve subdomains (#18258)
+8cac8b117b0b2da307369fe3dd0b5cd6b9ed3711 (2, 4, 654) net/dns/resolver: set TC flag when UDP responses exceed size limits (#18157)
+5edfa6f9a8b409908861172882de03e9a67f0c2f (1, 2, 312) ipn/ipnlocal: add wildcard TLS certificate support for subdomains (#18356)
+be4449f6e08af0dd67bf702ce362cc6a895d3f9b (1, 2, 176) util/clientmetric, wgengine/watchdog: report watchdog errors in user/client metrics (#18591)

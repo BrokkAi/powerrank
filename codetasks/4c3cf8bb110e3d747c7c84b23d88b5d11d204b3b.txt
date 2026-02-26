@@ -1,0 +1,47 @@
+Refactor the cloud instance metadata (IMDS) helper currently embedded in `wgengine/magicsock` into a reusable utility package.
+
+### Goal
+
+Introduce a new package `tailscale.com/util/cloudinfo` that exposes a small API for querying public IP addresses from cloud instance metadata endpoints, and update magicsock to use it. The functionality and behavior should remain consistent with the prior magicsock-local implementation, including platform/build-constraint behavior.
+
+### Requirements
+
+#### New package API
+
+Create a new package `util/cloudinfo` that:
+
+- Is excluded from `ios`, `android`, and `js` builds via build tags, and provides a stub implementation for those targets.
+- Exposes a public type `CloudInfo` and a constructor:
+  - `func New(logf logger.Logf) *CloudInfo`
+- Implements:
+  - `func (ci *CloudInfo) GetPublicIPs(ctx context.Context) ([]netip.Addr, error)`
+
+`New` should return `nil` when cloud support is disabled by build features (i.e., when cloud functionality is not compiled in). The returned object should encapsulate any HTTP client/transport configuration needed to talk to metadata endpoints.
+
+#### Cloud behavior
+
+- If not running in a supported cloud (or cloud detection indicates “unknown”), `GetPublicIPs` should return no IPs and no error.
+- Currently, only AWS needs to be supported.
+
+For AWS:
+
+- Use IMDSv2 (token-based) to query the metadata service.
+- Query the interface MAC list, then for each MAC query:
+  - public IPv4s
+  - IPv6s (if present)
+- Parse returned IPs into `netip.Addr`.
+- Return results in deterministic order.
+- If some lookups/parses fail but at least one valid address is found, return the addresses successfully collected (and no error).
+- If no addresses are found and errors occurred, return an error that preserves the underlying failures.
+
+The implementation should enforce a bounded wait (including dialing and request lifetime) appropriate for metadata queries.
+
+#### Platform stub
+
+For `ios`, `android`, and `js` builds, provide a `CloudInfo` type whose methods are no-ops and return no IPs and no error, and whose `New` returns a usable stub instance.
+
+#### Update magicsock
+
+Update `wgengine/magicsock` to use the new `util/cloudinfo` package rather than its previous internal helper type, including adjusting the connection struct field type and initialization.
+
+The old magicsock-specific cloudinfo implementation should no longer exist once the new package is in place.

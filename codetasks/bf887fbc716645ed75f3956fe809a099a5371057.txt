@@ -1,0 +1,32 @@
+Implement reauthentication support for the `gentex_homelink` Home Assistant integration so that expired/invalid credentials trigger a reauth flow and a successful reauth updates the existing config entry.
+
+### Functional requirements
+
+1. **Detect auth failure during entry setup**
+   - When `async_setup_entry` runs for `homeassistant/components/gentex_homelink`, the integration must validate/refresh the stored OAuth token early in setup.
+   - If the HomeLink auth server responds with an HTTP error while refreshing/validating the token, setup must fail in a way that Home Assistant treats as an authentication failure and initiates reauthentication for the entry (not a generic setup failure).
+
+2. **Support a reauth config flow**
+   - Extend the config flow handler for the integration to support `SOURCE_REAUTH`.
+   - The reauth flow must present a confirmation step that asks the user to log in again (email + password) and then perform the same SRP-based login used in the initial setup.
+   - On successful reauth, the existing config entry must be updated (and reloaded) rather than creating a second entry.
+
+3. **Account identity / unique ID handling**
+   - The integration must derive and persist a stable account identifier from the authentication result (the `sub` claim in the access token JWT).
+   - Initial setup must set the entry’s `unique_id` from this identifier and avoid duplicate entries for the same account.
+   - Reauth must ensure the user reauthenticates the *same* account as the entry being repaired; if the account identifier differs, the flow must abort with an appropriate “mismatch” reason rather than updating the entry.
+
+4. **Entry metadata**
+   - Ensure the config entry title shown to the user is a friendly integration name (not an internal class name or auth mechanism name).
+
+5. **Constants / naming**
+   - Align constants so the OAuth token endpoint URL is referenced consistently from a single constant in the integration’s constants module (tests expect that URL to be used for HTTP POSTs during token refresh).
+
+6. **User-facing strings**
+   - Add/adjust translation string keys used by the reauth flow, including:
+     - A reauth confirmation step title/description and its fields.
+     - Abort reasons for successful reauth and for unique-id mismatch.
+     - Minor punctuation consistency for existing error text.
+
+### Notes
+- The provided tests cover both initial setup and reauth scenarios, including token-refresh failures, successful reauth updating the existing entry, and aborting when reauth is performed with a different account.

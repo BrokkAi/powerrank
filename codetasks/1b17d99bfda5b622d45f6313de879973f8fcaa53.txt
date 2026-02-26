@@ -1,0 +1,69 @@
+Implement user-initiated “self-revoke” from an organization for the Organization Data Ownership policy flow.
+
+### Feature overview
+Add an API endpoint that allows an authenticated user to revoke **their own** membership in a specific organization, but only when they are eligible to do so under the **Organization Data Ownership** policy rules. This is intended for users who decline migrating personal items under that policy.
+
+### Required behaviors and components
+
+#### 1) API endpoint
+Add a new endpoint to `OrganizationUsersController` that revokes the *current user* from the organization:
+
+- Route should be under the organization users resource (e.g., `organizations/{orgId}/users/...`) and use an idempotent HTTP verb appropriate for updating membership state.
+- The endpoint must:
+  - Resolve the authenticated user id from the request principal; if unavailable, treat it as unauthorized.
+  - Call a new “self-revoke” command and translate its `CommandResult` into an HTTP response using the controller’s existing result handling pattern.
+- Authorization for this endpoint must require that the caller is an **organization member**, not merely a provider user acting on the organization.
+
+#### 2) Authorization requirement
+Introduce a new authorization requirement `MemberRequirement` in `src/Api/AdminConsole/Authorization/Requirements/MemberRequirement.cs`:
+
+- It must implement the same organization-requirement contract used by other organization endpoints.
+- It should authorize only when the request context indicates the user is a member of the organization (provider-only access must not satisfy it).
+
+Add/adjust unit tests for this requirement accordingly.
+
+#### 3) Self-revoke command
+Create a new command in `src/Core/AdminConsole/OrganizationFeatures/OrganizationUsers/SelfRevokeUser/`:
+
+- Interface: `ISelfRevokeOrganizationUserCommand`
+- Implementation: `SelfRevokeOrganizationUserCommand`
+
+The command must:
+- Look up the `OrganizationUser` record for `(organizationId, userId)`. If not found, return a typed error.
+- Enforce eligibility based on the Organization Data Ownership policy requirement (see below). If not eligible, return a typed error.
+- Prevent “bricking” an organization by disallowing the **last confirmed owner** from revoking themselves. If the user is an owner, ensure there is at least one other confirmed owner (including provider-managed owners when applicable); otherwise return a typed error.
+- If allowed, revoke the organization user, log an organization-user event, and trigger any required push/sync behavior for the user.
+- Return success using the existing `CommandResult`/`OneOf`-style success value used elsewhere in this codebase.
+
+Register the command in DI in `OrganizationServiceCollectionExtensions`.
+
+#### 4) Errors
+Define typed errors for the command in `Errors.cs` under the same feature folder, using the existing v2 admin-console error types/patterns:
+
+- Not found when the organization user membership doesn’t exist.
+- Bad request when the user is not eligible for self-revocation under policy rules.
+- Bad request when the last owner attempts to self-revoke.
+
+#### 5) Policy requirement enhancement
+Extend `OrganizationDataOwnershipPolicyRequirement` with an eligibility check method used specifically for self-revocation:
+
+- Add a method (e.g., `EligibleForSelfRevoke(Guid organizationId)`) that determines whether the policy is enabled/applies for the given user in the given organization and the user is in the appropriate membership state for self-revocation (confirmed membership, not invited, etc.).
+- This method must integrate correctly with the existing requirement/factory behavior (including policy enabled/disabled state and any role exemptions already modeled by the requirement factory).
+
+Update/add unit coverage in the corresponding factory/requirement tests.
+
+#### 6) Event logging
+Add a new event type to `EventType`:
+
+- `OrganizationUser_SelfRevoked`
+
+Ensure the self-revoke command logs this event when a self-revoke succeeds.
+
+### Testing expectations
+The provided harness includes new unit and integration tests covering:
+- Membership-only authorization (provider-but-not-member must be rejected).
+- Successful self-revoke when policy rules allow it.
+- Failure cases: non-member, ineligible policy state, owner/admin exemptions where applicable, and last-owner protection.
+- Correct state change, event logging, and push behavior on success.
+
+Implement the feature so all supplied tests (existing and new) pass.

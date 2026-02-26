@@ -1,0 +1,45 @@
+Implement “Milestone 2C” changes to upcoming-invoice processing for Premium users, introducing a feature-flagged pricing migration and a new email pathway.
+
+### Context
+`src/Billing/Services/Implementations/UpcomingInvoiceHandler.cs` currently handles Stripe “upcoming invoice” events for three subscription owners identified via Stripe subscription metadata: **organization**, **user**, or **provider**. It also sends “invoice upcoming” emails and performs some Stripe customer/subscription adjustments (e.g., automatic tax / tax-exempt handling).
+
+### Requirements
+
+#### 1) Feature-flagged Milestone 2 behavior for **Premium users**
+When processing an upcoming-invoice event that resolves to a **user subscription**:
+
+- Read a feature flag named `PM23341_Milestone_2` via the platform feature flag service.
+- If the flag is **enabled**:
+  - Attempt to migrate the user’s Stripe subscription pricing when the subscription contains an item priced with the legacy **Premium Annual** price ID.
+    - Replace that subscription item’s price with the **current Premium plan seat price ID** fetched from the pricing client.
+    - Apply a Stripe coupon discount for “Milestone 2” during the update.
+    - The migration must be best-effort: failures must be caught and logged, and must not prevent email sending or other processing.
+  - Send a new “updated upcoming invoice” email using the platform mailer abstraction (not the existing billing mail service).
+    - The email must use a new mail model/view and have the subject: **“Your Subscription Will Renew Soon”**.
+- If the flag is **disabled**:
+  - Keep the existing behavior: do not migrate pricing and send the existing upcoming-invoice email (via the existing billing mail service), using invoice-derived values as before.
+
+This Milestone 2 behavior applies only to the **user** path (not organization/provider paths).
+
+#### 2) Add a Stripe coupon constant
+Add a new constant for the Milestone 2 coupon in `src/Core/Billing/Constants/StripeConstants.cs` under coupon IDs. The handler must use this constant when applying the discount during subscription update.
+
+#### 3) New mail template + mail model/view for the updated email
+Introduce a new mail view/model pair for the “updated upcoming invoice” message:
+
+- Add a new `BaseMailView`-derived view type and a `BaseMail<TView>`-derived mail type under `src/Core/Models/Mail/UpdatedInvoiceIncoming/`.
+- Add corresponding Handlebars templates (`.html.hbs` and `.text.hbs`) for the view.
+- Add an MJML source template at `src/Core/MailTemplates/Mjml/emails/invoice-upcoming.mjml` consistent with how other MJML email templates are stored/structured in the repo.
+
+The handler must construct and send this mail via the mailer interface, populating recipients from the resolved user email.
+
+#### 4) Keep existing organization/provider behavior intact
+All existing non-user flows must remain functionally consistent, including:
+- Sponsored subscription validation flow for organizations.
+- Provider “invoice upcoming” handling, including customer tax-exempt updates and enabling automatic tax where applicable.
+
+#### 5) Dependency updates / compilation
+`UpcomingInvoiceHandler` must be updated to support the new services it relies on (mailer + feature flag service). Ensure all necessary usings/references compile cleanly (including Stripe tax-exempt constants usage).
+
+### Deliverable
+After implementation, the provided test suite (including the newly added handler tests) must pass, and the codebase must build successfully with the new mail artifacts and Stripe coupon constant in place.

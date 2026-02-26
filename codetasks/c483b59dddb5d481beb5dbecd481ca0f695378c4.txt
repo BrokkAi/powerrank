@@ -1,0 +1,32 @@
+Implement a new Ruff lint rule **`non-empty-init-module`** with code **`RUF067`** that enforces restrictions on what can appear in a package’s `__init__.py`.
+
+### Rule behavior (RUF067)
+
+The rule only applies when the file being analyzed is an `__init__.py`, and it should only report diagnostics for **top-level** statements (nested statements inside other blocks should not be individually evaluated for this rule).
+
+RUF067 has two modes:
+
+#### Default mode (non-strict)
+In `__init__.py`, allow only common “API surface” patterns. At minimum, the rule must treat the following as allowed at top level:
+
+- Module docstring and attribute docstrings (PEP 257 style string statements).
+- Import statements (`import …` and `from … import …`).
+- Assignments that define or update `__all__` (support multiple-target assignments when all targets are `__all__`, and also handle annotated and augmented assignment forms if they appear).
+- Type-checking-only blocks (e.g. `if TYPE_CHECKING:` / equivalent patterns that are recognized as type-checking guards).
+- PEP 562 module functions `__getattr__` and `__dir__`.
+- Assignments to a small set of dunder metadata variables used in packages (including `__version__` and `__author__`).
+- Namespace-package support via `__path__` assignment **only when** the assigned value corresponds to a call to `extend_path(__path__, __name__)` (the receiver may vary; the important part is the `extend_path` call signature).
+
+Any other top-level statement in `__init__.py` should trigger `RUF067` with a message indicating that the module should only contain docstrings and re-exports.
+
+#### Strict mode
+Add a configuration option **`lint.ruff.strictly-empty-init-modules`** (default `false`). When enabled, `__init__.py` must contain **no code at all**, including docstrings, imports, and the otherwise-allowed assignments/functions/blocks. In this mode, any top-level statement should trigger `RUF067` with a message indicating that the `__init__` module should not contain any code.
+
+### Integration requirements
+
+- Register the rule in the Ruff rule registry/code mapping so `RUF067` resolves correctly.
+- Ensure the rule is executed during AST statement analysis.
+- Add the new setting to Ruff’s configuration/options layer and to the displayed/default settings output (including schema/defaults).
+- Update any existing logic that frequently checks whether the current file is `__init__.py` to use a dedicated, cached “is init module” query rather than repeatedly inspecting the path; this helper should be usable from multiple analyses/rules.
+
+The final implementation should satisfy the included fixtures and snapshot-based tests for both modes (strict and non-strict), as well as any updated “show settings”/CLI configuration output expectations.

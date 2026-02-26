@@ -1,0 +1,33 @@
+### Task: Add “max builder age” flush criterion to the dataobj consumer
+
+The dataobj Kafka consumer currently flushes a partition’s in-memory builder primarily when it becomes full or when it has been idle for too long. Extend this behavior so that a builder is also flushed once it has been accumulating data for longer than a configurable maximum age, even if it is still receiving writes and is not full.
+
+#### Requirements
+
+1. **New configuration option**
+   - Extend `pkg/dataobj/consumer/config.go` to support a new duration setting named `max_builder_age` on `consumer.Config`.
+   - Register a CLI flag for it (e.g. `-dataobj-consumer.max-builder-age`) with a default of **1 hour**.
+   - Ensure the consumer service wires this configuration into the partition processor construction (see `pkg/dataobj/consumer/service.go` and the partition processor constructor).
+
+2. **Age-based flush behavior**
+   - In `pkg/dataobj/consumer/partition_processor.go`, add logic so that the builder is flushed when:
+     - `max_builder_age` is **> 0**
+     - the builder is **non-empty**
+     - the elapsed time since the **first append into the current builder instance** exceeds `max_builder_age`
+   - This age tracking must be based on the processor’s clock (the same abstraction already used for idle flushing), and **must not rely on Kafka record timestamps** (which may be arbitrarily old due to lag).
+   - After a flush, the age tracking for the builder must reset such that the next builder starts “aging” from its first subsequent append. Avoid scenarios where an immediate follow-up record triggers another flush because the age state wasn’t reset.
+   - The new flush condition should be evaluated during record processing in a way that ensures the record being processed is not lost and ends up in a builder after any flush that occurs.
+
+3. **Flush reason metrics**
+   - In `pkg/dataobj/consumer/metrics.go`, add a Prometheus counter metric to track total flushes with a `reason` label.
+   - Increment it from the partition processor for each flush reason:
+     - builder became full
+     - idle timeout
+     - max builder age exceeded
+   - Provide stable label values for these reasons and use them consistently.
+
+4. **Tests**
+   - All existing tests must continue to pass.
+   - The newly provided tests (including those validating max-age behavior with lagging record timestamps and correct reset behavior after flushing) must pass.
+
+You may update documentation if desired, but the core of the exercise is the runtime behavior, configuration/flag plumbing, and metrics instrumentation described above.

@@ -1,0 +1,108 @@
+Implement **bidirectional session synchronization** between a project’s local session store and a remote “sessions service”, with correct behavior across main projects and Git worktrees.
+
+### Goals / required behavior
+
+#### 1) Remote sessions API integration (`Service`)
+Add support in `ai.brokk.Service` for a remote sessions backend:
+
+- Define a JSON-mapped metadata type for remote sessions (e.g. `RemoteSessionMeta`) that:
+  - Carries `id` (UUID as string), session `name`, `remote` (project identifier), timestamps (`created_at`, `updated_at`, `modified_at`) and optional `deleted_at`.
+  - Provides helpers to parse relevant timestamps to epoch millis and to convert `id` to `UUID`.
+- Provide static service methods to:
+  - List sessions for a given remote project identifier, including deleted sessions.
+  - Download a session’s zipped content by session UUID.
+  - Upload/write a session: multipart form containing id/remote/name/modified_at plus zipped content.
+  - Delete a remote session by UUID.
+- Requests must include appropriate Authorization headers:
+  - Existing “proxy” requests use the proxy token logic.
+  - Session-service requests must be authenticated via the configured Brokk key (and must gracefully handle missing/blank keys).
+
+#### 2) Synchronization engine (`SessionSynchronizer`)
+Introduce a new synchronizer responsible for syncing local and remote state:
+
+- Compute sync actions by comparing:
+  - Local sessions (from the local session cache / manifest metadata),
+  - Remote sessions (from the remote list),
+  - Local deletion “tombstones” (see below),
+  - Locally “unreadable” sessions (which must be ignored by sync).
+- Supported action types:
+  - Download (remote → local),
+  - Upload (local → remote),
+  - Delete remote (propagate local tombstone),
+  - Delete local (honor remote deletion),
+  - No-op.
+- Conflict resolution rules must be timestamp-based:
+  - Remote newer ⇒ download.
+  - Local newer ⇒ upload.
+  - Equal ⇒ no action.
+  - Remote deleted:
+    - If remote deletion is newer than local modification ⇒ delete local.
+    - Otherwise ⇒ upload (resurrect).
+  - Tombstone present ⇒ delete remote (if remote isn’t already deleted).
+  - Any session under the local “unreadable” directory must not be downloaded/merged.
+- Action ordering must be deterministic and prioritized:
+  - Remote deletions first,
+  - Then downloads / local deletions (with newest remote first),
+  - Uploads last.
+- Execution must be safe under concurrent local edits:
+  - If a planned action was based on a stale local `modified` time (local changed since planning), the action must be skipped rather than overwriting newer local data.
+- When applying remote content to a session that already exists locally:
+  - Load both histories and detect whether they have diverged.
+  - If diverged, merge histories into a single local session and update the session’s `modified` time appropriately.
+  - If not diverged, prefer the side indicated by timestamps without unnecessary rewriting.
+- If an affected session is currently open in a window/worktree:
+  - After a merge/download that changes the session on disk, trigger a lightweight reload of that session in the open context manager.
+  - If an open session is deleted locally due to remote deletion, ensure the UI is left with a valid session (e.g. create/select a default new session).
+
+The synchronizer must be structured so it can be tested with injected callbacks rather than requiring real HTTP calls.
+
+#### 3) Session history utilities (`ContextHistory`)
+Add utilities to support sync conflict handling:
+
+- A method to determine whether two histories have diverged (treat shared-prefix histories as *not* diverged).
+- A method to merge two histories preserving:
+  - The common prefix, followed by each side’s divergent tail,
+  - Auxiliary metadata (reset edges, git states, entry info, grouping metadata),
+  - Redo state as appropriate.
+
+#### 4) Local deletion tombstones (`SessionManager`)
+Change local session deletion semantics:
+
+- Deleting a session must no longer simply remove the `.zip` file synchronously.
+- Instead, deletions must create a per-session “tombstone” file in the sessions directory (and move/replace the zip if present), so a later sync can propagate the deletion to remote.
+- Add/adjust internal access needed by the synchronizer:
+  - Read/write access to session manifests in zips,
+  - Access to the sessions cache and per-session serial executor,
+  - A constant for the “unreadable sessions” directory name.
+
+#### 5) Per-project session registry (`SessionRegistry`, projects)
+Session exclusivity across worktrees must be tracked per project (not globally static):
+
+- Convert the registry to an instance owned by `MainProject`.
+- Expose it via `IProject.getSessionRegistry()` and ensure worktree projects delegate to the main project’s registry.
+- Update all callers to use the project’s registry instance when:
+  - Marking a session active for a worktree,
+  - Checking whether a session is active elsewhere,
+  - Releasing reservations.
+
+#### 6) Project/worktree window enumeration (`Brokk`)
+Add a helper to enumerate all open windows (“Chromes”) for a project and its worktrees, so sync can locate any open context managers belonging to the same main project.
+
+#### 7) Sync lifecycle integration (`ContextManager`, `MainProject`)
+Enable sync only when appropriate and integrate it into lifecycle events:
+
+- Decide whether session sync is active based on conditions including:
+  - Not a worktree context,
+  - Not using localhost proxy mode,
+  - Brokk key present,
+  - A non-blank remote project identifier (`IProject.getRemoteProjectName()`).
+- Run sync periodically on a dedicated scheduler and notify the project that the session list changed so UI elements can refresh.
+- Ensure shutdown/close performs a best-effort final sync without hanging the application indefinitely, and properly shuts down any scheduler/executor added for periodic work.
+- `MainProject.getRemoteProjectName()` should provide a stable identifier (prefer Git remote URL when available; otherwise fall back to something deterministic).
+
+#### 8) Worktree deletion API (`MainProject`)
+Centralize worktree deletion so that removing a worktree also:
+- Releases any session registry reservation for that worktree path,
+- Clears open-project bookkeeping as needed.
+
+All of the above must integrate cleanly so that session syncing, merging, deletion propagation, and UI/session reloading behave correctly across main and worktree projects.

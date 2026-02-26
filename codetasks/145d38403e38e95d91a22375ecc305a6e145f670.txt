@@ -1,0 +1,39 @@
+Implement two new Home Assistant services for the Radarr integration—`radarr.get_movies` and `radarr.get_queue`—and adjust existing coordinators so sensors report correct counts.
+
+### Service layer
+Add service registration for the Radarr integration so that services are available once the integration is set up via config entries (no YAML-based setup). This requires:
+- Defining an `async_setup` for the integration and ensuring Radarr is treated as config-entry-only configuration.
+- Registering both services under the Radarr domain with **response support enabled** (the services must return structured data).
+
+Both services must require an `entry_id` parameter selecting a Radarr config entry (via a config-entry selector). The service handler must:
+- Resolve the config entry by ID.
+- Reject unknown IDs and entries that exist but are not currently loaded using `ServiceValidationError` with translatable messages.
+
+Map common Radarr API failures to `HomeAssistantError` with clear messages:
+- Authentication failures
+- Connection failures
+- Other API errors
+
+### `radarr.get_movies`
+- Fetch the complete movie list from Radarr for the selected entry.
+- Return a response payload containing a top-level `movies` object keyed by movie title, where each value includes key movie metadata (IDs, year, monitored/has file, status, and optional fields like path/statistics/images when available).
+- Where movie images are available, include usable URLs; prefer any remote/public URL Radarr provides, otherwise build an absolute URL using the configured Radarr base URL.
+
+### `radarr.get_queue`
+- Fetch the current queue from Radarr for the selected entry.
+- Support an optional `max_items` parameter (0 meaning “no limit”).
+- Return a response payload containing a top-level `movies` object keyed by queue item download title (or equivalent unique title field) and including progress/status fields plus embedded movie details when Radarr provides them (including images handled similarly to movies).
+- Ensure queue fetching logic can return the full queue when unlimited is requested (even if this requires first determining the total size).
+
+### Coordinators / sensor counts
+Update the existing update coordinators so that:
+- The “movies” coordinator represents the **total movie count** based on the full movie list (not a capped subset).
+- The “queue” coordinator represents the **total number of items in the queue**, and it should obtain this total efficiently without fetching an arbitrary large page.
+
+### Integration metadata
+Add/adjust integration constants and metadata necessary to support the above:
+- Service names and attribute constants used by the service handlers.
+- `services.yaml` and `strings.json` entries describing the services and their fields.
+- Service icons entries in `icons.json`.
+
+The final implementation must satisfy the full service response structure expected by the updated snapshots and keep the existing Radarr entities/sensors working with the new counting behavior.

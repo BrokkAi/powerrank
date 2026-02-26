@@ -1,0 +1,39 @@
+Add support for disabling automatic “external access” resources for the LokiStack gateway.
+
+### Background / Goal
+The operator currently exposes the gateway externally by creating:
+- a **Kubernetes Ingress** on non-OpenShift clusters, and
+- an **OpenShift Route** on OpenShift clusters.
+
+Introduce a new boolean field on the LokiStack API that allows users to disable this automatic external exposure while keeping the gateway available via its internal Service.
+
+### API Change
+Extend `operator/api/loki/v1/lokistack_types.go`:
+
+- Add `spec.tenants.disableIngress` (boolean, optional).
+- Semantics:
+  - When `disableIngress: true`, the operator must **not create** any external access resources (Ingress/Route) for the gateway.
+  - When omitted or `false`, behavior remains “external access enabled”.
+
+CRD / bundle artifacts are present in the real project; in this exercise, focus on the runtime behavior needed for the tests.
+
+### Reconciliation / Cleanup Behavior
+When external access is disabled (`spec.tenants.disableIngress: true`), the operator must also ensure that any previously-created gateway external access resources are removed:
+
+- Delete the gateway **Ingress** (Kubernetes) and/or **Route** (OpenShift) **only if** the resource is owned by the LokiStack (owner reference matches the LokiStack controller reference).
+- Do **not** delete similarly named resources that are not owned by the LokiStack.
+- Cleanup must be safe on clusters where the Route API is unavailable (e.g., when the Route type is not registered in the scheme): this should not cause reconciliation to fail.
+
+### Manifest Generation Behavior
+Update gateway-related manifest construction so that:
+- The gateway’s base objects (Service, Deployment, etc.) are still produced regardless of the setting.
+- The **Ingress object** is included in the generated gateway objects only when external access is enabled.
+- The **Route object** (OpenShift-specific) is included in the generated OpenShift gateway auxiliary objects only when external access is enabled.
+
+Also ensure the OpenShift options/tenant defaults computation carries through whether external access is enabled, since other parts of the build depend on these options.
+
+### RBAC / Permissions
+Because the controller must be able to remove external access resources when disabling is enabled, ensure the controller’s RBAC supports deleting the relevant resources (Ingress and any other affected networking objects used during cleanup).
+
+### Documentation
+A user-facing description of how to configure the gateway’s external access is added in the real change; it’s not required for test success unless explicitly included by the harness, but the intended behavior should match the description above.

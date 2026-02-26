@@ -1,0 +1,72 @@
+### Goal
+
+Update the account registration “finish” flow to support new request data types for master-password authentication/unlock data (including embedded KDF settings), while keeping the legacy payload shape working during a migration period. The solution must satisfy all provided unit and integration tests.
+
+### Key requirements
+
+#### 1) Introduce new request DTOs in Core (and retire API-local versions)
+Create Core-level API request models under `Bit.Core.KeyManagement.Models.Api.Request`:
+
+- `KdfRequestModel` (with `KdfType`, `Iterations`, optional `Memory`, `Parallelism`)
+  - Must convert to the existing `KdfSettings` data model.
+  - Must participate in model validation (DataAnnotations / `IValidatableObject`) so invalid KDF settings surface as model-state errors.
+- `MasterPasswordAuthenticationDataRequestModel`
+  - Contains `Kdf` (`KdfRequestModel`), `MasterPasswordAuthenticationHash`, `Salt`
+  - Converts to `MasterPasswordAuthenticationData`
+- `MasterPasswordUnlockDataRequestModel`
+  - Contains `Kdf` (`KdfRequestModel`), `MasterKeyWrappedUserKey`, `Salt`
+  - Converts to `MasterPasswordUnlockData`
+  - `MasterKeyWrappedUserKey` must enforce the same encrypted-string validation used elsewhere in the codebase.
+
+Any previous request models in API-specific KeyManagement namespaces should no longer be used by registration-related request models.
+
+#### 2) Update registration finish request model to accept both “new” and “legacy” shapes
+Modify `RegisterFinishRequestModel` (`src/Core/Auth/Models/Api/Request/Accounts/RegisterFinishRequestModel.cs`) to support:
+
+**New shape**
+- `MasterPasswordAuthentication` (`MasterPasswordAuthenticationDataRequestModel`)
+- `MasterPasswordUnlock` (`MasterPasswordUnlockDataRequestModel`)
+
+**Legacy shape (temporarily supported)**
+- Root-level `MasterPasswordHash`
+- Root-level `UserSymmetricKey`
+- Root-level KDF fields (`Kdf`, `KdfIterations`, optional memory/parallelism)
+
+During this migration:
+- The model must be able to build a `User` via `ToUser()` using unlock/KDF/key data from the new shape when present, otherwise falling back to the legacy root fields.
+- The model must validate consistently when callers provide:
+  - only legacy fields,
+  - only the new sub-models,
+  - or a mixture (with specific rules below).
+
+#### 3) Add registration-specific validation rules
+`RegisterFinishRequestModel` implements `IValidatableObject`; update validation to enforce:
+
+- A master-password authentication hash must be present *either* at the legacy root field *or* inside `MasterPasswordAuthentication`.
+- If both are present, they must not conflict (treat conflicting dual-sources as invalid input).
+- `MasterPasswordAuthentication` and `MasterPasswordUnlock` are a pair: if one is supplied, the other must also be supplied.
+- KDF settings must be validated:
+  - If KDF is supplied via the new sub-model(s), validate those KDF settings.
+  - If neither new sub-model is provided, validate legacy root KDF settings and ensure required legacy KDF inputs are present.
+- Registration token detection/selection must treat “empty” GUID values (`Guid.Empty`) as absent/invalid (e.g., for org/provider/emergency invite flows), not just `HasValue`.
+
+Also ensure token-related validation reports an error when no valid token type can be determined, and that token-specific required fields are validated according to the resolved token type.
+
+#### 4) Update the Identity registration endpoint to use the effective auth hash
+In `src/Identity/Controllers/AccountsController.cs`, update `POST /register/finish` to:
+
+- Accept the updated `RegisterFinishRequestModel`.
+- Use the master-password authentication hash from the new authentication sub-model when present, otherwise use the legacy root hash.
+- Preserve the existing behavior of dispatching to the correct registration command based on token type, but ensure null-safety around token and id fields consistent with the request-model validation rules.
+
+#### 5) Namespace/type updates in other request models
+Update any registration-related request models that previously referenced the old API KeyManagement request types (e.g., in `src/Api/Auth/Models/Request/Accounts/...`) to reference the new Core request types.
+
+#### 6) Feature flag constant
+Add a new feature-flag key constant under `Bit.Core.Constants.FeatureFlagKeys` for the registration API update.
+
+### Notes / constraints
+
+- Do not remove legacy registration fields yet; this is a compatibility phase.
+- The new request DTOs must live in Core (not API) and be usable across both API and Identity projects.
+- DataAnnotations-based validation must integrate with ASP.NET model validation so invalid inputs appear as standard “model state invalid” failures.

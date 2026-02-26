@@ -1,0 +1,31 @@
+Extend the PromQL “duration expression” feature to support a new zero-argument keyword function `range()` that can be used anywhere a duration expression is accepted (e.g., inside `[...]` range selectors, `offset` clauses, and nested duration expressions such as `min/max`, arithmetic, unary `-`, etc.).
+
+### Required semantics
+
+* `range()` evaluates to the **full query time span**:
+  * For **range queries**: `end - start` of the query evaluation window.
+  * For **instant queries**: `0s` (because `start == end`).
+* `range()` must participate in duration-expression arithmetic exactly like `step()` does today (division, min/max, unary minus, etc.), including proper error handling for invalid operations (e.g., division by zero should still fail).
+
+### Parsing / AST / printing expectations
+
+* The lexer and parser must recognize `range()` as a keyword in duration-expression contexts (similar to `step()`), including in:
+  * offset duration expressions (`... offset range()`, `... offset -range()`),
+  * matrix selector ranges (`metric[range()]`),
+  * composed duration expressions (`max(range(), 5s)`, `min(step(), range())`, etc.).
+* The AST representation for duration expressions must carry correct position information for `range()` tokens, and `PositionRange()` for a duration expression should return a meaningful range for `range()` just like it does for `step()`.
+* The expression printer (`String()` / AST pretty-printer) must round-trip `range()` in a stable way (printing as `range()`).
+
+### Evaluation / preprocessing
+
+Duration expressions in the AST are preprocessed before execution to compute concrete offsets/ranges. Update that preprocessing so that when it evaluates a `DurationExpr` with operator corresponding to `range()`, it uses the query’s full time span described above.
+
+This requires the duration-expression evaluator/visitor to have access not only to the query step, but also to the query start/end times (or their difference), and to use that when evaluating `range()`.
+
+### PromQL test harness behavior
+
+There is a test helper that compares instant-query results against a derived range query; with `range()` this equivalence no longer holds because `range()` resolves differently between instant vs range queries. Ensure the test harness logic accounts for this difference so such comparisons are not performed for expressions containing `range()`.
+
+### Documentation update
+
+Update the feature-flag documentation describing duration expressions to mention `range()` alongside `step()`, including its resolution rules for range vs instant queries and at least one example use case involving looking back over the full query window (e.g., combined with `@end()`).

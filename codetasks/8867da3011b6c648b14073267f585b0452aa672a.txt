@@ -1,0 +1,47 @@
+Implement updates to the JDK selection and persistence flow to better support a “use system JAVA_HOME” option, improve display of long paths, and centralize/strengthen path normalization and abbreviation.
+
+### 1) JDK selection component behavior (`JdkSelector`)
+Enhance the selector so it can represent two kinds of selections:
+
+- **A concrete JDK installation path** (discovered or user-provided).
+- **A special sentinel value** (see `EnvironmentJava.JAVA_HOME_SENTINEL`) meaning “use the system `JAVA_HOME`”.
+
+Required behaviors:
+
+- `setSelectedJdkPath(String)` must:
+  - Treat the sentinel value specially: selecting it should not be handled like a filesystem path.
+  - Be **idempotent**: repeatedly setting the same path (including the sentinel) must not create duplicate combo-box items.
+  - For non-sentinel paths, attempt to match an existing entry using a **normalized** representation (see normalization requirements below). If a match exists, select it; otherwise add a single “Custom JDK” entry.
+- The selector should present readable labels for long paths (custom entries should use an abbreviated form of the path).
+- The combo box should use a renderer that displays the user-friendly label while exposing the full underlying path as a tooltip.
+- Add/adjust logic so the sentinel item’s display label is user-friendly and reflects the current `JAVA_HOME` environment value when present, but the stored value remains the sentinel constant.
+- JDK discovery should normalize candidate paths, exclude non-JDK installations (e.g., JRE-like layouts), and produce a stable sorted list for display.
+
+### 2) Normalize JDK paths in one place
+Provide a single normalization routine for JDK paths (exposed from `JdkSelector`) that:
+
+- Canonicalizes/cleans environment-style path strings (using existing utilities already present in the codebase).
+- Handles macOS app bundle layouts: if a user/discovery path points at a bundle root, prefer the nested `Contents/Home` when that location is a valid JDK.
+- Returns an empty string for unusable/blank inputs rather than propagating malformed values.
+
+### 3) Validation and persistence flow (`SettingsProjectBuildPanel`)
+Update JDK override validation so that:
+
+- Blank/empty selections are rejected with a user-facing error.
+- The sentinel value is accepted **without** attempting filesystem validation and is persisted as-is.
+- Non-sentinel paths are normalized, then validated via existing JDK validation logic.
+- Invalid path syntax (e.g., values that cannot be converted to `Path`) is handled gracefully and reported as an error instead of crashing.
+- The “apply” path persists either the normalized concrete path or the sentinel, and logs appropriately.
+
+### 4) Path abbreviation utility (`FileUtil`)
+Introduce a reusable path abbreviation utility that produces a stable, readable display string:
+
+- Abbreviate only when the input string exceeds a fixed maximum length (35 chars).
+- If the path has more than 4 components, format it as:
+  - `root + firstComponent + separator + "..." + separator + lastThreeComponents`
+  - preserving platform-specific separators and any root component when present.
+- If the abbreviated result is still longer than the maximum, truncate to the maximum length with a trailing `...`.
+- For paths with 4 or fewer components, do not abbreviate based on components (even if long).
+- If the string is not a valid path on the running OS, return a safe fallback: unchanged if already short, otherwise truncated to the maximum with `...`.
+
+These changes should integrate cleanly with existing discovery/validation code paths and keep UI-facing strings readable while preserving correct persisted values (especially for the sentinel).

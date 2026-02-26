@@ -1,0 +1,30 @@
+Add support for selectively disabling “end-of-run” staleness marker injection for specific scrape targets.
+
+### Background
+In the scrape subsystem, a `scrapeLoop` writes end-of-run staleness markers when the loop stops (or when a target disappears) by performing a final “empty scrape” to emit stale samples. For some integrations, this behavior must be suppressible on a per-target basis so that series simply stop being updated without explicitly being marked stale.
+
+### Requirements
+Implement a mechanism that allows callers to disable end-of-run staleness marker injection for a set of targets belonging to a given scrape pool / job:
+
+1. **Public Manager API**
+   - Expose a method on `*scrape.Manager` named `DisableEndOfRunStalenessMarkers(targetSet string, targets []*Target)`.
+   - The method should locate the scrape pool for `targetSet` and apply the disable operation only to the provided targets.
+   - If `targets` is empty, it should return quickly.
+   - If the scrape pool does not exist (unknown `targetSet`), it must behave as a no-op.
+
+2. **Scrape pool integration**
+   - Add internal support in the scrape pool to apply this setting to the correct running scrape loops associated with the provided targets.
+   - The operation must be safe under concurrent scrape loop activity and pool updates.
+
+3. **Scrape loop behavior**
+   - A `scrapeLoop` must be able to be marked as “end-of-run staleness disabled”.
+   - When disabled, the loop must not inject end-of-run staleness markers when it terminates.
+   - Disabling must also take effect if it happens *during* the shutdown path (e.g., while the loop is waiting before performing the staleness injection step), so the shutdown logic must re-check the disabled state at the point where it would inject staleness.
+   - The disabled flag must be concurrency-safe (the disabling call can race with loop shutdown).
+
+4. **Correctness constraints**
+   - Disabling should apply only to the specified targets/loops and not impact other jobs or targets.
+   - The implementation must avoid introducing data races (tests are expected to exercise concurrent behavior).
+   - Update any necessary imports/types to support a thread-safe flag.
+
+The change should be implemented in the scrape manager / pool / loop code paths so that all provided tests (existing and newly added) pass.

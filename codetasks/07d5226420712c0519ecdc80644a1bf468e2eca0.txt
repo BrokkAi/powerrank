@@ -1,0 +1,50 @@
+Implement a set of fixes to edit-block file handling and filename inference to make edit application safer and easier for LLM-driven inputs, while preserving existing edit/replace behavior.
+
+### Goals
+
+1. **Safer file resolution for edit blocks**
+   - Update the logic that resolves an edit block’s `rawFileName` to a `ProjectFile` so it can:
+     - Tolerate minor “sloppy” filename formatting commonly produced by LLMs (e.g., leading `//` or `#`).
+     - Avoid editing files that are **not present in the current Context** via broad repo-wide matching.
+     - Avoid “helpful” behavior that silently creates missing files during resolution.
+
+2. **Correctly support new-file intent only when explicitly indicated**
+   - The system should only treat a missing file as potentially valid for editing when the edit block clearly indicates it intends to operate on the entire file (via the `BRK_ENTIRE_FILE` marker).
+   - Otherwise, missing files should remain missing (and should not be pre-created as empty files).
+
+3. **Stop converting file-not-found into confusing downstream failures**
+   - Remove the behavior where file resolution “fixes” a missing target by creating an empty file, which can convert a clear “file not found” condition into later “no match” failures during search/replace.
+
+4. **Keep edit/replace matching stable**
+   - Preserve the semantics around line handling, including correct tracking of whether the original content ended with a newline.
+
+### Required behavior changes
+
+#### A) Filename inference near edit blocks (`EditBlockUtils`)
+Update filename discovery around `<<<<<<< SEARCH` blocks to be conservative:
+- Prefer **exact full-path matches** against provided `ProjectFile` entries.
+- Allow extracting a full path from a noisy line when the full project file path appears in the raw text.
+- Do **not** “redirect” a candidate filename to some other existing file based only on basename similarity or partial containment (this must not interfere with legitimate new file creation).
+- If multiple project files are referenced/recognized in the nearby raw lines, treat it as ambiguous and return no filename rather than guessing.
+- If no reliable filename is found, fall back to the provided `currentPath` if available; otherwise return null.
+
+#### B) Project file resolution (`EditBlock.resolveProjectFile`)
+Revise file resolution rules:
+- Handle null/blank filenames as invalid.
+- Strip common comment-like prefixes from the provided filename string.
+- Only resolve to files that are either:
+  - An exact path match, or
+  - Unambiguously present among the Context’s editable files (by filename), and only within those Context files.
+- If multiple Context editable files share the same basename, treat it as ambiguous.
+- Remove any logic that searches across tracked repository files or attempts substring/path containment matching beyond what Context provides.
+
+Add a way for callers to indicate **possible new file intent** (e.g., a boolean parameter). When this flag is set, resolution should allow returning a `ProjectFile` even if it does not exist yet. When not set, resolution must not create files or perform repo-wide fuzzy matching.
+
+#### C) Edit application flow (`EditBlock`)
+- Ensure edit application uses the updated resolution behavior and passes the new-file intent signal only when the block indicates whole-file replacement (`BRK_ENTIRE_FILE`).
+- Remove any “pre-create an empty file if missing” behavior.
+- Ensure the internal conversion from raw string content to line structures correctly reflects whether the content ends with `\n` even for empty strings.
+
+### What should remain true
+- Existing edit block operations (search/replace, special markers, etc.) must behave as before aside from the filename-resolution and missing-file behaviors described above.
+- Ambiguity and invalid input should be surfaced via the existing exception/failure mechanisms rather than guessed around.

@@ -1,0 +1,27 @@
+### Problem: Fix Shelly CoIoT repair vs. push-update failure reporting
+
+In the Shelly integration, Gen1 “block” devices use CoAP/CoIoT push updates. When push updates stop working, Home Assistant currently raises a repair issue, but the integration conflates two different root causes:
+
+1. **CoIoT is not correctly configured on the device** (disabled or peer target not pointing at HA), which should be shown as a **fixable** repair.
+2. **CoIoT appears configured, yet push updates still fail**, which should be shown as a **non-fixable** error indicating push updates are failing.
+
+The existing behavior also reports/updates the CoIoT repair issue at the wrong time (during setup instead of when a push-update failure is detected), and it does not correctly handle scenarios where HA cannot determine a suitable local address for validating the configured CoIoT peer.
+
+### Required behavior
+
+Implement logic so that:
+
+- **Repair issue creation is driven by actual push-update failure detection** (after the integration has observed the configured number of failed CoAP replies), not merely during config entry setup.
+- When the push-update failure threshold is reached, the integration must decide which issue to raise:
+  - If the device’s CoIoT configuration is **disabled** or has a **peer mismatch** for HA’s expected CoIoT target, create the **fixable “CoIoT unconfigured”** issue and ensure any push-update-failure issue for the same device is removed.
+  - If the device’s CoIoT configuration appears valid, create the **non-fixable “push update failure”** issue and ensure any “CoIoT unconfigured” issue for the same device is removed.
+- When push updates resume (periodic CoAP updates are received again), any outstanding push-update failure issue must be cleared, and any stale CoIoT-unconfigured issue for the same device should not remain.
+- **Shelly Plug Gen1** (model without CoIoT settings) must never produce the “CoIoT unconfigured” repair; if push updates fail, it should be handled as a push-update failure case.
+- If HA cannot determine an address suitable for validating the CoIoT peer (e.g., no URL / local address available), the integration must **not** incorrectly raise a “CoIoT unconfigured” repair due to inability to compare the peer. In that situation, treat the configuration as not provably wrong and fall back to reporting push-update failure when failures occur.
+- Any repair issue raised for CoIoT misconfiguration must include the config entry context needed by the existing fix flow (the tests exercise the repair flow end-to-end).
+
+The test suite includes updated fixtures and new coverage around:
+- disabled vs wrong-peer CoIoT configuration,
+- missing HA URL/local address behavior,
+- Plug Gen1 behavior,
+- and ensuring issues are created/cleared only at the correct times.

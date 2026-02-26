@@ -1,0 +1,41 @@
+### Goal
+
+Remove blocking behavior from `ContextHistory` “push” operations so that adding a new context to history never waits on slow/async fragment computation, while still keeping undo/redo behavior safe and consistent by ensuring contexts are fully resolved at the moment undo/redo is performed.
+
+### Required behavior changes
+
+#### 1) Context history pushes must be non-blocking
+In `ai.brokk.context.ContextHistory`, pushing a context onto history (including pushes done via any “update/replace” or external-change reconciliation paths) must **not** synchronously wait for fragment/content computation to complete. Pushing should return promptly even if one or more fragments are computed lazily or take a long time.
+
+*This includes “push” variants that internally build a derived context and then add it to history.*
+
+#### 2) Undo/redo must run with the watcher paused and the live context resolved
+Undo/redo operations must be executed in a way that:
+- Pauses the file/change analyzer/watcher before performing the undo/redo.
+- Ensures the currently-live context’s contents/fragments have finished computing (bounded by the existing snapshot timeout constant) before the undo/redo proceeds.
+- Always resumes the watcher afterward, even on exceptions.
+- Properly propagates interruption: if the waiting step is interrupted, the interrupt must not be swallowed.
+
+This behavior is required for:
+- `ContextManager.undoContext(...)`
+- async undo-until
+- async redo
+
+A new helper API may be introduced on `ContextManager` to wrap these steps, but the key is that undo/redo now needs both “pause watcher” and “wait for context resolution”.
+
+#### 3) Public API changes for interruption
+`undoContext()` in `ai.brokk.IContextManager` / `ai.brokk.ContextManager` must allow interruption to surface to callers (i.e., it should no longer hide an `InterruptedException`). Any call sites that expose undo as a tool entry point (e.g., in `ai.brokk.agents.ArchitectAgent`) must be updated accordingly.
+
+Where appropriate, mark methods that may block (waiting on context computation) with `@Blocking`.
+
+#### 4) Centralize snapshot timeout usage
+Use the existing `ContextHistory.SNAPSHOT_AWAIT_TIMEOUT` constant consistently (tests rely on this timeout behavior). Avoid duplicating or hardcoding different timeouts.
+
+#### 5) Guardrails that depend on resolved context should wait (best-effort)
+In `ai.brokk.agents.CodeAgent`, before performing logic that relies on computed fragment results (e.g., determining read-only paths / edit eligibility based on fragment file sets), ensure the context has had a chance to finish computing within the snapshot timeout. If interrupted, preserve the thread’s interrupt status and continue in a safe manner.
+
+### What should remain true conceptually
+
+- History ordering, selection, and redo-stack clearing semantics must remain correct.
+- Undo/redo should still correctly restore prior contexts and interact safely with external file changes.
+- Pushing contexts should be fast even when fragments are slow, but undo/redo must not operate on partially-resolved state.

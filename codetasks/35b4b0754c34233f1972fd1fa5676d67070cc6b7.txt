@@ -1,0 +1,44 @@
+## Problem: Fix organization update permissions and billing/Stripe sync, plus refactor update flow
+
+In the Admin Console API, organization updates are handled by the `PUT /organizations/{id}` endpoint in `OrganizationsController`. A bug prevents an organization **owner** from renaming an organization when that organization is **provider-managed** (linked to a Provider), even though renaming should be allowed. At the same time, billing-related changes must remain restricted.
+
+Update the implementation to support the following behaviors and structure:
+
+### 1) Correct authorization semantics for updates
+When handling an organization update request:
+
+- If the request attempts to change the **billing email**, the caller must have **subscription editing** permission for that organization.
+- If the request does **not** include a billing email change (e.g., rename only), **organization owner** permission is sufficient, even if the organization is linked to a Provider.
+- Unauthorized access should be surfaced as an HTTP authorization failure response (not a “not found” behavior).
+
+### 2) Split authorization from business logic
+Move the update operation’s business logic out of the controller into a dedicated command/service layer so that:
+- The controller is responsible for request parsing + authorization decisions + returning HTTP results.
+- The command/service is responsible for loading the organization, applying allowed mutations, persisting changes, and invoking downstream billing sync when applicable.
+
+### 3) Support partial updates and legacy key backfill
+The update request payload should allow updating any combination of:
+- organization name
+- billing email
+- public/private keypair (legacy migration behavior)
+
+Requirements:
+- Treat request fields as **optional**; if a field is omitted/null, it must not overwrite existing values.
+- Normalize billing email when updated (e.g., casing/whitespace).
+- The public/private keys should only be written if provided **and** the organization does not already have them (backfill only; do not overwrite existing keys).
+
+### 4) Stripe update responsibility belongs to billing service
+If an organization’s name and/or billing email changes (cloud/non-self-hosted), and the organization has a Stripe customer identifier, update the Stripe customer record accordingly. This Stripe-specific work must be encapsulated behind the organization billing service abstraction (add a method if needed), rather than being embedded in general organization update logic.
+
+### 5) Self-hosted behavior
+On self-hosted deployments, organization details such as name and billing email are controlled externally (license) and must not be modified through this endpoint. However, the legacy key backfill behavior must still be supported.
+
+### 6) API contract adjustments
+The update endpoint should use a GUID route parameter and return an `IResult`-style response consistent with minimal API typed results (e.g., `Ok`, `Unauthorized`), while still returning the same organization response model content on success (including plan info).
+
+### 7) Ensure plan lookup still occurs
+After a successful update, the response should include the organization’s plan information by retrieving it from the pricing client using the organization’s plan type.
+
+---
+
+Deliver a solution that satisfies these behavioral requirements and cleanly refactors the update flow so all provided unit and integration tests pass.

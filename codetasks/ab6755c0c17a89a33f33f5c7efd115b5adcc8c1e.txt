@@ -1,0 +1,24 @@
+Implement support for `KafkaShareConsumer.acquisitionLockTimeoutMs()` (KIP-1222) end-to-end in the share-consumer fetch pipeline so the consumer can surface the broker-provided “acquisition lock timeout” value.
+
+### Required behavior
+
+* `KafkaShareConsumer.acquisitionLockTimeoutMs()` returns an `Optional<Integer>`:
+  * `Optional.empty()` when the consumer has not yet learned a value from the broker (for example, immediately after construction/subscription and before any successful share fetch that provides it).
+  * `Optional.of(timeoutMs)` once the broker has provided a positive timeout value.
+  * If the broker response indicates “unset” (e.g., zero or negative), treat it as absent and do not publish a value.
+* Once a value is learned, it must remain available to the consumer across subsequent operations (polls, additional subscribes, etc.) until replaced by a newer broker-provided value.
+* Calling `acquisitionLockTimeoutMs()` on a closed consumer must fail consistently with other ShareConsumer “state access” APIs (i.e., enforce the same open/closed checks and synchronization semantics used elsewhere in `ShareConsumerImpl`).
+
+### Data propagation expectations
+
+The timeout originates from the share fetch response and must be carried through internal objects involved in fetch completion and record delivery, so that:
+
+* The share fetch response handling captures the acquisition lock timeout from the response “envelope” and makes it available to downstream processing.
+* Completed fetch processing and any in-flight batch objects created from it retain the timeout information associated with that fetch.
+* The higher-level fetch container used by the consumer to serve records tracks the most up-to-date timeout seen so far and exposes it.
+* `ShareConsumerImpl.acquisitionLockTimeoutMs()` returns the value currently held by the consumer’s active fetch state.
+
+### Scope notes
+
+* This change will require updating constructor signatures and call sites for internal fetch/batch classes to carry the new field.
+* Ensure naming and logging changes (if any) do not break compilation and that the modified classes still satisfy their existing responsibilities (metrics aggregation, deserialization, acknowledgements, etc.).

@@ -1,0 +1,47 @@
+Introduce admission control for the v2 query engine’s workflow task dispatch so the scheduler/runner is not flooded with large numbers of tasks.
+
+### Goal
+When a `Workflow` is executed, tasks must be dispatched to the runner in a controlled way using two “admission lanes”:
+- **scan** tasks (tasks whose fragment contains at least one `physical.NodeTypeDataObjScan` node)
+- **other** tasks (everything else)
+
+Each lane has a configurable maximum number of concurrently admitted tasks. A value of `0` (or any value < 1) means **unlimited** for that lane.
+
+### Required behavior
+1. **Workflow construction options**
+   - Add an `Options` struct for workflows, and update the workflow constructor signature to accept it.
+   - The options must allow configuring:
+     - maximum running scan tasks
+     - maximum running non-scan (“other”) tasks
+
+2. **Admission control / lanes**
+   - Implement a control structure that:
+     - classifies tasks into scan vs other based on the physical fragment graph content
+     - provides a per-type lane that enforces capacity via a token mechanism (i.e., tasks must “acquire” before being started and “release” when finished)
+   - If no limit is configured for a lane, it must behave as unlimited capacity.
+
+3. **Dispatching**
+   - `Workflow.Run(...)` must not synchronously enqueue all tasks directly in one call when limits apply.
+   - Dispatch must occur such that:
+     - tasks are started in a way that honors per-lane capacity
+     - tasks from different lanes are able to make progress independently
+     - failures during dispatch are surfaced back through the workflow’s pipeline/error reporting behavior
+
+4. **Token release**
+   - When a task transitions to a terminal state, the admission token for its lane must be released exactly once for tasks that had been admitted (e.g., tasks that reached pending/running before becoming terminal).
+   - Avoid releasing for redundant state updates where the state does not actually change.
+
+5. **Limits plumbing**
+   - Add a per-tenant limit named `max_scan_task_parallelism` exposed in:
+     - configuration documentation (`docs/sources/shared/configuration.md`)
+     - validation limits (`pkg/validation/limits.go`) including a CLI flag `-limits.max-scan-task-parallelism`
+     - the `pkg/logql.Limits` interface (and its fake implementations used in tests and tooling)
+   - The engine must read this limit and pass it into the workflow options as the scan lane maximum.
+
+### Key locations and API touchpoints
+- Workflow API and execution: `pkg/engine/internal/workflow/workflow.go`
+- Admission control implementation: add new workflow-internal code under `pkg/engine/internal/workflow/`
+- Engine wiring: `pkg/engine/engine.go` must construct workflows with the new options derived from tenant limits
+- Limits interface and implementations: `pkg/logql/limits.go` and any fake/mock limit implementations used across the repo (including LogCLI)
+
+The provided tests cover classification (scan vs other), lane-limited dispatch over many scan tasks, and correct interaction with workflow execution/cancellation.

@@ -1,0 +1,50 @@
+Add language-aware “call receiver” extraction across analyzers, replacing the older “class name extraction” API, and extend support to Scala, C#, Go, and PHP.
+
+### Goal
+Given a textual member/method reference (examples: `MyClass.myMethod`, `ns::Type::func`, `DateTime::createFromFormat`, `$obj->save()`), implement a heuristic that returns the *receiver* portion (class/module/package/object/variable) as an `Optional<String>`. If the input doesn’t look like a supported member reference for that language, return `Optional.empty()`.
+
+### Required API changes
+- Rename the analyzer-level method from `extractClassName(String)` to `extractCallReceiver(String)` on the shared analyzer interface and all implementations.
+- Update the utility entry point in `AnalyzerUtil` accordingly, and update any call sites to use the new name.
+- Ensure multi-analyzer delegation uses the new method name.
+
+### Receiver extraction behavior
+Implement receiver extraction logic for these languages and patterns (heuristic, string-based; not a full parser):
+
+1. **Scala**
+   - Dot-based references (similar to Java) where the rightmost segment is a method/operator name and everything before it is the receiver.
+   - Support Scala square-bracket type parameters (e.g., `List[Int].map`), which should not prevent extraction.
+   - Allow symbolic operator method names (e.g., `List.::`, `MyList.++`) as valid “member” segments.
+   - Receiver validation should reject obvious non-receivers (e.g., missing segments, invalid casing/identifier forms per heuristic).
+
+2. **C#**
+   - Dot-based references where both receiver segments and member names commonly use PascalCase.
+   - Support generic type arguments using angle brackets (e.g., `List<int>.Add`, nested generics, nullable markers in generic arguments).
+   - Support the null-conditional operator (`?.`) by treating it as part of a valid member reference and extracting the receiver appropriately.
+   - Reject references that don’t match the expected C#-style member naming heuristic.
+
+3. **Go**
+   - Dot-based references representing either:
+     - `package.Identifier` (package function/type), or
+     - `receiver.Identifier` (variable receiver method call)
+   - Accept exported and unexported identifiers (PascalCase or camelCase) for the right-hand member.
+   - Validate the receiver segment as a valid Go identifier (package or variable-like).
+
+4. **PHP**
+   - Support two operator forms:
+     - Static access: `Receiver::member`
+     - Instance access: `Receiver->member`
+   - Allow namespaced class receivers for static access using backslashes (including fully-qualified forms).
+   - For instance access, allow typical PHP variable receivers such as `$this` and `$var` and conservative non-variable identifiers where reasonable.
+   - Do not treat dot notation as valid in PHP for this feature.
+
+### Shared/refactoring expectations
+- Consolidate common normalization/stripping utilities used by multiple languages:
+  - Provide a bracket-stripping utility that can remove nested bracketed groups (used for generics/type parameters).
+  - Provide a reusable “validate rightmost receiver segment” helper for dot-separated languages where the last receiver segment must match a configurable regex.
+
+### Integration point
+The extracted receiver is used as a fallback in symbol lookup: update the relevant lookup code to call the new utility method name and work with the receiver value it returns.
+
+### Deliverable
+After implementing the rename and adding the receiver-extraction heuristics (plus any necessary small refactors to support them), all provided unit tests for receiver extraction across languages must pass.

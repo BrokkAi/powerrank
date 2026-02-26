@@ -1,0 +1,61 @@
+Update the Stripe webhook handler for `customer.subscription.updated` to consolidate and tighten “unpaid subscription” behavior across **users**, **organizations**, and **providers**.
+
+### Goal
+In `src/Billing/Services/Implementations/SubscriptionUpdatedHandler.cs`, change `HandleAsync(Event parsedEvent)` so that enable/disable and cancellation behavior is driven by **subscription status transitions** inferred from the event’s `Data.PreviousAttributes`, rather than the current status alone, and replace the old “schedule a cancellation job” approach with a direct Stripe subscription update.
+
+### Required behavior
+
+#### 1) Identify the subscriber from the subscription
+The handler must determine whether the subscription belongs to:
+- a **user** (premium),
+- an **organization**, or
+- a **provider**,
+
+based on the subscription (metadata), using the project’s subscriber-id abstraction/model.
+
+#### 2) Detect and handle the “went unpaid” transition
+Treat a subscription as “went unpaid” only when:
+- the **previous** status was one of: `trialing`, `active`, `past_due`
+- and the **current** status is `unpaid`
+- and the latest invoice billing reason is limited to the subscription lifecycle reasons (e.g., cycle/create), not unrelated invoice events.
+
+When this transition occurs:
+- **Disable** the subscriber:
+  - user: disable premium (respecting the subscription’s current period end)
+  - organization: disable (respecting current period end) and emit the enabled/disabled push notification
+  - provider: set `Enabled = false` and persist via the provider service
+- **Set the Stripe subscription to cancel in 7 days** via `UpdateSubscription`:
+  - use `CancelAt` (not a background job)
+  - set `ProrationBehavior` so this change does not prorate
+  - include cancellation details/comment explaining the automated action
+  - if the subscription is using a Stripe `TestClock`, wait until it is ready and base the “now” timestamp on the frozen test clock time instead of system time
+
+This cancellation update should occur even if the subscriber entity can’t be found (e.g., provider record missing).
+
+#### 3) Detect and handle the “became active” transition
+Treat a subscription as “became active” only when:
+- the **previous** status was `incomplete` or `unpaid`
+- and the **current** status is `active`
+- and the latest invoice billing reason matches the same subscription lifecycle reasons used above.
+
+When this transition occurs:
+- **Enable** the subscriber:
+  - user: enable premium (respecting current period end)
+  - organization: enable (respecting current period end) and emit the enabled/disabled push notification
+  - provider: set `Enabled = true` and persist via the provider service
+- **Remove any pending cancellation** on the Stripe subscription via `UpdateSubscription`:
+  - clear “cancel at period end” behavior (and avoid proration)
+
+#### 4) Expiration updates are independent of enable/disable transitions
+After transition handling, update expirations based on the subscription’s current period end:
+- user: update premium expiration
+- organization: update organization expiration; if it’s a sponsored subscription, also update sponsorship expiration
+- keep the existing organization coupon/trial cleanup logic (the Password Manager coupon removal when removing a Secrets Manager trial)
+
+#### 5) Remove legacy unpaid/incomplete behaviors that no longer apply
+The handler should no longer rely on:
+- Quartz scheduling for subscription cancellation
+- “cancel subscription + void invoices” flows for user premium handling tied to unpaid/incomplete
+- provider-specific “unpaid” handling paths that trigger without the defined valid transition rules
+
+Implement the updated logic in a way that satisfies the provided test suite (including both the older and newer expectations around statuses, transitions, Stripe update options, and side effects).

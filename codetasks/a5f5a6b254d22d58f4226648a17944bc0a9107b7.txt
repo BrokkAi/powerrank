@@ -1,0 +1,40 @@
+You maintain a Tree‑sitter–based multi-language source analyzer that (a) builds “code unit” definitions (classes, functions, fields, etc.) and (b) determines whether a file “contains tests” by scanning Tree‑sitter query captures.
+
+A recent grammar/query update made test detection too permissive in several languages and Rust definition mapping incomplete. Implement the missing analyzer-side logic and Rust mapping so that semantic test detection is accurate and Rust module structure is represented correctly.
+
+### 1) Refine “contains tests” logic (reduce false positives)
+For **Java**, **Scala**, **C#**, and **Rust**, the Tree‑sitter queries now emit broader captures and the analyzer must apply language-specific validation using the captured node text from the file content.
+
+Update the relevant analyzers so `containsTests(...)` only returns `true` for real test markers, not merely any annotation/attribute/identifier that happens to be captured.
+
+Key expectations:
+
+- **Java** (`JavaAnalyzer`): Only treat method annotations as test markers when the annotation’s *simple name* is one of the supported JUnit-style test annotations (including handling fully-qualified annotation names and harmless whitespace around the name). Annotations unrelated to tests must not trigger detection.
+
+- **Scala** (`ScalaAnalyzer`): Distinguish between different kinds of captured “test” signals:
+  - Some captures should remain immediate positives (e.g., known ScalaTest call/import patterns).
+  - For annotation- and infix-based captures, only treat them as test markers when the captured token is one of an allowed set (i.e., don’t treat any arbitrary annotation or operator as a test marker).
+
+- **C#** (`CSharpAnalyzer`): The query captures attribute usage broadly. Only treat a file as containing tests when a method has an attribute whose name corresponds to a known test attribute. This must correctly handle:
+  - Fully-qualified attribute names (namespaces/dots),
+  - Optional `Attribute` suffix on the attribute type name,
+  - Non-test attributes (e.g., framework attributes unrelated to testing) must not trigger detection.
+
+- **Rust** (`RustAnalyzer`): Only treat Rust attributes as test markers when the attribute item represents either `#[test]` or `#[cfg(test)]`. Other attributes (e.g., `#[derive(...)]`, custom attributes, etc.) must not trigger detection, and function names containing “test” without the attribute must not trigger detection.
+
+This refinement requires analyzer methods to have access to the file text associated with the Tree‑sitter nodes they’re validating.
+
+### 2) Add Rust inline module definition support
+The Rust analyzer currently builds code units for items like structs, enums, traits, impl blocks, functions, and fields, but it must also support **inline module blocks** (`mod ... { ... }`).
+
+Implement Rust module handling so that:
+
+- A `mod` block is recorded as a dedicated module code unit.
+- Items declared inside a module are correctly namespaced under that module (including nested modules).
+- Functions inside modules (and nested module paths) resolve to the expected fully-qualified names consistent with the analyzer’s naming conventions.
+- The analyzer’s skeleton/type mapping recognizes module captures as module statements (not classes/functions).
+
+### 3) Capture and naming integration
+A new capture name is introduced for module definitions. Ensure the analyzer’s capture-name handling and code-unit construction supports this new capture and that `getDefinitions(fqName)` can retrieve module and nested members by their fully-qualified names.
+
+The overall goal is that definition extraction and semantic test detection behave correctly across the affected languages under the updated Tree‑sitter capture patterns.

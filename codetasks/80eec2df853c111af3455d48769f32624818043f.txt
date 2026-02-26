@@ -1,0 +1,27 @@
+Add two new Public Admin Console API endpoints to manage an organization member’s access, and update the public error response model for JSON deserialization/null-safety.
+
+### 1) Public members endpoints: revoke + restore
+In `src/Api/AdminConsole/Public/Controllers/MembersController.cs`, extend the existing controller with two new routes under the existing members resource:
+
+- `POST /public/members/{id}/revoke`
+  - Revokes the specified organization member.
+  - If the member ID does not exist, or the member does not belong to the organization in the current request context, return **404 Not Found**.
+  - If the revoke operation cannot be performed due to business rules/state, return **400 Bad Request** with a JSON body matching `ErrorResponseModel` (see below). The `Message` must reflect the underlying error (e.g., cases like “Already revoked.”).
+  - On success return **200 OK** and ensure the member’s persisted status reflects a revoked state.
+
+- `POST /public/members/{id}/restore`
+  - Restores a previously revoked member back to an appropriate active/invited state.
+  - If the member ID does not exist, or the member does not belong to the organization in the current request context, return **404 Not Found**.
+  - If restore is not allowed due to business rules/state, return **400 Bad Request** with an `ErrorResponseModel` whose `Message` reflects the underlying error (e.g., “Already active.”).
+  - On success return **200 OK** and ensure the member’s persisted status reflects the restored state.
+
+These endpoints must attribute/describe responses consistently with the existing public controllers (status codes and error response type), and they must use **POST** (not PUT/PATCH/DELETE).
+
+### 2) Public `ErrorResponseModel` adjustments
+In `src/Api/Models/Public/Response/ErrorResponseModel.cs`, update the model to support safe deserialization and nullable handling:
+
+- Make the model compatible with `System.Text.Json` deserialization for error responses returned by the API (including adding an appropriate JSON constructor).
+- Update properties to be null-safe/immutable-friendly so that deserializing responses with only a `Message` (and possibly no `Errors`) works reliably.
+- Preserve existing constructor overloads/behavior used throughout the API, but modernize any collection initializations as needed.
+
+The final result should allow the new endpoints to return structured public errors (via `ErrorResponseModel`) and allow integration tests to deserialize and assert on `Message` correctly.

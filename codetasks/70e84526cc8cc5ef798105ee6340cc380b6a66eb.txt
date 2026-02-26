@@ -1,0 +1,51 @@
+Implement a new Home Assistant integration for **uHoo indoor air monitors** using the `uhooapi` library. The integration is configured via **config flow** (API key) and exposes a set of **sensor entities** backed by a **DataUpdateCoordinator** that polls the cloud API.
+
+### Functional requirements
+
+#### Integration setup / lifecycle
+- The integration domain is `uhoo` and it uses **config entries** (no YAML setup).
+- On config entry setup:
+  - Create an authenticated API client using the stored API key and Home Assistant’s shared aiohttp session.
+  - Perform initial authentication and device discovery before the first coordinator refresh.
+  - Handle failures by raising the appropriate Home Assistant exceptions:
+    - Connection/DNS-type errors must result in “not ready / retry later”.
+    - Unauthorized credentials must result in a “setup error” (non-retry) state.
+    - Other API-level errors should be treated as retryable.
+  - Store the coordinator on the config entry as runtime data and forward platform setup(s).
+- Implement clean unloading of the config entry and its platforms.
+
+#### Config flow
+- Provide a UI flow where the user enters an **API key** (treated as a password-style field).
+- Validate the key by attempting to authenticate with the API.
+- Behaviors:
+  - Abort if an entry with the same credentials is already configured.
+  - Map authentication failure to an `invalid_auth` form error.
+  - Map API connectivity/API errors to a `cannot_connect` form error.
+  - Unexpected exceptions should be logged and shown as `unknown`.
+  - On success, create a config entry whose title includes a short suffix derived from the API key (e.g., last characters).
+
+#### Data coordinator
+- Implement a `DataUpdateCoordinator` that:
+  - Polls at a fixed interval.
+  - Refreshes device measurements from the cloud API for each known device.
+  - Exposes coordinator data as a mapping of device identifiers (serial numbers) to device objects.
+  - Converts API failures into `UpdateFailed` so entities become unavailable appropriately.
+
+#### Sensor platform
+- Provide a sensor platform that creates entities for each discovered device for these measurements:
+  - Carbon monoxide (CO), carbon dioxide (CO2), PM2.5, humidity, temperature, pressure, TVOC, NO2, ozone, virus index, mold index.
+- Entity requirements:
+  - Use `CoordinatorEntity`.
+  - Unique ID must be stable and derived from device serial number + sensor key.
+  - Entities must have `has_entity_name = True` and attach `DeviceInfo` (identifiers, manufacturer, model, serial number, and device name).
+  - Use appropriate `SensorDeviceClass`, `SensorStateClass.MEASUREMENT`, and native units where applicable.
+  - Some sensors must use translation keys (not hardcoded names) to match provided translations.
+  - Temperature unit behavior must respect the device’s user settings: if the device reports its temperature unit preference as Fahrenheit, expose Fahrenheit as the native unit so Home Assistant performs unit conversion to the system unit.
+
+#### Translations / metadata
+- Provide integration metadata and translations consistent with Home Assistant expectations:
+  - `manifest.json` must declare config flow support, cloud polling IoT class, and the `uhooapi` dependency.
+  - `strings.json` must include config flow strings and translated entity names for the sensors that use translation keys.
+
+### Notes
+- The provided tests exercise: successful/failed config flows, setup retry vs setup error handling, coordinator-driven availability changes, entity registry/state snapshots, multiple devices, and temperature unit handling.

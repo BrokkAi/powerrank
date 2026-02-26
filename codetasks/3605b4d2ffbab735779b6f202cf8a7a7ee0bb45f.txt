@@ -1,0 +1,41 @@
+Update the Extended Cache feature to support **non-Redis** implementations of `IDistributedCache`, while keeping Redis support (including backplane) intact.
+
+### Functional requirements
+
+1. **Rename the configuration flag**
+   - In `GlobalSettings.ExtendedCacheSettings`, replace the boolean setting currently named `UseSharedRedisCache` with `UseSharedDistributedCache`.
+   - The new property should be used throughout the codebase and in configuration binding scenarios (e.g., `GlobalSettings:DistributedCache:DefaultExtendedCache:*` keys).
+   - Default behavior should remain equivalent to the previous default (shared cache enabled unless explicitly disabled).
+
+2. **Extend `AddExtendedCache` to support non-Redis distributed caches**
+   - The `AddExtendedCache` registration flow must work in four modes determined by:
+     - whether distributed cache is enabled for the extended cache (`EnableDistributedCache`), and
+     - whether the cache should reuse shared infrastructure (`UseSharedDistributedCache`) or use isolated/keyed infrastructure, and
+     - whether a Redis connection string is present (either global/shared or per-cache).
+
+   - When **Redis is configured** (connection string present):
+     - Continue to configure distributed cache and enable cross-instance invalidation via a FusionCache backplane (Redis pub/sub).
+     - Support both shared and keyed/isolated Redis setups as already modeled by the extension method and settings.
+
+   - When **Redis is not configured** (no connection string present):
+     - Treat the environment as “non-Redis distributed cache mode”.
+     - The extended cache should attach to an existing `IDistributedCache` registration if available:
+       - For “shared” mode: use the unkeyed `IDistributedCache` from DI.
+       - For “isolated/keyed” mode: use the keyed `IDistributedCache` associated with the cache name.
+     - Do **not** configure or require a backplane in this mode (non-Redis distributed caches do not support pub/sub invalidation here).
+
+3. **Handle missing distributed cache registrations gracefully**
+   - If Redis is not configured and no suitable `IDistributedCache` is registered in DI (shared or keyed depending on mode), the resulting `IFusionCache` should still be resolvable and operate as memory-only (no distributed cache, no backplane), rather than failing during service registration or resolution.
+
+4. **Documentation setting name update**
+   - Update `src/Core/Utilities/CACHING.md` examples to use `UseSharedDistributedCache` instead of the old name.
+
+### Notes/expectations
+
+- Redis backplane behavior must remain available only when Redis is actually configured.
+- The service registrations should continue to support multiple named caches (including multiple keyed caches with different distributed-cache capabilities).
+- The public surface area affected by tests includes:
+  - `GlobalSettings.ExtendedCacheSettings`
+  - `ExtendedCacheServiceCollectionExtensions.AddExtendedCache(...)`
+  - configuration binding for the renamed setting
+  - correct DI resolution of `IFusionCache` (and, when applicable, related Redis/backplane services).

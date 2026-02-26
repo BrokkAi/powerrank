@@ -1,0 +1,41 @@
+Implement and re-integrate “Summarize” selection behavior for the **Folders**, **Classes**, and **Methods** flows in `AttachContextDialog`, and centralize the selection logic in `AnalyzerUtil` so it can be unit-tested.
+
+### Required behavior
+
+#### 1) Selection returns fragments that already encode “summarize”
+The dialog’s confirmation actions must produce a set of `ContextFragment` objects where the “summarize vs full” choice is expressed by the *fragment type*:
+
+- **Files / Folders**
+  - Not summarized: `ContextFragment.ProjectPathFragment` (one per selected file)
+  - Summarized: `ContextFragment.SummaryFragment` with `SummaryType.FILE_SKELETONS` (one per selected file)
+
+- **Classes / Methods**
+  - Not summarized: `ContextFragment.CodeFragment`
+  - Summarized: `ContextFragment.SummaryFragment` with `SummaryType.CODEUNIT_SKELETON`
+
+- **Usages**
+  - Default: `ContextFragment.UsageFragment`
+  - If “Summarize” is checked *and* the input resolves to a **method**, return a `ContextFragment.CallGraphFragment` (callee graph settings as expected by the existing UI behavior).
+
+As a consequence, callers (e.g., panels/dialogs that open `AttachContextDialog`) should no longer need a separate boolean “summarize” result; they should only consume the returned fragments.
+
+#### 2) Preserve existing UI gating for “Summarize”
+Keep the existing rules that control when the “Summarize” checkbox is enabled/disabled and what tooltip it shows depending on analyzer readiness. The checkbox should be visible for the relevant tabs (and should not regress in visibility across tabs).
+
+#### 3) Move selection-building logic into `AnalyzerUtil`
+Add/extend public utility methods in `AnalyzerUtil` to build fragments for each selection type, so the dialog becomes mostly a thin wrapper:
+
+- File selection: validate the file is part of the project; return empty when invalid.
+- Folder selection: resolve matching project files and return an ordered set of fragments; support an “include subfolders” option; normalize folder inputs (separator differences and leading/trailing slashes).
+- Class/method selection: resolve a `CodeUnit` from the analyzer based on the user input (short or fully-qualified), including reasonable fallback strategies when an exact lookup fails; return empty when nothing matches.
+- Usage selection: return empty on blank input; if symbol resolution fails, still produce a `UsageFragment` using the raw input; if summarizing and a method resolves, produce the call-graph fragment.
+
+These utilities must be implemented in a way that can be exercised from the provided unit tests.
+
+#### 4) Update callers to the new dialog result shape
+Code that previously consumed a “result object” containing both fragments and a summarize flag must be updated to:
+- Retrieve only the selected fragments (nullable when the dialog is cancelled/invalid)
+- Submit/add those fragments without separately re-applying summary behavior later (since the fragments already encode it)
+
+### What will be validated
+The provided tests include new unit coverage around the `AnalyzerUtil` selection helpers (files, folders, classes, methods, usages, and edge cases like blank input and normalization). Ensure your implementation satisfies these expectations while keeping the rest of the application behavior intact.

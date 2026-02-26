@@ -1,0 +1,33 @@
+Improve the inlay-type-hints logic for Python assignments so that type hints are *suppressed* when the right-hand side is “trivially obvious”, while still emitting hints for non-trivial expressions.
+
+### Context
+
+`crates/ty_ide/src/inlay_hints.rs` contains the visitor responsible for emitting inlay hints, including variable type hints on assignment targets. Today it will eagerly mark assignment targets as eligible for type hints, which results in noisy output for cases like assigning a literal.
+
+### Required behavior
+
+When visiting an assignment statement, determine whether the assignment’s RHS expression is too trivial/redundant to justify emitting an inlay type hint for the assigned variable(s). If it is, do **not** emit type hints for the assignment targets of that statement. If it is not, keep emitting hints as before.
+
+“Too trivial” includes:
+
+- Direct literal expressions whose inferred type is redundant, including:
+  - numeric literals
+  - boolean literals
+  - string literals
+  - bytes literals
+  - `None`
+  - f-strings
+  - template strings (the `t"..."` form used in this codebase)
+- Tuple expressions where **all** tuple elements are themselves “too trivial” by the same rules (this should work recursively for nested tuples).
+
+Everything else should still be considered eligible for type hints (e.g., names, calls, attribute access, lists, etc.). In particular, calls like `int(1)` should not be treated as trivial just because they contain a literal.
+
+The change must apply consistently across:
+- single-target assignments (`x = ...`)
+- tuple/unpacking assignments (`x, y = ...`, nested destructuring, etc.)
+- “multiple assignment” forms that parse as tuple RHS without parentheses (`x, y = 1, 2`)
+- any existing range-filtering behavior used by tests
+
+### Acceptance criteria
+
+After implementing the suppression rules above, all provided unit snapshots and the LSP end-to-end inlay hint test must pass, including updated expectations around which assignments receive variable type hints and which do not.

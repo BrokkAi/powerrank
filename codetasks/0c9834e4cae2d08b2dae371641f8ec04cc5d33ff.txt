@@ -1,0 +1,32 @@
+UniFi Protect recently added an **AI Port** device type. In the upstream Protect library, `AiPort` is implemented as a subclass of the camera model, which causes the Home Assistant UniFi Protect integration to mistakenly treat AI Ports as real cameras.
+
+This exercise asks you to update the integration so that **AI Ports are not handled as cameras**, even though they may pass `isinstance(..., Camera)` checks.
+
+### What needs to change
+
+Across the UniFi Protect integration, there are several places that create **camera-specific entities** or perform **camera-only setup** when a device “looks like” a camera. After this change:
+
+1. **AI Port devices must not create camera entities**
+   - No `camera` platform entities should be created for AI Ports.
+   - No camera stream/RTSP-related behavior should be triggered for AI Ports.
+
+2. **AI Port devices must not create camera-specific auxiliary entities**
+   - Do not create camera-derived entities for AI Ports in platforms such as:
+     - `binary_sensor` (motion, smart detections, etc.)
+     - `event`
+     - `sensor`
+     - `media_player` (speaker-related camera entities)
+   - AI Ports may still participate in any generic/base device entities that apply to non-camera devices; the key requirement is that **camera-only entity families are excluded**.
+
+3. **Clean up legacy RTSP issues for AI Ports**
+   - Previous buggy behavior may have created “RTSP disabled” issues for AI Ports.
+   - On integration setup (and/or reload), ensure any RTSP-related issues that were created for AI Ports are removed so they no longer appear after updating.
+
+4. **Test utilities must not assume all `Camera` subclasses are real cameras**
+   - The test harness includes utilities that attach API objects or channel API references for cameras. Ensure this logic does not incorrectly apply to AI Ports.
+
+### Technical constraints / context
+
+- Device identification should be based on the device’s model/type information (e.g., `ModelType` / model key), not solely on inheritance checks.
+- The new tests introduce an `AiPort` fixture and expect the integration to properly exclude AI Ports from camera-centric behavior while continuing to support actual cameras normally.
+- The implementation should work both for devices present at initial setup and for devices added later via the integration’s runtime subscription/dispatcher mechanisms.

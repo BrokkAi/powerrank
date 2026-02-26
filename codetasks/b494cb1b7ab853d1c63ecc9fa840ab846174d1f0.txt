@@ -1,0 +1,57 @@
+Implement bidirectional dependency tracking for both file imports and type hierarchies, with lazy/on-demand computation and persistence across analyzer reloads.
+
+### 1) Extend the analyzer API (imports + type descendants)
+Update `ai.brokk.analyzer.IAnalyzer` to support:
+- **Resolved imports**: a method that returns the set of resolved imported `CodeUnit`s for a given `ProjectFile` (defaulting to empty for analyzers that don’t support it).
+- **Reverse imports**: a method that returns the set of `ProjectFile`s that import a given `ProjectFile` (defaulting to empty).
+- **Direct descendants**: a method that returns the immediate subtype(s) of a given `CodeUnit` (defaulting to empty).
+- **Transitive descendants**: a default method that computes descendants transitively from `getDirectDescendants`, with stable discovery order, de-duplication by `fqName`, and cycle safety.
+
+### 2) Add persistent graph models for imports and type hierarchies
+Introduce two new immutable structures in `ai.brokk.analyzer`:
+- `ImportGraph`: stores forward imports (`ProjectFile -> Set<CodeUnit>`) and reverse imports (`ProjectFile -> Set<ProjectFile>`), and provides query helpers.
+- `TypeHierarchyGraph`: stores direct supertypes (`CodeUnit -> List<CodeUnit>`) and direct subtypes (`CodeUnit -> Set<CodeUnit>`), and provides query helpers.
+
+These graphs must be stored inside the Tree-sitter analyzer’s persistent state so they can survive save/load.
+
+### 3) Make Tree-sitter import resolution lazy, and support reverse queries
+Refactor `ai.brokk.analyzer.TreeSitterAnalyzer` so that:
+- File properties no longer eagerly store “resolved imports” as part of per-file state.
+- `importedCodeUnitsOf(file)` computes resolved imports **on-demand** when not already available, caches the result for the lifetime of the analyzer instance, and is able to merge computed results into the persistent snapshot state.
+- `referencingFilesOf(file)` is supported:
+  - It should first use cached/persisted reverse-import data when available.
+  - If reverse data isn’t yet available, it must be able to populate reverse edges based on known forward edges without crashing or recursing infinitely.
+- Circular import situations must be handled safely (no stack overflow, no illegal concurrent-cache recursion failures), returning stable/consistent results.
+
+### 4) Track bidirectional type hierarchy information lazily
+Update `TreeSitterAnalyzer` to support:
+- Lazy computation and caching of **direct supertypes** (existing behavior) and **direct subtypes** (new behavior).
+- `getDirectDescendants(CodeUnit)` should return immediate subtypes for class/interface-like code units and empty for non-class units.
+- Subtype computation must be cycle-safe and should be persistable by merging lazy caches into the persistent `TypeHierarchyGraph` during snapshotting.
+- Any previous eager “type analysis” post-processing should be removed/disabled; hierarchy information should be computed on-demand.
+- The state snapshot must persist both supertypes and subtypes graphs.
+
+### 5) Update snapshot/persistence format (with backward compatibility)
+Modify `ai.brokk.analyzer.TreeSitterStateIO` so that it:
+- Serializes/deserializes the new `ImportGraph` and `TypeHierarchyGraph`.
+- No longer expects file entries to contain resolved imports.
+- Remains tolerant of older serialized analyzer states (legacy fields may be missing or structured differently). Loading older state should not fail and should interpret missing new sections as empty graphs.
+- Preserves existing semantics like `containsTests` and symbol indexes.
+
+### 6) Update MultiAnalyzer delegation behavior
+Update `ai.brokk.analyzer.MultiAnalyzer` so it properly delegates:
+- `importedCodeUnitsOf(file)` to the correct per-language delegate.
+- `referencingFilesOf(file)` by aggregating results from all delegates.
+- `getDirectDescendants(cu)` by aggregating results across delegates.
+Also ensure existing aggregation behaviors remain correct (e.g., avoid duplicate ancestors across delegates where applicable).
+
+### 7) Enhance import-based ranking to traverse both directions
+Update `ai.brokk.ranking.ImportPageRanker` so its graph expansion can traverse:
+- Forward edges (a file imports other files) and
+- Reverse edges (files that import the current file),
+using the analyzer’s resolved import APIs when available (`importedCodeUnitsOf`, `referencingFilesOf`) and falling back to existing heuristics only when necessary.
+
+The ranking logic must continue to support directional ranking (controlled by the existing “reversed” mode), but the *candidate discovery / graph building* should consider both directions so seeds can expand through either relationship.
+
+### 8) Ensure state creation paths initialize new graphs correctly
+Where `TreeSitterAnalyzer.AnalyzerState` instances are constructed (initial builds and updates), initialize the new persistent graphs appropriately (typically empty unless loaded from disk).

@@ -1,0 +1,53 @@
+Implement support for dragging/dropping files from **outside** the project root into the workspace “context”, while keeping existing in-project drops working as before.
+
+### Required behavior
+
+#### 1) Token estimation must handle external files
+Update `ContextSizeGuard` so its token estimation APIs can operate on a mixed collection of “project” and “external” file representations:
+
+- `ContextSizeGuard.estimateTokens(...)` must accept a collection of a common file abstraction (e.g., `BrokkFile`) rather than only `ProjectFile`.
+- Estimation must include both project-local files and external files using the existing size heuristic (bytes → tokens).
+- `checkAndConfirm(...)` should be updated consistently to accept the generalized file collection type.
+
+#### 2) File drops must accept external files
+Extend `FileDropHandlerFactory` so the transfer handler created for drag-and-drop:
+
+- Accepts dropped paths and partitions them into:
+  - **Project files**: paths under the project root (added using the existing “add files” mechanism).
+  - **External files**: paths outside the project root (added as context fragments derived from the external path).
+- **External directories and other non-regular paths must be ignored** (only regular external files are eligible).
+- If nothing usable is found in the drop, the handler should surface the same “nothing to add” style outcome as before.
+
+External files must be added to context via fragments (not as `ProjectFile`s). Use the existing fragment conversion utilities so external paths become the correct fragment type.
+
+#### 3) Guard drops while tasks are running
+Introduce an `IContextManager` API that answers whether *any* task is currently in progress (LLM action and/or broader task scope), and use it in the drop handler to block context mutation while busy.
+
+- `IContextManager` must provide a default implementation that is conservative for unknown implementations.
+- `ContextManager` must override it to return an accurate value based on its internal task tracking.
+
+When a drop is blocked for this reason, the user should be notified through the console/UI abstraction used by the handler.
+
+#### 4) Decouple drop handling from `Chrome` for testing
+The drop handler logic must be usable in tests without constructing a full `Chrome` instance:
+
+- Provide an entry point that can create the handler from an `IContextManager` plus an `IConsoleIO`.
+- The size-confirmation step (which normally needs UI/model-limit access) must be structured so tests can deterministically force outcomes (e.g., ALLOW/CANCELLED/BLOCKED) without requiring GUI components.
+
+#### 5) Decision handling
+When the size guard yields a decision:
+
+- **ALLOW**: proceed to add project files and/or external fragments.
+- **CANCELLED**: do not add anything; emit an informational cancellation notification via the provided IO abstraction.
+- **BLOCKED**: do not add anything; avoid emitting extra notifications beyond what the guard itself is responsible for.
+
+#### 6) Submission/scoping of the context mutation
+Adding dropped content should run through the context manager’s task submission facilities so it executes in the appropriate context/task scope. Where multiple context manager implementations exist, the solution should behave correctly for both the concrete `ContextManager` and test doubles.
+
+---
+
+Deliver the above in a way that satisfies the updated unit tests, including new tests around:
+- token estimation including external files,
+- correct partitioning and ignoring external directories,
+- correct suppression of additions on CANCELLED/BLOCKED,
+- and ability to run drop-handler logic under tests without a real `Chrome`.

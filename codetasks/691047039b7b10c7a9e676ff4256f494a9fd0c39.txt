@@ -1,0 +1,30 @@
+### Goal
+
+Fix how the system determines whether an organization’s Stripe subscription qualifies for the **Secrets Manager Standalone** behavior (coupon id `sm-standalone`). The current implementation relies on coupon data being present on the **Customer** object, but in some Stripe setups the coupon is represented on the **Subscription** (via its discounts), causing metadata and billing logic to be incorrect.
+
+### What to change
+
+Update the billing/metadata logic in:
+
+- `src/Core/Billing/Organizations/Queries/GetOrganizationMetadataQuery.cs` (`Run`)
+- `src/Core/Billing/Organizations/Services/OrganizationBillingService.cs` (the code path that computes organization metadata / checks the standalone Secrets Manager coupon)
+
+So that:
+
+1. **Coupon discovery is based on the Subscription**, not the Customer:
+   - The Secrets Manager Standalone coupon must be detected from the subscription’s discounts collection (not `customer.discount`).
+   - If no applicable discount/coupon exists on the subscription, the organization should not be treated as having the standalone Secrets Manager coupon.
+
+2. **Coupon applicability must be verified**:
+   - The coupon should only be considered valid for the organization if it applies to at least one of the products present in the subscription items.
+   - This requires comparing the subscription item product IDs against the coupon’s `applies_to.products` list.
+
+3. **Stripe expansion must retrieve the required coupon applicability fields**:
+   - Adjust Stripe retrieval options so that the coupon’s `applies_to` data is available when evaluating the subscription’s discounts.
+   - Customer retrieval should not depend on expanding coupon fields if the logic no longer uses customer-level discount data.
+
+4. **Null/absent data must be handled safely**:
+   - Support cases where customer or subscription cannot be retrieved, where subscription discounts are missing, or where coupon applicability data is absent.
+   - Ensure behavior is correct for self-hosted mode and for organizations without a gateway subscription.
+
+The provided tests cover both the older behavior expectations and the updated scenarios, including cases with missing customer/subscription data and subscriptions without discounts.

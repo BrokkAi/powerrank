@@ -1,0 +1,14 @@
+Home Assistant’s shared TLS/SSL utilities and HTTP client helpers need to be updated to avoid a subtle correctness issue: some downstream networking libraries (notably `httpx`/`httpcore`) may modify (`mutate`) an `ssl.SSLContext` instance at runtime when configuring ALPN negotiation. If Home Assistant reuses the same cached `SSLContext` across callers that require different ALPN protocol sets (e.g., HTTP/1.1-only vs HTTP/2-capable), one caller can inadvertently change another caller’s TLS behavior.
+
+Implement ALPN-aware SSL context and client handling so that:
+
+- The SSL utility layer (`homeassistant.util.ssl`) supports selecting ALPN protocol configurations when creating client contexts, and cached contexts are *bucketed* by both cipher list and ALPN protocol set.
+- The HTTPX helper (`homeassistant.helpers.httpx_client`) can request an async client configured for a specific ALPN protocol set, and cached `httpx.AsyncClient` instances are *bucketed* by both SSL verification mode and ALPN protocol set.
+- When HTTP/2-capable ALPN is requested, the created `httpx` client is configured to actually use HTTP/2 where applicable.
+- The aiohttp connector helper (`homeassistant.helpers.aiohttp_client`) consistently uses an HTTP/1.1 ALPN configuration (aiohttp is HTTP/1.1 in this context) when building SSL contexts.
+- Default-context accessors in the SSL utility module return contexts suitable for typical HTTP clients (i.e., explicitly aligned with HTTP/1.1 ALPN behavior rather than “unset”), while preserving backward-compatible defaults for the lower-level context factory APIs where expected.
+- SSL context creation remains safe for the event loop: avoid introducing blocking certificate-loading work during runtime in the event loop (the utilities currently rely on caching to prevent that).
+
+Additionally, update an integration that uses `httpx` (`homeassistant.components.iaqualink`) so it requests an HTTP client appropriate for endpoints that may negotiate HTTP/2 via ALPN.
+
+The provided tests cover the required public behaviors: context bucketing (cipher + ALPN), independent context creation, default context semantics, and per-ALPN caching/cleanup behavior for the shared `httpx` async clients, as well as ALPN selection used by aiohttp connectors.

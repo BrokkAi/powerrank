@@ -1,0 +1,23 @@
+Implement correct DNS truncation signaling for oversized **UDP** responses in the resolver/forwarder.
+
+### Background
+The codebase forwards DNS queries over multiple upstream transports (UDP, TCP fallback, DNS-over-HTTPS, and also generates some local responses). When a DNS response is too large for UDP, the DNS header’s **TC (Truncated)** flag must be set so clients can retry over TCP/DoH as appropriate.
+
+Currently, some response paths return oversized UDP responses without setting TC, especially when:
+- the client did **not** send EDNS0 (default UDP limit is **512 bytes**, per RFC 1035), or
+- the client **did** send EDNS0 with a smaller advertised UDP buffer size, and the response exceeds that size.
+
+### Requirements
+1. **For UDP queries only**, ensure returned responses have the **TC flag set** when the response length exceeds:
+   - the EDNS0 UDP payload size advertised in the **request** (if present), otherwise
+   - **512 bytes**.
+2. **Do not truncate the response byte slice**; only modify the DNS header flag when needed.
+3. If the response already has TC set, leave it set (don’t clear or re-process it).
+4. TCP queries should not be subject to the UDP size checks.
+5. EDNS0 buffer size detection must be based on parsing the request’s OPT record in a safe, conservative way. Only treat EDNS as present when the OPT record is valid per the constraints used in this codebase (e.g., the OPT record must be located where the implementation expects and be structurally sane; malformed/unexpected OPT records should be treated as “no EDNS” for the purposes of size enforcement).
+6. Apply this behavior consistently across all code paths that can produce a UDP response, including:
+   - responses received from upstream UDP,
+   - responses received via DoH that are ultimately being returned to a UDP client,
+   - locally generated responses returned from the resolver query entrypoint.
+
+The provided tests cover both the standalone size-checking behavior and end-to-end integration through the resolver/forwarder query flow.

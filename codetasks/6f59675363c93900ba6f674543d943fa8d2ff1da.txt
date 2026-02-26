@@ -1,0 +1,45 @@
+Implement a refactor and behavior update to the autocomplete ranking/scoring used for both symbol completion and file completion. The goal is to make scoring weights explicit, improve ranking accuracy for common queries, and enable direct inspection of scoring in tests and integration tooling.
+
+### 1) Centralize scoring “magic numbers”
+Introduce a new `ai.brokk.ScoringConstants` utility class that contains the weights/bonuses used by:
+- `ai.brokk.FuzzyMatcher` (internal match “degree” bonuses)
+- `ai.brokk.Completions` (high-level ranking adjustments and file completion thresholds)
+
+The constants must be referenced from the production code rather than duplicated literals.
+
+### 2) Improve `FuzzyMatcher` scoring behavior
+Update `FuzzyMatcher` so that its scoring better rewards:
+- Matches that start at the beginning of the candidate text (a start-match bonus).
+- Case-insensitive *exact* matches (when the pattern covers the entire candidate name) so they outrank longer prefix/suffix/substring matches.
+
+Also refine the “nested code unit separator” detection logic used during matching:
+- Treat `.` followed by an uppercase letter as a nested-code separator (e.g., `Outer.Inner`).
+- Do **not** treat file extensions like `.java` as nested separators.
+- Do **not** trigger “ends before separator” behavior when the match ends at the end of the string.
+- Ensure the separator check uses the actual end of the overall match (not an assumption about fragment ordering).
+
+### 3) Refactor and enhance symbol completion scoring in `Completions`
+In `ai.brokk.Completions`, restructure symbol scoring/ranking so that:
+- Scoring results can be inspected directly by tests: add a small value object (record) pairing a `CodeUnit` with its computed score, and expose a public method that returns scored candidates for a query.
+- Sorting uses a shared comparator (also exposed for tests) that orders by:
+  1. score (ascending; lower is better)
+  2. shorter fully-qualified name length
+  3. shorter short-name length
+  4. fully-qualified name alphabetical tie-break
+
+Adjust scoring beyond the raw fuzzy score to improve ranking relevance:
+- Apply a bonus for class `CodeUnit`s so classes tend to appear ahead of similarly matching members (fields/functions).
+- Apply a package-depth penalty based on how “deep” the fully-qualified name is (favor shallower units as a tie-break).
+
+The completion pipeline should still produce a limited list of top results, but ranking should now be based on the scored candidates + the comparator above.
+
+### 4) Make file completion scoring use centralized constants and be overflow-safe
+In the file completion composite scoring logic in `Completions`, replace prior inline constants with `ScoringConstants` equivalents (preferred-extension bonus and short-name tolerance). Ensure score arithmetic is safe against overflow; overflowed results must be treated as worst matches (rank last), not best matches.
+
+### 5) Ensure deterministic ordering from analyzers during autocomplete
+Update `ai.brokk.analyzer.IAnalyzer` autocomplete behavior so that results are returned deterministically:
+- Provide a shared comparator for autocomplete definition results that orders by code unit kind in a consistent priority order, then by name/signature in a stable manner.
+- Ensure `autocompleteDefinitions` returns an insertion-ordered set whose iteration order reflects that comparator.
+- Apply the same sorting behavior where relevant in `TreeSitterAnalyzer` when returning autocomplete results.
+
+Overall, implement these changes so that the updated scoring/ranking behavior, deterministic ordering, overflow handling, and extraction tooling all work together and the full existing test suite.

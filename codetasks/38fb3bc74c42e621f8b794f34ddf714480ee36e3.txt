@@ -1,0 +1,83 @@
+Implement support for an optional “pre‑scan” phase for ASK jobs, threaded from the CLI/API down into job execution, while keeping ASK strictly read‑only.
+
+At a high level:
+
+### 1. Job specification and API surface
+
+Extend the job specification so that jobs can request an optional repository pre‑scan:
+
+- Add a boolean `preScan` field to the job spec model (e.g., `JobSpec`), serialized as `"preScan"` in JSON.
+- `preScan` should default to `false` when not provided.
+- Existing factory/shortcut constructors for `JobSpec` must continue to work and should implicitly set `preScan` to `false`.
+- The HTTP API endpoint that creates jobs (in `HeadlessExecutorMain`) must:
+  - Accept an optional `preScan` field in the job creation payload.
+  - Pass that value through to the internal `JobSpec`. If `preScan` is absent or `null`, treat it as `false`.
+
+### 2. ASK mode behavior with pre‑scan
+
+In the job execution logic for ASK mode (in `JobRunner`):
+
+- ASK jobs are still:
+  - Read‑only: no code edits, no commits, no invocation of code‑generation agents.
+  - Driven by a `SearchAgent` using the `plannerModel` for reasoning.
+  - Ignoring `codeModel`, even if supplied in the job spec.
+- When `preScan == false`:
+  - Behavior should remain as before: construct a `SearchAgent` with the `plannerModel` and execute it. No pre‑scan is performed.
+- When `preScan == true`:
+  - Before running the ASK reasoning, perform a best‑effort repository pre‑scan that seeds the Workspace/context.
+  - Model choice for this pre‑scan:
+    - If a `scanModel` string was provided in the job spec, use that.
+    - Otherwise, fall back to the project’s/default scan model (the same one used by SEARCH mode).
+    - If no usable scan model can be resolved (e.g., misconfiguration), skip the pre‑scan but still run the ASK reasoning normally.
+  - The pre‑scan must not be allowed to fail the job:
+    - Any model resolution failure or runtime exception during the scan should be logged and then ignored.
+    - Even if the pre‑scan fails or is skipped, ASK reasoning must still be executed with the `plannerModel`.
+  - The pre‑scan should run before `SearchAgent.execute()`, and should use the same `SearchAgent` instance that will later handle the ASK reasoning.
+- Emit user‑visible notification events around the pre‑scan:
+  - Before starting the pre‑scan (regardless of which model is chosen), append an event of type `NOTIFICATION` with this exact message:
+    - `"Brokk Context Engine: analyzing repository context..."`
+  - After the pre‑scan phase finishes (whether it succeeded, was skipped due to missing model, or failed non‑fatally), append a matching completion `NOTIFICATION` with this exact message:
+    - `"Brokk Context Engine: complete — contextual insights added to Workspace."`
+  - These notifications must be emitted exactly once per ASK job when `preScan == true`, and not emitted when `preScan == false`.
+
+### 3. CLI support (`HeadlessExecCli`)
+
+Extend the headless CLI to control this behavior:
+
+- Add a `--pre-scan` boolean flag:
+  - When present, it should set an internal `preScan` flag to `true`.
+  - It takes no explicit value; it’s a simple presence/absence flag.
+- Interaction with `--mode`:
+  - If `--mode` is omitted, it still defaults to `ARCHITECT`.
+  - `--pre-scan` is only meaningful when `--mode ASK`:
+    - For `ASK`:
+      - Include `"preScan": true` in the job JSON payload when `--pre-scan` is provided.
+      - If `--scan-model` is also provided, include `"scanModel"` in the job payload so that the executor can use it for the pre‑scan.
+    - For other modes (`SEARCH`, `CODE`, `ARCHITECT`, `LUTZ`), `--pre-scan` must have no effect on the job JSON.
+- Interaction with `--scan-model`:
+  - For `SEARCH` mode:
+    - Continue to include `"scanModel"` in the job JSON if the user passed `--scan-model`.
+  - For `ASK` mode:
+    - Only include `"scanModel"` in the job JSON when both `--mode ASK` and `--pre-scan` are specified.
+    - If `--mode ASK` but `--pre-scan` is not set, do not send `"scanModel"`; the executor should then operate without a pre‑scan.
+  - For other modes, keep the existing semantics.
+- Interaction with `--code-model`:
+  - Continue to include `"codeModel"` in the job JSON when provided.
+  - Note: `codeModel` is ignored for SEARCH and ASK modes; this should be reflected in the CLI help text.
+- Update the CLI help output so that:
+  - `--scan-model`’s description mentions that it is used by SEARCH and by ASK only when `--pre-scan` is enabled.
+  - `--pre-scan` is documented as enabling a repository pre‑scan for ASK mode and using `--scan-model` if provided.
+
+### 4. Documentation updates
+
+Update the headless executor documentation (`docs/headless-exec-cli.md`, `docs/headless-executor.md`) to describe:
+
+- The new `preScan` job field in the HTTP API for ASK jobs, including how it interacts with `plannerModel` and `scanModel`.
+- That ASK:
+  - Uses `plannerModel` for reasoning.
+  - Optionally runs a pre‑scan when `preScan` is true:
+    - Uses the provided `scanModel` if present, or falls back to the default scan model.
+    - Remains read‑only and ignores `codeModel`.
+- CLI examples for ASK with and without `--pre-scan`, with and without `--scan-model`, consistent with the behavior above.
+
+The resulting implementation should allow ASK jobs to request a repository pre‑scan via both the HTTP API and the CLI, use the correct models for reasoning vs scanning, emit the specified notification messages around the pre‑scan, and preserve ASK’s read‑only semantics.

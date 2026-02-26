@@ -1,0 +1,44 @@
+### Goal
+
+Fix the data object indexing pipeline so that when an index object reaches its target size during an “append” build, the system can **flush what it has so far into an index object and continue later with remaining events**, instead of failing the whole build with `ErrBuilderFull`. The change must work end-to-end: from the low-level index-object builder, through the calculator, up to the serial indexer build loop and record commit behavior.
+
+### Required behavior
+
+#### 1) Index object builder “full” state becomes observable
+The index-object builder currently reports `ErrBuilderFull` when appends would exceed the configured size budget. Update the design so that “full” is represented as **internal builder state** that callers can query:
+
+- The builder must expose whether it is currently full.
+- Once it becomes full, that condition must remain set until the builder is reset.
+- Resetting must clear the full state.
+
+The public-facing behavior should allow higher-level code to detect “full” without relying on `errors.Is(err, ErrBuilderFull)` from append operations.
+
+#### 2) Calculator must surface “full”
+The indexing calculator is the higher-level component used by the indexer. Extend its interface/implementation so the serial indexer can determine whether the underlying builder has become full during processing of an object.
+
+#### 3) Serial index build must support partial progress when full
+The serial indexer’s build logic must be able to:
+
+- Process a sequence of metastore “object written” events.
+- Stop processing further events once the builder becomes full while building an index for an append-triggered request.
+- Flush the current accumulated index state into an index object even when the full condition occurs mid-batch.
+- Return the number of events that were actually processed so the caller can commit only those Kafka records.
+
+This means the build result must reflect “processed count” semantics, not “all-or-nothing”.
+
+#### 4) Avoid wasted downloads / goroutine blockage when stopping early
+When the builder becomes full mid-build, the indexer must ensure the download pipeline does not deadlock or leak work:
+
+- If downloads are still in flight or queued, the system must not block indefinitely waiting for them.
+- The download worker(s) must have a way to be told to stop initiating new downloads for the remainder of the current build batch, while still allowing the system to make progress and shut down cleanly.
+
+#### 5) Flush/reset semantics
+After a successful flush of an index object:
+
+- The calculator/builder state must be reset so subsequent builds start fresh.
+- Any “skip download” mode used to stop early must be cleared so later builds operate normally.
+- If there is nothing accumulated (no relevant time ranges / no data), flushing should be a no-op rather than producing an empty index object.
+
+### Scope
+
+You’ll be working in the data object indexing components (builder/calculator/indexer). The provided tests cover both the low-level builder’s “full” signaling and the serial indexer’s ability to flush and return/commit only the processed records when fullness is reached during an append-triggered build.

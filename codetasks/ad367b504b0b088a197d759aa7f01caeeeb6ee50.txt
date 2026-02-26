@@ -1,0 +1,43 @@
+Extend the TSDB agent WAL storage to support the newer `storage.AppenderV2` API while keeping the existing `storage.Appender` (V1) behavior intact.
+
+### Goals
+
+1. **Agent DB: provide AppenderV2**
+   - The agent `tsdb/agent.DB` must expose an `AppenderV2(ctx)` method returning an implementation of `storage.AppenderV2`.
+   - The V2 appender must write series, float samples, histogram samples (regular + float histograms, including custom bucket variants), and exemplars into the agent WAL using the existing WAL record formats.
+   - Commit/Rollback semantics must match the current agent behavior (including WAL logging and series creation rules).
+
+2. **Unify/Share commit/logging logic**
+   - Refactor the existing agent appender implementation so both V1 and V2 appenders can share the same batching, WAL logging, and cleanup logic.
+   - Ensure resources are pooled correctly (the agent previously pooled appenders/buffers; V2 should also be pool-backed).
+
+3. **Exemplar handling in V2**
+   - `AppenderV2.Append(...)` must accept exemplars via `storage.AOptions` and append them when the sample is not stale.
+   - Exemplar validation must enforce:
+     - no duplicate label names
+     - exemplar label-set length limit
+     - duplicate exemplars for a series should be ignored (not treated as an error)
+   - When one or more exemplars in the request are invalid (excluding duplicates), `Append` must return a `*storage.AppendPartialError` containing exemplar-specific errors rather than failing the whole append.
+
+4. **Created-timestamp zero ingestion (“ST as zero sample”) for the agent**
+   - Introduce an agent option (on `tsdb/agent.Options`) that enables “created-timestamp-zero-ingestion” behavior for the V2 ingestion path.
+   - When enabled, if a sample carries a non-zero “start/created timestamp” (`st`) that is **earlier than** the sample timestamp (`t`), the agent should *attempt* to write an additional “zero sample” at `st` **before** the actual sample in the WAL:
+     - For float samples: value `0`
+     - For histograms: a “zero histogram” whose structural fields match the incoming histogram where applicable, and whose counter reset hint reflects a reset semantics
+   - This injection must be **best-effort**: failures must not fail the main append; they should only be surfaced via debug logging.
+   - Out-of-order rules for the main sample must still be enforced according to the agent’s out-of-order window configuration.
+
+5. **Wire feature flag through configuration**
+   - When the feature flag for created-timestamp zero ingestion is enabled in the binary configuration, it must also enable the agent’s new “ST as zero sample” option so the agent path follows the same flag.
+
+6. **Fix ref-return correctness in head AppenderV2**
+   - In `tsdb/head_append_v2.go`, ensure `headAppenderV2.Append` always returns the correct `storage.SeriesRef` for the series actually appended to, including:
+     - paths where a float sample is redirected into a histogram/float-histogram append based on batch type
+     - stale-sample early-return paths
+
+### Notes on behavior
+- Histogram inputs must be validated and rejected if invalid.
+- V2 must correctly classify “stale” values (for float and histogram sums) and skip exemplar/metadata processing for stale samples while still reporting append success.
+- The agent does not need to implement metadata persistence for V2; it only needs to accept the API shape without breaking ingestion.
+
+Implement the above so that the provided (old and new) tests compile and pass.

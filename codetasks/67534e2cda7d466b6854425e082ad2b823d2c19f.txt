@@ -1,0 +1,26 @@
+Fix a regression where certain organization operations (notably plan upgrades and detail updates) can unintentionally clear an organization’s stored public/private keypair when the incoming request does not include keys.
+
+Implement the following behavior across the organization update/upgrade flows:
+
+- **Keypair persistence / backfill rules**
+  - Organizations may exist without a stored keypair (legacy data). When a request includes a keypair, the system should be able to **backfill** the organization’s missing keys.
+  - Backfilling must be **safe**:
+    - Never overwrite an organization’s existing `PublicKey` or `PrivateKey` with `null`, empty, or whitespace values.
+    - Never partially backfill: only set keys when **both** a public key and wrapped/encrypted private key are provided and the organization is missing both (i.e., avoid ending up with only one side set).
+
+- **Plan upgrade must not null keys**
+  - In `UpgradeOrganizationPlanCommand`, changing plans must not assign key fields directly from the upgrade payload in a way that could clear existing values when keys are omitted.
+  - If the organization is missing keys and the upgrade payload includes valid keys, backfill should occur during upgrade.
+
+- **Organization update must not null keys**
+  - In `OrganizationUpdateCommand`, updating name/billing email must remain “patch-like” (skip fields not provided), and any keypair included should follow the same safe backfill rules above.
+
+- **Use a consistent keypair DTO**
+  - Replace ad-hoc pairs of string fields (`PublicKey`, `EncryptedPrivateKey` / `PrivateKey`) in request/DTO boundaries with the shared keypair data model (`PublicKeyEncryptionKeyPairData`), and ensure API request models convert into this type consistently.
+  - Update affected request models and signup/upgrade models so that keypair data is passed around as a single object (e.g., in AdminConsole request models and Billing `KeyPairRequestBody`), including provider-client signup creation.
+
+- **Cleanup / correctness**
+  - Remove any duplicate/competing assignments of organization keys during creation/signup that could conflict with the new model or backfill behavior.
+  - Ensure `CloudOrganizationSignUpCommand` and `ProviderClientOrganizationSignUpCommand` read keys from the unified keypair model when creating organizations.
+
+The provided tests cover organization update behavior, upgrade behavior (including backfill vs. non-overwrite scenarios), and provider-client signup mapping; your changes should satisfy all of them without changing the tests.

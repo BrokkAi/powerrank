@@ -1,0 +1,37 @@
+Implement support for *partial* fixability in Ruff’s `--statistics` output.
+
+### Requirements
+
+When Ruff is invoked with `--statistics`, it groups diagnostics by rule code and prints (or serializes) one entry per code. Extend this statistics reporting so it can represent three fixability states per rule:
+
+- **All occurrences fixable**
+- **Some occurrences fixable**
+- **No occurrences fixable**
+
+Fixability must be determined using the same applicability rules Ruff uses for `--fix` (i.e., respect the configured unsafe-fixes/applicability threshold). Only fixes that would actually be applied under the current configuration count as “fixable”.
+
+### Text statistics output (`--statistics`)
+
+In the tabular statistics output:
+
+- Continue to show a fixability marker column only when at least one reported rule has at least one fixable diagnostic.
+- Use distinct markers for:
+  - all fixable (existing behavior),
+  - partially fixable (new),
+  - not fixable.
+- The summary line that reports how many issues are fixable should continue to be emitted when applicable, but update its wording to format the `--fix` flag as inline code (backticks).
+
+### JSON statistics output (`--statistics --output-format json`)
+
+In JSON statistics entries:
+
+- Preserve the existing boolean field named `fixable`, but redefine its meaning for grouped statistics to maintain backward compatibility:
+  - `fixable: true` only when **all** diagnostics in that group are fixable under current applicability rules.
+  - `fixable: false` otherwise (including partially fixable groups).
+- Add a new integer field `fixable_count` indicating how many diagnostics in the group are fixable under current applicability rules.
+- Ensure the new field is present for all statistics entries.
+
+### Notes
+
+- Grouping is by diagnostic code, but each group’s metadata (like the rule name) must remain stable and representative.
+- This change must integrate with existing fix applicability handling (including unsafe fix configuration) so that statistics reflect what `--fix` would actually do.

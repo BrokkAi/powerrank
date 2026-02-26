@@ -1,0 +1,61 @@
+Implement a new “redirect on SSO required” validation flow in the IdentityServer token request validation pipeline. The goal is that, when a user is subject to an organization “Require SSO” policy, password-style login attempts fail with a structured error response that can optionally include the user’s organization identifier to speed up client-side redirection to the correct IdP. The change must be gated behind a new feature flag so the legacy behavior remains available.
+
+### Core requirements
+
+#### 1) SSO organization identifier lookup (Core)
+Add a query component that can return an organization “identifier” string for a given **User** (not OrganizationUser):
+
+- It should inspect the user’s organization memberships and only return an identifier when the user is a member of **exactly one** organization in **Confirmed** status.
+- If the user has no orgs, multiple confirmed orgs, or no confirmed orgs, return `null`.
+- If the organization record cannot be found, return `null`.
+- If the organization’s identifier is `null`, return `null` (an empty string is treated as “not usable” by the redirect flow, even if the underlying query returns it).
+- Register this query in DI so it is available to Identity.
+
+#### 2) Request validation constants (Identity)
+Introduce shared constants to eliminate hard-coded response keys and SSO error messages:
+
+- Custom response dictionary keys for:
+  - an error model payload
+  - an optional `SsoOrganizationIdentifier` value
+- SSO error “code/message” constants for:
+  - “SSO authentication is required.”
+  - “Two-factor recovery has been performed. SSO authentication is required.”
+
+These are used by the new validator and should be referenced consistently.
+
+#### 3) New SSO request validator (Identity)
+Create an `ISsoRequestValidator` + implementation responsible for determining whether SSO is required for a given token request and populating the validator context accordingly.
+
+Behavioral rules:
+
+- If the request grant type indicates the user is already in an SSO flow or is authenticating via API key, the validator must **not** block:
+  - allow `authorization_code`
+  - allow `client_credentials`
+- For other grant types (e.g., password, refresh_token, custom WebAuthn grant), determine whether SSO is required for this user:
+  - If the `PolicyRequirements` feature flag is enabled, use the policy-requirement query to determine SSO requirement.
+  - Otherwise, fall back to the policy service check scoped to confirmed organization users.
+- When SSO is required:
+  - mark the request context as requiring SSO
+  - create a token validation error (invalid grant) with the appropriate description
+  - set a custom response dictionary containing an error model payload
+  - attempt to look up the user’s SSO organization identifier via the query from (1) and include it in the custom response only when it is present and non-empty
+  - if two-factor recovery has been performed in the current request context, use the recovery-specific error message instead of the standard message
+
+#### 4) Integrate with the existing validation pipeline (Identity)
+Update the base token request validator flow to optionally use the new `ISsoRequestValidator` instead of the legacy SSO-required logic:
+
+- Introduce a new feature flag (e.g., `RedirectOnSsoRequired`) that controls which behavior runs.
+  - When the flag is **disabled**, keep the legacy behavior and legacy error response shape/message handling.
+  - When the flag is **enabled**, delegate SSO decision-making and error response creation to the new `ISsoRequestValidator`.
+- Ensure the validator result produced by the new SSO path is surfaced as the request result, including the custom response dictionary contents.
+- Wire the new validator into all relevant request validators that derive from the base validator (resource owner password, custom token validator, WebAuthn grant validator, etc.).
+- Register the new validator in DI.
+
+#### 5) Test harness expectations that affect implementation
+The provided tests assume that:
+
+- `CustomValidatorRequestContext` starts with `ValidationErrorResult` and `CustomResponse` unset/null and becomes populated only during validation failures.
+- The base validator test wrapper used by the harness expects 2FA failures and generic validation failures to materialize as error results in a predictable way (so the wrapper may need to reflect the new behavior).
+- Both the legacy SSO behavior (feature flag off) and the new redirect-style behavior (feature flag on) must be supported.
+
+Deliver the full feature such that the SSO-required condition can return an error model plus optional `SsoOrganizationIdentifier` in the custom response under the new flag, while preserving the previous flow when the flag is not enabled.

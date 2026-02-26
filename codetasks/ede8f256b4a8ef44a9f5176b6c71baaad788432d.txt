@@ -1,0 +1,41 @@
+## Problem: Watch and classify Git metadata correctly in Git worktrees
+
+The project includes file-watching services that turn filesystem events into `ProjectFile` instances and then classify batches of changes (e.g., “git metadata changed” vs regular project files). This works for normal Git repositories where `.git` is a directory under the project root, but it breaks for **Git worktrees**:
+
+- In a worktree, `.git` at the worktree root is typically a **file**, not a directory.
+- That file points to the real Git metadata directory (often located outside the worktree), using a line like: `gitdir: /path/to/main/.git/worktrees/<name>`.
+
+Your task is to update the watcher and helper logic so that:
+
+1. **Git metadata changes are detected reliably** in both normal repos and worktrees.
+2. **Events originating from the external git metadata directory** (outside the watched project root) are still delivered and represented consistently.
+3. The representation of git metadata events must allow downstream logic (e.g., `FileWatcherHelper`) to recognize them as git metadata changes even when the underlying files are outside the project root.
+
+### Key requirements
+
+#### 1) Resolve the actual git metadata directory for worktrees
+Both watch service implementations (`NativeProjectWatchService` and `LegacyProjectWatchService`) currently assume git metadata lives at `<gitRepoRoot>/.git`. Adjust them to handle the case where `<gitRepoRoot>/.git` is a **regular file** whose contents declare the real metadata directory via `gitdir:`.
+
+- If `.git` is a file and contains a valid `gitdir:` reference, treat that referenced path as the git metadata directory to watch.
+- If the `.git` file is empty, malformed, or unreadable, the watcher must not crash; it should fall back to a safe behavior (treat `.git` as-is and continue watching normal files).
+
+#### 2) Convert external git metadata events into `ProjectFile` consistently
+When an event comes from the resolved git metadata directory and that directory is outside the project root, the watcher cannot simply `relativize` against the project root.
+
+Update event-to-`ProjectFile` conversion so that:
+- Regular project files under the project root still produce correct `ProjectFile` entries.
+- Git metadata events coming from the (possibly external) git metadata directory are still included in the batch, and their `relPath` should be represented in a way that downstream code can recognize as being under `.git` (regardless of where the actual metadata directory lives on disk).
+- Events for paths that are outside both the project root and the resolved git metadata directory should be ignored rather than throwing.
+
+#### 3) Make git metadata detection independent of project-root relativization
+`FileWatcherHelper.isGitMetadataChanged(...)` currently relies on assumptions about how git paths are relativized (and may incorrectly compute a relative `.git` path based on the project root vs repo root). Update it so that it correctly identifies git metadata changes in batches produced for both:
+- normal repos (where `.git/...` is under the project root)
+- worktrees (where the watcher may base git events differently)
+
+The detection must not confuse `.gitignore` or `.github/...` with git metadata.
+
+#### 4) Ensure worktree repo-root selection doesn’t prevent resolution
+The code that constructs the watch service needs to pass an appropriate `gitRepoRoot` such that worktrees can resolve their external git metadata directory. Ensure the chosen root enables `.git`-file resolution and watching of external metadata.
+
+### Scope
+Changes will involve the watcher implementations and the helper used to classify event batches. The updated behavior must support both watcher backends and accommodate worktree-specific Git layouts while preserving expected behavior for standard repositories.

@@ -1,0 +1,14 @@
+You’re working on Ruff’s Python formatter. A regression surfaced where formatting certain unary expressions (`not`, `+x`, `-x`, `~x`) can panic, and even when it doesn’t panic the formatter can incorrectly reposition comments that appear between a unary operator and its operand.
+
+The failing cases all involve comments located *in the gap* between the unary operator token and the start of its operand, including when the operand is parenthesized. The formatter must handle both:
+
+- **Own-line comments** between the operator and operand (these should remain between them rather than being moved onto the operator or elsewhere).
+- **End-of-line comments** that appear after the unary operator but before the operand begins (these should be preserved without triggering invalid formatting or panics; they must attach to a stable node such that formatting can render them in an appropriate position without breaking the AST/printing invariants).
+
+To fix this, update the formatter’s comment placement and unary-expression formatting logic so that:
+
+1. Comment placement for unary expressions no longer classifies all “between operator and operand” comments the same way; placement must distinguish end-of-line comments from own-line comments in this region.
+2. Formatting a unary expression must correctly decide when a hard line break is required between the operator and operand due to comments, including when the operand is parenthesized but has leading comments that occur *before* the opening parenthesis.
+3. The parentheses decision for unary expressions must remain consistent with the line-breaking behavior to avoid producing invalid formatting states (e.g., emitting a forced break that requires surrounding parentheses but not requesting them, or vice versa).
+
+The relevant code paths are in the formatter’s comment placement logic (notably the unary-op-specific handling in `crates/ruff_python_formatter/src/comments/placement.rs`) and unary expression formatting / parentheses logic (in `crates/ruff_python_formatter/src/expression/expr_unary_op.rs`). The updated fixtures and snapshots include new regression coverage in the unary-expression fixture and in the “expression parentheses + comments” fixture; your solution must make the formatter produce stable output for those cases while preventing panics.

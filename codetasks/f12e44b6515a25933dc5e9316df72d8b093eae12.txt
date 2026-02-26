@@ -1,0 +1,33 @@
+Extend Lucene’s stored-fields pipeline to support indexing a stored-only binary `StoredField` whose content is provided as a `DataInput` plus a fixed length, without requiring the caller to first materialize a `byte[]`/`BytesRef`.
+
+### Required behavior
+
+1. **New binary stored-field value form**
+   - Add a new value type that encapsulates:
+     - a `org.apache.lucene.store.DataInput`
+     - the exact number of bytes that belong to the stored field value
+   - This object must be usable as the value of a stored-only `org.apache.lucene.document.StoredField` (binary field).
+
+2. **Document/Field value plumbing**
+   - `org.apache.lucene.document.StoredField` must offer a constructor that accepts the new fixed-size `DataInput` wrapper as its value for binary stored content.
+   - The value must be rejected if it is `null` (throw `IllegalArgumentException`).
+
+3. **Stored value representation**
+   - `org.apache.lucene.document.StoredValue` must be able to represent this new “data input” binary form distinctly from existing binary (`BytesRef`) and string/numeric types, and expose it in a type-safe way.
+   - The stored-fields indexing code that consumes `StoredValue` instances must write this new value type correctly.
+
+4. **Visitor and codec integration**
+   - `org.apache.lucene.index.StoredFieldVisitor` must be able to receive binary stored values in this `DataInput + length` form (in addition to existing higher-level APIs), so codecs can stream bytes.
+   - Update stored-fields readers/writers that interact with `binaryField(...)` / `writeField(...)` for binary values so that:
+     - binary values can be passed through as the new wrapper rather than as a raw `DataInput` plus separate length argument
+     - the length used for reading/writing comes from the wrapper
+   - Any default implementations should continue to work by reading exactly the declared number of bytes and delegating to the existing byte-array-based binary handling.
+
+5. **Compatibility with merges/sorting/test codecs**
+   - Components that proxy or wrap stored-fields writing/reading (e.g., sorting stored fields consumer, asserting/cranky stored fields formats, merge visitors) must be adapted so they can forward the new binary form without losing the length or corrupting the stream.
+
+### Scope constraints
+
+- This feature is **only for stored fields** (not indexing terms/doc values).
+- The `DataInput` is **consumed during indexing**; callers should not assume it can be read multiple times unless they supply a rewindable input.
+- The stored value must round-trip through indexing and reading so that retrieving the stored binary field yields the same bytes as originally provided.

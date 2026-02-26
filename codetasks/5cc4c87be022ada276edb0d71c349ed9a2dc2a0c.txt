@@ -1,0 +1,25 @@
+### Problem: Prevent Async consumer hangs when the network thread fails during startup
+
+There is a failure mode in the async consumer implementation where an exception thrown while the background `ConsumerNetworkThread` is starting up (specifically during its resource initialization) can leave the consumer in a state where it no longer processes events. In that state, operations such as `close()` may block/hang because the application thread continues to enqueue work that will never be handled.
+
+Update the async consumer startup flow so that:
+
+1. **Consumer construction fails fast if the network thread cannot initialize.**  
+   If resource initialization in `ConsumerNetworkThread` fails, the exception must be surfaced back to the constructor path (via the component that starts the thread), so creating an `AsyncKafkaConsumer` (and the share consumer implementation that uses the same event handler) throws instead of returning a partially constructed consumer.
+
+2. **Startup must wait for initialization to complete (or fail) with a bounded timeout.**  
+   The component that starts the network thread must block until initialization finishes, but only up to a configured timeout. If initialization does not complete in time, the constructor path should fail with a timeout-related error rather than hanging indefinitely.
+
+3. **Interrupts during the wait must be handled as failure.**  
+   If the waiting thread is interrupted while waiting for initialization, treat that as initialization failure and raise an appropriate Kafka exception rather than silently proceeding.
+
+4. **Use an existing consumer configuration as the startup timeout source.**  
+   Thread initialization waiting should be driven by the client’s configured default API timeout (the same config used elsewhere for bounded waits), and it must be plumbed through the relevant constructors/factories that create the `ApplicationEventHandler`.
+
+5. **Behavior should match the “classic” consumer’s expectation.**  
+   The end result should mimic the classic consumer’s behavior where failure to create underlying network resources prevents the consumer from being constructed successfully (e.g., misconfigured SASL/JAAS login module causing `NetworkClient` creation to fail should cause construction to throw).
+
+6. **Tests expect robust error propagation and no hangs.**  
+   The updated design must ensure that failures during `ConsumerNetworkThread` startup (including exceptions thrown by suppliers used during initialization) are captured and rethrown from the initiating thread, and that delayed initialization triggers a bounded timeout failure.
+
+Key areas involved include the async consumer (`AsyncKafkaConsumer`), share consumer implementation, the event handler that owns the network thread (`ApplicationEventHandler`), and the network thread itself (`ConsumerNetworkThread`).

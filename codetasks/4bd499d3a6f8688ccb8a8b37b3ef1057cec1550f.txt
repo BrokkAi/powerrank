@@ -1,0 +1,29 @@
+Update the Todoist integration to work with `todoist-api-python` v3.1.0 and keep the calendar and todo platforms behaving the same from Home Assistant’s perspective.
+
+Key requirements:
+
+- **Dependency/API changes**
+  - The async client methods used by the integration (e.g., fetching tasks, projects, labels, sections, collaborators) may no longer return plain lists; they now return **paginated async results**. The integration must correctly consume these and operate on a normal `list[...]` internally.
+  - Task completion state is no longer represented via `Task.is_completed`; instead, completion must be derived from the presence/absence of `Task.completed_at`.
+  - Task completion actions have been renamed in the library; update the todo entity’s “complete” / “reopen” operations accordingly.
+
+- **Due date handling**
+  - The `Due` model deserialization has changed: the due value you receive from the library should be treated as already converted into native Python `date` / `datetime` objects (rather than always ISO strings).
+  - Ensure both the calendar entity/event generation and the todo list item representation correctly interpret and localize due dates:
+    - Date-only due dates should remain date-based/all-day semantics.
+    - Datetime due dates should be localized to the HA local timezone for display and comparisons.
+  - Centralize due parsing logic in a small reusable utility (used by both calendar and todo code paths).
+
+- **Calendar service: creating tasks and reminders**
+  - When creating a task with a due datetime, pass the due datetime in the form expected by the updated library (do not manually format to a string if the client now accepts a `datetime`).
+  - Reminders are still not supported by the REST endpoints exposed by the library; the integration must continue to support reminders by calling Todoist’s Sync API directly.
+    - Use the correct Sync API endpoint for v3-era Todoist APIs.
+    - Construct the authorization/content headers without relying on helper functions removed from the dependency.
+    - Ensure reminder “absolute” date formatting matches what the Sync API expects.
+
+- **Coordinator and caching behavior**
+  - The coordinator must continue to cache projects/labels and expose project/section retrieval to other code, but must now handle paginated async results consistently across all such calls.
+  - The main periodic refresh (tasks fetch) must also handle paginated results.
+
+- **Tests and fixtures compatibility**
+  - The provided tests rely on mocks that emulate the new library behavior (including async generators and `Due.from_dict()` deserialization). Your implementation must work with those mocks and still satisfy older expectations about HA entity states, event filtering, and service behavior.

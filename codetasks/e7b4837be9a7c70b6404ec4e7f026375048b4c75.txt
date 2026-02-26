@@ -1,0 +1,59 @@
+Implement support for a new organization policy: **Automatic User Confirmation**.
+
+### Goal
+Add an event/validator handler for `PolicyType.AutomaticUserConfirmation` that participates in both the legacy `PolicyService.SavePolicy` flow and the newer “vnext” policy upsert flow, including:
+
+1. **Validation when enabling the policy**
+2. **Declaring dependent policies**
+3. **A pre-upsert side effect that updates an organization feature flag**
+
+### Required behavior
+
+#### 1) Policy handler
+Create a handler named `AutomaticUserConfirmationPolicyEventHandler` under the AdminConsole policy area that is associated with `PolicyType.AutomaticUserConfirmation` and is wired into policy saving.
+
+It must integrate with:
+- Legacy policy validation (`IPolicyValidator`)
+- VNext policy event interfaces used by the vnext save command:
+  - `IPolicyUpdateEvent`
+  - `IPolicyValidationEvent`
+  - `IOnPolicyPreUpdateEvent`
+  - `IEnforceDependentPoliciesEvent`
+
+#### 2) Dependent policy enforcement
+When declaring dependencies, the handler must require that **Single Organization** is enabled before this policy can be enabled:
+
+- `RequiredPolicies` must include `PolicyType.SingleOrg`.
+
+#### 3) Validation rules (only when enabling)
+Validation should run only when the incoming update is **enabling** the policy, and only if the policy is not already enabled.
+
+When enabling, it must fail with an appropriate user-facing message if any of the following are true:
+
+- The organization does **not** have the **Single Organization** policy enabled.
+- Any *existing* organization member is not compliant with Single Organization, meaning:
+  - Consider organization users with a real `UserId` and a status that represents an actual member (exclude statuses such as *Invited* and *Revoked*).
+  - If any of those users belong to a different organization in a non-invited state, the organization is not compliant.
+- The organization has any **provider users** associated with it.
+
+If validation passes, return an empty string (no error).
+
+Validation must be exposed through both forms used in the codebase:
+- `ValidateAsync(PolicyUpdate, Policy?)`
+- `ValidateAsync(SavePolicyModel, Policy?)`
+
+#### 4) Pre-upsert side effect (organization feature flag)
+When the policy is being saved (whether enabling or disabling), the handler must perform a pre-upsert side effect that:
+
+- Loads the organization by id.
+- Sets `Organization.UseAutomaticUserConfirmation` to match the policy’s `Enabled` value.
+- Updates `Organization.RevisionDate` to “now” (use the provided `TimeProvider`).
+- Persists the organization update.
+
+If the organization cannot be found, the side effect should be a no-op (and must not throw).
+
+#### 5) Registration
+Ensure the new handler is registered so it will be discovered/executed as part of policy update event processing (the same mechanism used by other `IPolicyUpdateEvent` implementations).
+
+#### 6) Documentation updates
+Update/extend XML documentation on the relevant policy interfaces to reflect that some are used by the vnext save flow and to clarify responsibilities (pre-update side effects, validation, dependent policy enforcement).

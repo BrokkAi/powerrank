@@ -1,0 +1,70 @@
+Implement backend-side validation for serve configuration updates so that correctness is enforced centrally (not only by the CLI), including concurrency-safe checks that can only be reliably performed in the local backend.
+
+### Goal
+
+When the local backend receives a new serve configuration (via `LocalBackend.SetServeConfig` in `ipn/ipnlocal/serve.go`), it must validate the *update* against the currently stored serve configuration and reject invalid or conflicting changes with clear, user-facing error messages.
+
+These validations were previously performed in the CLI layer and must now be enforced by the backend so that all frontends behave consistently.
+
+### Required behaviors
+
+#### 1) Validate interactions between foreground and background listeners
+
+Serve configs can include:
+
+- **Background listeners** (`ServeConfig.TCP`, `ServeConfig.Web`)
+- **Foreground listeners** (`ServeConfig.Foreground[sessionID].TCP`, etc.)
+
+Enforce the following update rules:
+
+- **New foreground listeners must not claim a port that is already in use**, whether that port is used by:
+  - an existing background listener, or
+  - an existing foreground listener (from any session).
+- **New/updated background listeners must not claim a port that is already in use by an existing foreground listener.**
+
+These checks must be done in the backend based on the previous config and the incoming config.
+
+#### 2) Prevent changing the “serve type” of an already-served port
+
+For both machine-level (background) and service-level ports, if a port already has a handler, an incoming update must not change *what kind of serving* happens on that port.
+
+Treat the following as distinct serve types derived from a TCP port handler:
+
+- HTTP
+- HTTPS
+- TCP forwarding
+- TLS-terminated TCP
+
+If an incoming handler changes a port from one serve type to another, reject the update with an error that identifies the conflict (including the port number, and for services also identifying the service).
+
+#### 3) Enforce Service TUN exclusivity with TCP/Web handlers
+
+Serve configs may define **Tailscale Services** (`ServeConfig.Services[svcName]`), where each service can either:
+
+- run in **TUN mode**, or
+- have **TCP and/or web handlers**,
+
+but not both.
+
+Enforce:
+
+- An incoming config must reject any service configuration that enables TUN *and* specifies TCP/web handlers at the same time (within the incoming config).
+- For updates against an existing config:
+  - A service may not turn on TUN mode if TCP/web handlers already exist for that service.
+  - A service may not add TCP/web handlers if that service is already in TUN mode.
+
+#### 4) Handle nil/empty and invalid configs robustly
+
+- Setting an empty or nil incoming serve config must be allowed (e.g., wiping serve config).
+- If the incoming config is absent/invalid in a way that results in it being treated as “not present” via the view APIs, validation should not incorrectly reject the update.
+- If the *existing* config is malformed, it should not block applying a new (valid) config; backend-side validation should not assume the stored config is well-formed when deciding whether the update is permissible.
+
+### API/supporting changes
+
+Update the `ServeConfigView` helper behavior in `ipn/serve.go` to support these validations cleanly:
+
+- Provide a way to query whether a port is in use by any **foreground** handler (separately from background), and ensure `FindTCP` continues to prefer foreground matches over background matches while using that helper.
+
+### Notes on error handling
+
+Errors returned from backend validation are surfaced to end-users by frontends, so messages must be actionable (e.g., mention port numbers, whether a foreground listener exists, and which service name is involved when applicable).

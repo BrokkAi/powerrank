@@ -1,0 +1,83 @@
+You’re implementing a refactor of the “usage prompt” generation for the LLM-based relevance scoring in the usages analyzer.
+
+The core requirements are:
+
+### 1. Prompt format switches from XML‑like to Markdown
+
+The `UsagePrompt` record still has the same three fields:
+
+- `filterDescription`
+- `candidateText`
+- `promptText`
+
+But `promptText` is no longer XML‑like; it must now be a Markdown document with:
+
+1. A short metadata header in plain text, including at least:
+   - The human‑readable short name being searched (e.g., `A.method2`).
+   - The string representation of the target `CodeUnit`.
+   - A section listing “other possible matches” (if any).
+   - The project-relative file path of the hit.
+
+2. A fenced code block:
+   - The fence should be annotated with a language derived from the file’s extension (e.g. `java` for `A.java`).
+   - The code block should start with the file’s import statements, one per line, when available.
+   - Then a short comment indicating this is a snippet from the enclosing method/class.
+   - Then the raw snippet for this usage.
+   - Then a closing comment and closing fence so the Markdown remains well-formed.
+
+There is no XML escaping anymore: characters like `<`, `>`, `&`, quotes, etc., should appear in the code snippet exactly as they are in the source.
+
+### 2. `candidateText` remains the raw snippet
+
+`candidateText` must be the unmodified snippet from the `UsageHit` (no escaping, no surrounding metadata, no truncation logic applied separately from `promptText`).
+
+### 3. Filter description behavior
+
+`filterDescription` is a concise natural language description of what the classifier should do with this snippet, always phrased in terms of:
+
+- Checking whether the snippet is a usage of the **target** `CodeUnit`.
+- When configured for non-boolean scoring, it must mention that the model should return a real number in `[0.0, 1.0]`.
+
+Additionally:
+
+- When there are **no** alternative code units, the description should **not** mention alternatives at all.
+- When there **are** alternative code units (same short name, different code units), the description should explicitly mention that alternatives exist and that the classifier must decide/score whether the usage matches **only** the target and not the alternatives.
+
+### 4. Alternatives handling
+
+The prompt-building entry point now takes a collection of alternative `CodeUnit`s, rather than relying on XML `<candidates>`:
+
+- The caller passes all code units with the same short name; the target is excluded from this collection before use.
+- In the Markdown header, you must list any non-target alternatives — for example as one fully qualified name per line under an “other possible matches” label.
+- When there are no alternatives, the header should clearly indicate that there are none (rather than emitting an empty list).
+
+### 5. Token/character budget and truncation
+
+The builder enforces a soft token budget parameter:
+
+- The method takes an approximate max token count (int).
+- Use a simple 4‑characters‑per‑token approximation to derive a maximum character budget for the generated `promptText`.
+- If `maxTokens` is non-positive, budget enforcement can be disabled.
+- When the generated Markdown would exceed the computed budget:
+  - Truncate the content to fit within the budget.
+  - Make sure the result is still valid Markdown (e.g. you don’t leave an open code fence).
+  - Append a clear textual marker/note indicating that the prompt was truncated due to the token limit.
+
+The tests will check both that truncation happens and that the final Markdown is well-formed.
+
+### 6. Call sites and types
+
+Where `UsagePromptBuilder.buildPrompt` is used (e.g. in `FuzzyUsageFinder`):
+
+- Adjust calls to the new signature that accepts a collection of alternative `CodeUnit`s.
+- Ensure the alternatives collection excludes the target code unit.
+- The “candidate text” passed to the classifier for scoring should now use the same rich Markdown prompt text (not XML).
+
+### 7. Boolean vs continuous mode
+
+`UsageConfig.isBooleanUsageMode()` still controls whether the filter description is phrased as a yes/no decision or as a scoring request:
+
+- Boolean mode: instructions to decide if the snippet represents a usage of the target (with the alternative-handling nuance described above).
+- Non-boolean mode: same, but also explicitly instruct to return a real score in `[0.0, 1.0]`.
+
+Implement the above so that the new Markdown-based behavior and signatures are in place while keeping existing semantics around relevance scoring, alternatives, and candidate snippets, and ensuring the generated prompts respect the token budget and are syntactically valid Markdown.

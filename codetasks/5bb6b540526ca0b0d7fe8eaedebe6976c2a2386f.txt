@@ -1,0 +1,44 @@
+### Goal
+
+Extend the “column compatibility” operation so it can detect and resolve name collisions against **multiple column type families at once** (not just a single collision type), including cases where **more than one collision column exists for the same short name** (e.g., both `label.status` and `metadata.status` colliding with `parsed.status`).
+
+This change affects the physical plan node shape, its serialization/printing/telemetry, and the executor pipeline that rewrites Arrow batches.
+
+---
+
+### Required behavior
+
+#### 1) Physical plan node: support multiple collision types
+The `physical.ColumnCompat` node currently models a single collision type. Update it so a plan can specify **a list of collision column types** to check against.
+
+All code that constructs, clones, prints, traces, serializes, or compares this node must reflect the new representation (list of collisions rather than a single collision).
+
+This includes:
+- Plan construction (planner) where compat nodes are created for metadata-vs-label collisions and parsed-vs-(label+metadata) collisions.
+- Physical plan printing output for `Compat` nodes.
+- Executor tracing/region attributes for `Compat` nodes.
+- Protobuf schema and marshaling/unmarshaling of the node.
+
+#### 2) Executor: handle collisions across multiple types and multiple columns per name
+In `newColumnCompatibilityPipeline` (executor compat pipeline), update collision detection and rewrite logic so that:
+
+- A “duplicate” is identified when a **source column**’s short name matches the short name of **any column** whose type is in the configured collision set.
+- A source short name may match **multiple collision columns** (because multiple collision types are being checked, or because the schema contains multiple colliding fields). The pipeline must treat those collision columns collectively for row-level decisions.
+
+Row-level move/keep rule for string source columns:
+- If the source value is null/invalid for a row, both the source and its `_extracted` destination should remain null for that row.
+- Otherwise, **only keep the value in the source column** if **all colliding columns for that name are null/invalid at that row**.
+- If **any** colliding column for that name is non-null/valid at that row, move the value into the `_extracted` destination column and write null into the original source position for that row.
+
+#### 3) Deterministic schema additions
+When adding `_extracted` columns to the output schema, ensure the ordering is deterministic when multiple extracted columns are added in the same batch. The ordering must not depend on map iteration or schema traversal quirks.
+
+#### 4) Tests and cleanup expectations
+The old approach of finding duplicates based on two unique-name slices is no longer sufficient when multiple collision columns can share the same short name. Adjust the implementation accordingly, and remove/replace any now-obsolete helper logic so the updated executor and plan/proto behaviors satisfy the provided test suite.
+
+---
+
+### Notes on scope
+
+- The compat rewrite logic only needs to actively transform supported column builder types used by the pipeline today (the tests focus on string behavior); other types should continue to pass through unchanged as they did previously.
+- The protobuf definition for the compat node must be updated to represent the new collisions list, and the generated Go bindings and (un)marshal code must align with it so plan round-trips succeed.

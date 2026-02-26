@@ -1,0 +1,50 @@
+## Goal
+
+Add an Admin “Discounts” area that lets authorized admins import a Stripe **coupon** into the application as a persisted **subscription discount**, view imported discounts in a paged list, and configure basic eligibility/date-range metadata during import. The feature must be gated behind a feature flag and integrate with existing repository patterns and Stripe adapter abstractions.
+
+## Functional requirements
+
+### Admin UI / MVC flow
+- Introduce a new MVC controller for subscription discounts under the `subscription-discounts` route.
+- Provide:
+  - A **list page** that supports pagination via `page` and `count` query parameters (with sane minimums) and returns a view model containing the requested page of discounts.
+  - A **create/import page** that operates in two steps:
+    1) **Import from Stripe**: accept a Stripe coupon ID, fetch coupon details from Stripe (including any product restrictions), and return the same view populated with the imported Stripe fields.
+    2) **Save**: persist a new `SubscriptionDiscount` using the imported Stripe coupon data plus admin-provided configuration (start/end dates and audience restriction).
+- Prevent importing/saving a coupon that has already been imported (duplicate Stripe coupon ID).
+- Handle Stripe “coupon not found” distinctly from other Stripe failures, and surface appropriate model errors while logging exceptions.
+- Store a success message via `TempData` when a discount is successfully created.
+
+### Views and models
+- Add view models to support:
+  - Displaying a paged list of discounts (including computed status based on current time vs. start/end dates).
+  - Displaying the discount as either “X% off” or “$Y off” depending on which Stripe fields are present.
+  - Capturing import state (whether the Stripe coupon has been successfully imported) and validating that `EndDate >= StartDate`.
+  - Mapping an “Only new users” checkbox into an audience type value.
+- Create Razor views/partials for the two-step create flow and the index listing.
+
+### Feature flag + navigation
+- Add a new feature flag key (string constant) and use it to conditionally show a “Discounts” navigation item in the Admin layout.
+- The navigation item should also respect the existing permission used for transaction tooling.
+
+## Integration requirements
+
+### Stripe adapter
+- Extend the existing `IStripeAdapter` abstraction and its implementation to support:
+  - Retrieving a coupon by ID (with optional expand options).
+  - Listing products by IDs (used to display readable product names when a coupon is limited to certain products).
+- Add any needed Stripe constant(s) for expandable coupon properties.
+
+### Repository support
+- Extend the subscription discount repository interface to include a paged listing method returning discounts ordered by creation date descending.
+- Implement this method for both:
+  - The Dapper-backed repository (via a stored procedure).
+  - The Entity Framework-backed repository (via an ordered query with `Skip/Take`).
+- Provide the SQL stored procedure that performs the paged listing from the existing discount view.
+
+## Data model / enum compatibility
+- Update `DiscountAudienceType` to include an explicit “all users” value and ensure the “new users only” value is non-zero to preserve meaningful defaults when no restriction is applied.
+
+## Constraints
+- The full solution must compile and behave consistently across both repository implementations.
+- All provided unit and integration tests (existing and newly added) must pass.

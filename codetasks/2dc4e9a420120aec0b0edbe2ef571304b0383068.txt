@@ -1,0 +1,25 @@
+Implement configurable limits for how many WebAuthn (security key) 2FA credentials a user may register, and enforce those limits during registration.
+
+### WebAuthn credential limits (configurable)
+Introduce a WebAuthn-specific section in global configuration:
+
+- Add a `WebAuthn` settings object to the global settings model (`src/Core/Settings/GlobalSettings.cs`) with two integer values:
+  - a maximum allowed credential count for **premium** users
+  - a maximum allowed credential count for **non-premium** users
+- Provide sensible defaults (premium higher than non-premium).
+- Expose this settings object through the global settings interface (`src/Core/Settings/IGlobalSettings.cs`) so it can be consumed by the user service.
+
+### Enforce the limit in WebAuthn registration flows
+In the user service (`src/Core/Services/Implementations/UserService.cs`), enforce the configured maximum credential count for both:
+
+- `StartWebAuthnRegistrationAsync(User user)` (the “start registration / issue challenge” boundary)
+- `CompleteWebAuthRegistrationAsync(...)` (the “persist the new credential” step)
+
+Behavioral requirements:
+
+- Determine whether the user is premium via the premium-access mechanism already used within the service (not by directly checking a user flag).
+- Count only **saved WebAuthn credentials** toward the limit. These are stored in the WebAuthn provider metadata under key names that represent registered keys (e.g., `"Key{n}"`). Do not treat non-credential metadata (such as pending registration data) as consuming a slot.
+- If the user is already at (or above) the allowed maximum when attempting to start or complete registration, fail with a `BadRequestException` whose message clearly indicates the maximum credential count has been exceeded.
+
+### Remove hard-coded delete ID ceiling
+In `src/Api/Auth/Models/Request/TwoFactorRequestModels.cs`, update the validation for the WebAuthn delete request model so it no longer enforces a fixed upper bound tied to the old credential limit. The request should validate that an `Id` is provided, without restricting it to a small hard-coded range.

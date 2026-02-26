@@ -1,0 +1,37 @@
+Implement support for an “auto confirm” push notification that is triggered when a user accepts an organization invitation, and wire it through the existing push/notifications infrastructure.
+
+### Requirements
+
+1. **Triggering the notification on invite acceptance**
+   - When an organization user is accepted via the existing accept flow (`AcceptOrgUserCommand`), emit an auto-confirm push notification **only when** a specific feature flag is enabled (`FeatureFlagKeys.AutomaticConfirmUsers`).
+   - When the feature flag is disabled, no push notification should be sent.
+
+2. **New command abstraction**
+   - Introduce a command (interface + implementation) responsible for sending this push notification. It must accept:
+     - the accepting **user id**
+     - the **organization id**
+   - Register this command in the existing dependency injection setup so it can be injected where needed.
+
+3. **Determining recipients**
+   - The push should be sent to all organization members who can manage users, specifically:
+     - All users at or above the “Admin” role threshold for the organization
+     - “Custom” role users **only if** their permissions include `ManageUsers`
+   - Recipients must:
+     - Exclude entries without a user id
+     - Be de-duplicated so the same user does not receive multiple pushes
+
+4. **Push payload and type**
+   - Add a new push type to the existing push type enum to represent this notification.
+   - Define a new push notification payload model (in the existing push notification models area) that includes:
+     - The id of the user receiving the notification
+     - The organization id
+     - The id of the organization user who accepted the invite (the “target” of the auto-confirm action)
+   - The command should send pushes using the existing `IPushNotificationService` and the standard `PushNotification<TPayload>` structure, targeting individual users.
+
+5. **Notification hub routing**
+   - Extend the notification hub helper/dispatcher so that this new push type is deserialized and delivered to the correct SignalR user channel based on the receiving user id contained in the payload.
+
+6. **Error handling**
+   - If the accepting user cannot be resolved as an organization user for the given organization (i.e., the organization-user record does not exist), the push command should fail with an exception rather than silently doing nothing.
+
+The harness will include updated and newly added unit tests validating these behaviors.

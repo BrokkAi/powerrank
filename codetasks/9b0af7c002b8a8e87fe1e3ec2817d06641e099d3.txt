@@ -1,0 +1,51 @@
+Implement improved accounting and reporting for data discarded by the Distributor when requests hit ingestion limits, particularly per-stream limits enforced via the ingest-limits service.
+
+### Context
+`pkg/distributor/distributor.go` handles `Push`/`PushWithResolver` by:
+- validating and mutating incoming streams/entries,
+- applying an ingestion rate limiter,
+- optionally enforcing additional per-tenant ingest limits via an ingest-limits frontend service,
+- tracking discarded data via Prometheus metrics (and optionally a usage tracker).
+
+The existing behavior does not correctly track discarded entries/bytes in some limit scenarios, and the ingest-limits enforcement API is not expressive enough to report which streams were rejected.
+
+### Required changes
+
+1. **Rate limiting must be based on total entry size and line count computed during validation**
+   - While iterating entries in `PushWithResolver`, compute:
+     - total size in bytes for the request using the same “entry total size” definition used elsewhere (not just `len(line)`),
+     - total number of accepted entries.
+   - Use these computed totals when calling the ingestion rate limiter and when producing the rate-limit error message.
+   - Ensure any sharding logic that depends on per-stream push size uses the per-stream total entry size (not a line-only sum).
+
+2. **Ingest-limits enforcement must return both accepted and rejected streams**
+   - Update the ingest-limits wrapper (`pkg/distributor/ingest_limits.go`) so that enforcing limits yields:
+     - the streams that are accepted,
+     - the streams that are rejected,
+     - and an error.
+   - Streams whose limits could not be checked (e.g., service failures) must still be treated as accepted.
+
+3. **Distributor must track discarded entries/bytes for ingest-limits rejections**
+   - When ingest limits are enabled and enforcement is not in dry-run mode:
+     - If any streams are rejected, record discarded samples/bytes for exactly those rejected streams.
+     - If all streams are rejected, the request should be rejected.
+     - If only some streams are rejected, the request should still write the accepted streams but also surface a validation error indicating a stream-limit rejection.
+   - The surfaced error should include enough detail to be actionable (e.g., include some identifying information for one rejected stream).
+
+4. **Discard tracking must operate on explicit streams, not on aggregated request stats**
+   - Refactor discarded-data tracking so it can be called with a slice of streams to be considered discarded (rather than requiring a full push request plus pre-aggregated stats).
+   - For each discarded stream:
+     - parse labels as needed to determine retention/policy context,
+     - increment `validation.DiscardedSamples` by number of entries,
+     - increment `validation.DiscardedBytes` by total bytes of entries,
+     - and, if a usage tracker is configured, record discarded bytes there as well.
+   - If label parsing fails for a discarded stream, it must not crash the push; it should skip tracking for that stream.
+
+5. **Remove or replace any obsolete validation-metrics aggregation**
+   - Any prior mechanism that maintained per-policy/per-retention push stats solely to support discarded tracking should be removed or adapted, since discarded tracking now derives counts/sizes directly from the discarded streams.
+
+### Outcome
+After these changes:
+- Rate limiting, sharding decisions, and error messages use accurate total entry sizes.
+- The ingest-limits service can report which streams were rejected.
+- Discarded samples/bytes metrics (and usage tracking) correctly reflect streams discarded due to rate limiting and stream-limit enforcement, including partial acceptance cases.

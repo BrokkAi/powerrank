@@ -1,0 +1,57 @@
+Implement session-level task counting so the UI can show **total tasks** and **pending (incomplete) tasks** per session, without loading full session history.
+
+### Requirements
+
+#### 1) History statistics API (in `HistoryIo`)
+Add lightweight counting utilities that operate directly on a session history **zip**:
+
+- Introduce a value type representing task counts:
+  - **total** = number of tasks present
+  - **incomplete** = number of tasks where `done == false`
+  - Tasks may contain `null` entries; these must not be counted as tasks.
+
+- Introduce a value type representing combined session statistics:
+  - **aiResponses** = count of distinct AI-response “task sequences”
+  - **tasks** = the task counts above
+
+- Provide methods to compute:
+  - **task counts only** for a session zip
+  - **AI response count only** for a session zip
+  - **combined stats in one pass** (preferred when both are needed)
+
+Counting must be resilient:
+- If the zip file does not exist, return zero counts.
+- If `contexts.jsonl` contains blank lines or malformed JSON, ignore those lines rather than failing.
+- If task list JSON is missing or malformed, return `(0, 0)` for task counts.
+
+Define **AI response count** as:
+- the number of **distinct** `sequence` values found under `tasks[]` across all valid `contexts.jsonl` lines,
+- but only for task entries that contain non-null “TaskMeta” (e.g., `taskType` and/or model metadata fields).
+
+#### 2) Task list discovery rules
+Task counts must be derived from the session’s stored “Task List” content using the current (fragment-based) format when possible:
+
+- The session zip may include fragment metadata (`fragments-v4.json` or a v3 equivalent).
+- The “Task List” is represented as a virtual fragment with description `"Task List"` whose `contentId` points to a `content/<contentId>.txt` entry containing the task list JSON.
+- The relevant fragment must be one of the virtual fragments referenced by the **most recent context** in `contexts.jsonl` (the last valid line).
+
+Fallback behavior:
+- If the new fragment-based task list cannot be located (no fragments, no matching fragment, no content id, etc.), fall back to a legacy `tasklist.json` entry if present.
+- If the new format *is* found (even if it contains zero tasks), it takes precedence and you must **not** use legacy fallback.
+
+Task list JSON format:
+- Parse it as the project’s `TaskList.TaskListData` (already defined in the codebase).
+- Count total/incomplete as described above, correctly handling `null` task entries.
+
+#### 3) SessionManager support
+Expose a session-level API that returns these counts for a given session id without loading full history. If reading fails, log and return zero counts.
+
+Also provide an efficient method that returns **both** AI response count and task counts for a session id in one call.
+
+#### 4) UI integration (session list)
+Update the session list rendering so that it can display task progress using the new counts:
+- While counts are still loading, show a placeholder.
+- Once available, display different text depending on total and incomplete counts (including the “no tasks” case).
+- Load counts asynchronously and repaint as values arrive.
+
+The goal is to make the new/updated unit tests for task counting and combined stats pass while preserving the existing AI-response counting behavior.

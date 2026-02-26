@@ -1,0 +1,33 @@
+efd6eb00bfaba7940fa5799ece69df415f501979 (6, 12, 929) Enh/headless executor reasoning (#2382)
+5027f7cf7a9447df989004cdbb1e3116e1df43dc (6, 10, 1702) Import-based PageRank and No-Git Fallback for Related Files (#2052)
+6f59675363c93900ba6f674543d943fa8d2ff1da (5, 10, 859) Refactor symbol completion scoring and improve ranking accuracy (#2372)
+c4d72e6a6e5612e07d5338ba4ea266d2d0f49a73 (5, 9, 356) Implement C/C++ import resolution and unify language definitions (#2438)
+cad414bf5b057167446b914d053c27c92cc41769 (4, 6, 207) Filter inner class ancestors from supporting context fragments (#2378)
+ede8f256b4a8ef44a9f5176b6c71baaad788432d (3, 7, 665) fix: Resolve and watch external git metadata directory in worktrees
+a139fadefab85844eb80387ac475aa52352fe62d (2, 6, 377) Prevent empty "Load external changes" entries and include all editable fragment diffs (#2101)
+eec0aeb63381defb50df6422acef4dd210e8c13a (2, 6, 196) refactor: Use ProjectFile in StyleGuideResolver
+608ab4baeff4b41d817ec5506559f75ec6929705 (2, 4, 223) enh: update excerpt format in ReviewAgent prompt to not require fragile filename guessing, and play nicer when we show the raw output
+fd88a34e25097a998904cd825f0e5fc84a268b87 (1, 6, 130) Prefer origin remote for GitHub PR operations (#1969) (#1976)
+38fb3bc74c42e621f8b794f34ddf714480ee36e3 (1, 5, 560) enh/provide scan (#2081)
+920d25d37c2082633855754c1e39cb604b6262c6 (1, 5, 514) Re-Implement Summarize on Folders/Classes/Methods tabs in AttachContextDialog (#2111)
+3e1d049497fe23852291a9ff14874fabfc986fd7 (1, 4, 130) Refactor usage prompts from XML to Markdown format (#2356)
+eb3f80e82fbd5ac2097df5b4fe46666c1bb6b678 (1, 4, 640) Add cancellable issue-mode test/lint retry loop (#2439)
+9d885ec3ce5cfccba5c855ccab362c286a8bac57 (1, 3, 628) Implement Python last-import-wins semantics and wildcard imports (#1914)
+440d5c53e1f55354d73d18c71fd9af80df2372dc (1, 2, 218) feat: ContextAgent includes related test file summaries (#2195)
+0c7ba5f44a6d688cd118b23eaaf87454a359db89 (1, 2, 137) fix: Sessions lost after opening project in older brokk (#2285)
+3991b16cff3aa736c1e779c69e18ce5b58ae154a (5, 10, 445) Fix dependency resolution and analysis for Git worktrees (#2599)
+0a36e1320d80e40965133862de2968581c34db17 (5, 10, 197) fix: enforce tool schema in Llm
+121044d11d08ae8bd717a2929b05d0d5edf0d99e (4, 21, 370) Implement incremental cache transfer in TreeSitterAnalyzer (#2575)
+4dd95395ca734a2a403dcd2d3a6e78eabbd5fe23 (4, 8, 780) Support external file drops into context (#2503)
+2d22fe8c04789bfcbe708d561cbc34412c8d0984 (4, 7, 384) refactor: move code unit signatures to transient analyzer cache (#2609)
+392bc663e764d7aa5cea2e13bf42301364a7235b (2, 8, 1097) Add import resolution for JavaScript and TypeScript module systems (#2430)
+87d655a903430e19a50982631f18a98e32437c13 (2, 6, 703) feat(java): implement lexical scope analysis to filter local identifiers (#2516)
+6f58e2d086d04dfdf30c6640725e4f57f9f69ade (2, 5, 279) Add support for IntelliJ ACP configuration to brokk-code install (#2787)
+07f0ec617bbc19def3e8b5f14c82ba3a2b640b19 (2, 4, 313) Implement test sandboxing for global configuration paths (#2475)
+ffc61a6052677e52c1c8c41081c82fc433beb6df (2, 3, 254) Optimize direct descendant lookup with pre-filtering and side-effect indexing (#2517)
+08f68c75663a328be471f8113fac9890981a6db6 (2, 3, 211) fix: Session upload exceeding size limit is retried on every sync (#2445)
+648644ef5b7dac7fd36b9bf1e0a0d0880f1a019f (1, 6, 280) Enhance language detection to include live dependencies (#2658)
+0018e168ce001ee2ea49066c724213c8adc027d5 (1, 4, 616) Display total and pending task counts in session list UI (#2603)
+b9540ac10e957d6834bbd357f4c967aa05093fa8 (1, 3, 602) perf: parallelize Matcher, JQ, XPath queries in SearchTools
+7529d2030cad722bdae98cee403e7b6ecdaed3b7 (1, 2, 982) Emit structured command result events for verification and review-fix tasks (#2453)
+303f88a2e9d8b1c9ea2e900a0ed2f60b7f59e977 (1, 2, 595) Implement import analysis for GoAnalyzer (#2440)

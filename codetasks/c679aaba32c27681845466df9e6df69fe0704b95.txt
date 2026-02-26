@@ -1,0 +1,53 @@
+Implement a startup failure mode for the Tailscale state store that surfaces as a health warning instead of a daemon crash, and ensure login/start actions are blocked while that condition persists.
+
+### Background / goal
+`tailscaled` currently attempts to open the persistent IPN state store during startup (via `store.New(...)`). With newer sealing mechanisms (e.g., TPM-backed storage), the store can fail to open when the TPM is unavailable or has been reset. Today that error can terminate the daemon at startup, leaving users with little visible indication beyond logs.
+
+Change the behavior so the daemon can start far enough to report a clear health warning, but must not allow actions that would “paper over” the missing state (e.g., interactive login that would create an ephemeral registration).
+
+### Required behavior changes
+
+#### 1) Health warning for state-store initialization failure
+Introduce a new health item in the IPN package (in `ipn/store.go`) representing “state store failed to initialize”.
+
+Requirements for this health item:
+- It must be a registered `health.Warnable` with:
+  - a stable code string (used by tests),
+  - high severity,
+  - connectivity impact set,
+  - a user-facing title and text.
+- The text must include:
+  - a fixed URL pointing to documentation for the issue (`https://tailscale.com/s/state-store-init-error`),
+  - the underlying error string (passed via health args).
+
+This health condition should be set when state store initialization fails during daemon startup.
+
+#### 2) Don’t crash on store open failure; fall back to in-memory store
+In `cmd/tailscaled/tailscaled.go`, where the LocalBackend is constructed (via `getLocalBackend`), handle failures from `store.New(...)` as follows:
+- If health tracking is available in the provided system instance, continue startup using an in-memory state store implementation.
+- Record the failure in the health tracker using the warnable from (1), including the error text in the args.
+- If health tracking is *not* available, preserve the existing behavior of returning an error (so startup still fails in that configuration).
+- Ensure this fallback is observable via status/health reporting (not only logs).
+
+#### 3) Block login/profile creation while state-store health is unhealthy
+In `ipn/ipnlocal/local.go`, ensure that when the state-store health warning is set:
+- Interactive login initiation (`StartLoginInteractiveAs`) fails with an error (rather than proceeding).
+- Creating a new profile (`NewProfile`) fails with an error.
+- The backend should not present a normal running/login-needed state; when computing the next state (in the code path that determines `ipn.State`), return `ipn.NoState` while this health condition is unhealthy.
+
+The specific error strings returned by these entry points must be stable and user-visible (they are asserted by the test suite).
+
+#### 4) LocalAPI must surface these failures as HTTP errors
+In `ipn/localapi/localapi.go`, ensure the HTTP endpoints propagate the new restrictions:
+- The “login-interactive” endpoint must return an HTTP error if the backend rejects interactive login.
+- The “start” endpoint must reject attempts to start the backend while the state-store health warning is unhealthy, returning an HTTP error with a clear message.
+
+#### 5) Dependency/import expectations
+Because the daemon now needs an in-memory store implementation available in builds/tests, ensure the relevant packages/build dependency manifests and any platform integration dependency checks continue to succeed (the repository includes dependency-verification tests that will fail if the new import surface isn’t reflected appropriately).
+
+### What should be observable externally
+After these changes, a node with an unreadable/unparseable state file (or any `store.New` failure) should:
+- start the daemon without crashing,
+- report a high-severity health warning about state-store initialization failure (including the docs URL),
+- refuse attempts to start/login/create profiles until the state-store issue is resolved,
+- report `NoState` as the backend state while unhealthy.

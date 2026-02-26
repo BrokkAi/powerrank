@@ -1,0 +1,31 @@
+Implement a new **preview-only** formatting behavior in the Ruff Python formatter: **preserve a single blank line immediately after a function header** (the line after the `:`) when the source contains one, **but only when the function body does not start with a docstring or an initial comment**.
+
+### Required behavior (preview mode only)
+
+In preview formatting, for `def` blocks:
+
+1. **Preserve one leading empty line in the function body** if the original source has at least one blank line between the header and the first “real” body statement.
+   - Preserve **at most one** empty line (if there are multiple, collapse them to one).
+   - **Do not insert** a blank line if none existed in the source.
+
+2. **Do not preserve** that leading blank line if the first body element is:
+   - a **docstring**, or
+   - a **leading comment block** (i.e., the function effectively starts with comments before the first statement).
+
+3. The above rule applies to function suites regardless of where they occur (top-level, nested, etc.) and must interact correctly with range formatting.
+
+### Stub collapsing must still work
+
+Ruff currently collapses function/class stubs that contain only an ellipsis into a single-line form (e.g., `def f(): ...`) when legal. That collapsing must continue to behave correctly under the new preview behavior:
+
+- Stubs that are **only** an ellipsis and have **no disqualifying comments** should still be collapsible.
+- Cases that should not collapse (because of relevant trailing comments, header trailing comments, etc.) must remain uncollapsed.
+- Ensure the ellipsis-only detection is robust enough that the formatter doesn’t accidentally introduce invalid output when applying the new “blank line after header” rule.
+
+### Codebase touchpoints
+
+You’ll need to adjust the suite/clause formatting logic that decides:
+- how the first statement of a function suite is emitted (and whether an empty line is printed before it in preview), and
+- how “ellipsis-only” suites are detected/handled for stub collapsing.
+
+A small preview feature flag hook is expected (preview on/off is driven by the formatting context).

@@ -1,0 +1,36 @@
+Update the Home Assistant `uptimerobot` integration to work with `pyuptimerobot` API v3 (library version `24.0.1`), reflecting the upstream data model and error-handling changes while keeping the integration’s public entity behavior stable where required.
+
+Key requirements:
+
+- **Library/API v3 data model changes**
+  - Monitors no longer use the old numeric status/type and snake_case fields. The integration must handle the v3-style monitor payloads/objects (e.g., monitor “friendly name”, “type”, and “status” are represented differently than before).
+  - Monitor status is now expressed as string values (for example “UP”, “DOWN”, “PAUSED”), and entity logic that previously relied on numeric codes must be updated accordingly.
+
+- **Entity behavior updates**
+  - `binary_sensor.py`: the binary sensor should consider the monitor “on” only when the monitor is in the *up* state.
+  - `sensor.py`: the sensor state should be derived from the monitor status string in a stable, lowercase form, but must preserve the existing state value `"pause"` for paused monitors (even if the API/library uses `"paused"`).
+  - `switch.py`:
+    - The switch’s `is_on` should reflect whether the monitor is up.
+    - Turning the switch on/off must call the updated edit endpoint/signature expected by the v3 library.
+    - API responses should no longer be validated via the old “ok/fail” status field; instead, rely on exceptions for error handling, including triggering reauthentication on authentication failures.
+    - When raising `HomeAssistantError` for API failures, ensure the translation placeholders match the integration’s updated error messaging expectations.
+
+- **Config flow and unique ID**
+  - `config_flow.py` must validate credentials using the v3 account-details response model (account identifiers and fields differ from the previous version).
+  - The config entry unique ID should be derived from the correct stable account identifier available from the v3 account details (not the previous numeric user id).
+  - Connection/authentication/general failures must be mapped to the correct flow errors consistent with the integration’s current UX.
+
+- **Coordinator update logic**
+  - `coordinator.py` must adapt to the v3 library response structure and remove assumptions about legacy “stat/ok” fields.
+  - Ensure fetched monitor collections are processed using the new response layout and typing.
+
+- **Diagnostics**
+  - `diagnostics.py` must return account and monitor information using the v3 field names/types and redact sensitive fields (notably the account email) using Home Assistant’s diagnostics redaction utilities.
+
+- **Utilities**
+  - `utils.py` should safely handle cases where coordinator data may be absent or empty without breaking device discovery logic.
+
+- **Constants**
+  - Update `const.py` to define and use integration-level constants for monitor status values used across platforms (up/down, etc.), rather than embedding magic literals.
+
+The provided tests include both legacy expectations (where the integration intentionally preserves behavior, such as the `"pause"` sensor state) and new API v3 expectations. Ensure the integration code aligns with the updated `pyuptimerobot` library structures and exception behavior so that all supplied tests pass.

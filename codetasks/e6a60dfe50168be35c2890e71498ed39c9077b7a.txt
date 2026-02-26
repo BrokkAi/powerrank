@@ -1,0 +1,48 @@
+Implement support for running Home Assistant’s **frontend integration** against a **built artifact from a GitHub frontend pull request**, instead of only using the integrated frontend or a local development checkout.
+
+### Functional requirements
+
+1. **New frontend configuration options**
+   - Add two new config keys under the frontend domain:
+     - `development_pr`: a positive integer PR number
+     - `github_token`: a string GitHub token
+   - These two options must be **inclusive**: either both are provided or neither is.
+
+2. **Frontend source selection and priority**
+   - Frontend selection priority must be:
+     1. `development_repo` (existing local checkout option)
+     2. `development_pr` + `github_token` (new PR artifact option)
+     3. integrated frontend (default)
+   - If both `development_repo` and `development_pr` are configured, log a warning and continue using `development_repo`.
+
+3. **Caching and cleanup behavior**
+   - Add a cache directory rooted at `<config_dir>/.cache/…` for temporary data that can be regenerated.
+   - Implement a `cache_path(...)` helper on the core `Config` object that builds paths under `.cache` (similar to `path(...)`).
+   - When `development_pr` is configured, store the downloaded/extracted artifact in a stable cache location under the frontend cache area (e.g. a “development artifacts” folder).
+   - When `development_pr` is **not** configured, and the frontend development artifact cache directory exists, attempt to remove it; failures should not prevent startup (warn instead).
+
+4. **Downloading and using a PR artifact**
+   - Add a module responsible for:
+     - Querying GitHub for the PR’s head SHA.
+     - Finding a successful GitHub Actions workflow run for that SHA from the frontend repo, then locating the build artifact named `frontend-build`.
+     - Downloading the artifact archive using the provided token.
+     - Extracting it into a directory structure that the frontend integration can serve as if it were a development repo.
+   - Cache validation:
+     - Persist the head SHA alongside the extracted content.
+     - If the cache already exists and matches the current PR head SHA, reuse it without re-downloading.
+     - If the SHA differs, re-download and replace the cache.
+
+5. **Safety and robustness**
+   - Implement basic protection against malicious or corrupted zip artifacts (e.g., bounds on file count and total uncompressed size).
+   - Failures in PR download/extraction must be handled gracefully:
+     - Raise/convert expected GitHub/HTTP/zip/extraction failures into `HomeAssistantError` with actionable messages.
+     - The frontend integration should log the failure and **fall back to the integrated frontend** rather than failing setup.
+     - Unexpected exceptions should be logged with a full traceback and also fall back.
+
+6. **Backup exclusion**
+   - Ensure the `.cache` directory is excluded from backups (since it is regenerable).
+
+7. **Dependencies**
+   - Add the required GitHub client library dependency so the frontend integration can import it during startup (the frontend integration is imported early).
+
+The end result should allow a developer to point Home Assistant at a frontend PR number and token, have it automatically download the latest successful build artifact for that PR, cache it locally, and serve the UI from that artifact—while keeping existing frontend behaviors intact.

@@ -1,0 +1,26 @@
+Implement early `required-version` handling so configuration loading fails fast (and with the right error surface) before any deeper option/rule validation occurs.
+
+### Background
+Ruff supports a `required-version` field in configuration files. It is parsed as a PEP 440 version specifier (with a backward-compatible shorthand where a bare version like `0.3.1` is treated as `==0.3.1`). When present, Ruff must compare it against the running Ruff version (`RUFF_PKG_VERSION`) and abort if it doesn’t match.
+
+### What to change
+1. **`required-version` must be checked before strict config deserialization triggers other validation errors**
+   - When loading configuration from either:
+     - `ruff.toml` (top-level), or
+     - `pyproject.toml` under `[tool.ruff]`,
+   - Ruff must detect and validate `required-version` *prior to* fully deserializing options/settings such that failures due to version mismatch happen even if the rest of the config is invalid (e.g., unknown rule codes in `[lint] select`).
+
+2. **Invalid `required-version` must produce a parse error (not a mismatch error)**
+   - If the `required-version` value is not a valid PEP 440 specifier, configuration loading must fail during parsing with an error message that points to the `required-version` value and includes the underlying version-specifier parsing failure.
+   - This should be surfaced as a configuration parse failure (with file location information) rather than as a later validation/mismatch error.
+
+3. **Mismatch errors must be attributed to configuration loading**
+   - If `required-version` parses successfully but does not match the running version, Ruff should fail with a configuration-loading error chain that clearly indicates the configuration file being loaded and the mismatch message.
+
+4. **Parsing API expectations**
+   - `RequiredVersion` should be parsable from string input via standard parsing conventions (so it can be parsed from TOML string values without special casing), while preserving the backward-compatible “bare version implies equals” behavior.
+
+### Acceptance criteria
+- Configuration loading from both `ruff.toml` and `pyproject.toml` applies the `required-version` gate early enough to prevent unrelated config validation errors from taking precedence.
+- Invalid specifiers yield a TOML parse error with accurate span/excerpt information and the underlying version parsing message.
+- Valid-but-non-matching specifiers yield a clear “required version does not match running version” failure attributed to configuration loading.

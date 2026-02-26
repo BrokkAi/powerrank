@@ -1,0 +1,52 @@
+Implement Secrets Manager “secret versioning” end-to-end: persistence, API surface, and integration into secret updates/restores.
+
+### Domain + Repository
+Add support for a `SecretVersion` record that represents a historical value of a secret at a point in time, including:
+- `Id` (GUID), `SecretId` (GUID), encrypted `Value` (string), `VersionDate` (UTC timestamp)
+- Optional editor attribution: `EditorServiceAccountId` **or** `EditorOrganizationUserId` (both nullable, only one should be set when applicable)
+
+Introduce `ISecretVersionRepository` (`src/Core/SecretsManager/Repositories/ISecretVersionRepository.cs`) with async operations to:
+- Fetch a version by id
+- Fetch versions by `SecretId`
+- Fetch many versions by a list of ids
+- Create a version
+- Bulk delete by ids
+
+Provide an Entity Framework-backed implementation (`bitwarden_license/src/Commercial.Infrastructure.EntityFramework/SecretsManager/Repositories/SecretVersionRepository.cs`) that:
+- Returns versions ordered by `VersionDate` descending when fetching collections
+- On create, enforces a retention policy for versions per secret (keep only the most recent set) and performs cleanup atomically with the insert
+
+Also provide a no-op implementation used when Secrets Manager is not enabled (`src/Core/SecretsManager/Repositories/Noop/NoopSecretVersionRepository.cs`) and register the appropriate implementations in the existing DI extension points.
+
+### API Models
+Add:
+- `RestoreSecretVersionRequestModel` with a required `VersionId`
+- `SecretVersionResponseModel` that serializes the fields needed by clients (including editor ids and version metadata)
+
+Extend `SecretUpdateRequestModel` (`src/Api/SecretsManager/Models/Request/SecretUpdateRequestModel.cs`) with a boolean flag indicating whether the secret’s value was changed by the request.
+
+### Secret Versions API
+Create a new controller `SecretVersionsController` under `src/Api/SecretsManager/Controllers/SecretVersionsController.cs` providing endpoints to:
+- List versions for a secret: `GET /secrets/{secretId}/versions`
+- Get a specific version: `GET /secret-versions/{id}`
+- Bulk fetch versions: `POST /secret-versions/get-by-ids` (body: list of version GUIDs)
+- Restore a secret to a prior version: `PUT /secrets/{secretId}/versions/restore`
+- Bulk delete versions: `POST /secret-versions/delete` (body: list of version GUIDs)
+
+Authorization/visibility rules must align with existing Secrets Manager access patterns:
+- All routes require Secrets Manager authorization (`[Authorize("secrets")]`).
+- Requests must be scoped to an organization where the caller has Secrets Manager access.
+- For user-based calls, enforce per-secret access checks using existing secret access mechanisms (read for retrieval, write for restore/delete).
+- For service-account and organization clients, handle access according to existing “client type” conventions (service-account/organization flows should not rely on user-specific policy checks, but still must be limited to the correct organization and Secrets Manager access).
+
+### Integrate with Secret Updates
+Update `SecretsController` so that when a secret update indicates the **value changed**, the previous value is saved as a new `SecretVersion` before the secret is persisted with the new value. The created version must attribute the editor appropriately based on the caller type (service account vs. user, using organization-user lookup when needed).
+
+### Restore Semantics
+Restoring a version must:
+- Validate the requested version exists and belongs to the target secret
+- Require write access (per rules above)
+- Update the secret’s value to the version’s value and update revision metadata
+- Before overwriting, snapshot the current secret value into a new version when the restore would change the value (and attribute the editor consistently with caller type)
+
+All changes must be compatible with the provided unit and integration tests across API, core, and EF layers.

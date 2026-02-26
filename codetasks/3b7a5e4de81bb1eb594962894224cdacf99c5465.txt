@@ -1,0 +1,28 @@
+Implement support for explicitly including files that have no recognized Python extension via `src.include` patterns.
+
+### Background / current behavior
+The project’s file walker and glob-based include/exclude filters currently avoid analyzing “non-Python” files (e.g., files with no extension) unless the path is explicitly provided on the CLI. This means a file like `src/main` is ignored during normal directory traversal even if it lives under an included directory.
+
+### Required behavior
+A file without a supported extension must be eligible for analysis when it is **explicitly included by an include pattern that matches the file path exactly**. Concretely:
+
+- An `src.include` entry that is a **literal glob** (a glob pattern with no metacharacters) and equals a file path (e.g., `src/main`) should cause that file to be treated as analyzable input even if it has no extension.
+- Non-literal include patterns (e.g., `src/**`) must not change the existing behavior for extensionless files; those files should continue to be ignored unless they’re explicitly passed on the CLI.
+- Directory include behavior should remain unchanged, except where necessary to support the above file-level distinction.
+
+### Design constraints to satisfy tests
+To support this, the include/exclude matching pipeline must be able to distinguish:
+1) “path is included because it matched a literal include pattern” vs
+2) “path is included because it matched a normal glob pattern”.
+
+This distinction must be carried through to the code that decides whether to skip a file due to unknown/unsupported source type during walking/traversal. When a file is included due to a literal match, it should be assumed analyzable (treated like Python) for the purpose of not being filtered out.
+
+### Areas impacted
+The changes will involve the include filter implementation and the `IncludeResult`/matching flow used by the project walker:
+
+- `crates/ty_project/src/glob/include.rs`: enhance file matching so it can report whether an include match was literal vs pattern-based.
+- `crates/ty_project/src/glob.rs`: propagate the richer match result through the include/exclude combination.
+- `crates/ty_project/src/walk.rs`: adjust traversal logic that currently drops “non-python” files so that literal-include matches (and CLI-root entries) are not dropped.
+- Any helpers that previously compared `IncludeResult` for equality (e.g., `Project::is_file_included`, override checks) must be updated to work with the new included result shape.
+
+The end result should allow `ty` to analyze extensionless files only when the user explicitly names them in `src.include` via an exact, literal pattern, while preserving existing filtering behavior otherwise.

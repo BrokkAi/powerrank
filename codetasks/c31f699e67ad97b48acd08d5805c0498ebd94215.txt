@@ -1,0 +1,46 @@
+Implement support in `SharePartition` for tracking how many cached, in-flight records are already in a **terminal** delivery state. A record is **terminal** when its state is **ACKNOWLEDGED** or **ARCHIVED**. This count is used as an input for share-partition lag computation, and it must remain correct across all state transitions and cache/offset maintenance operations.
+
+### Requirements
+
+1. **Add a terminal-records counter**
+   - Maintain an integer counter representing the number of terminal records currently **in-flight** (i.e., within the cached range that is still tracked as in-flight, bounded by `startOffset` and `endOffset`).
+   - The counter must be safe to update from concurrent contexts used by the partition logic.
+
+2. **Initialize the counter from persisted state**
+   - During partition initialization when the cached state is populated from persister results, compute the terminal-records count from the restored batches/offsets and store it in the counter.
+   - Only count records that are in-flight under the current `startOffset` rules (i.e., do not count records that are effectively outside in-flight due to offsets already advanced).
+
+3. **Update the counter on local state transitions**
+   - Whenever record/batch state transitions cause records to move **into** a terminal state (ACKNOWLEDGED/ARCHIVED), increase the counter by the number of affected records that are considered in-flight.
+   - Transitions affecting only offsets before `startOffset` must not inflate the in-flight terminal count.
+   - Ensure this works for both:
+     - “whole batch” state tracking
+     - “per-offset” state tracking
+
+4. **Update the counter when start offset advances or the cache is compacted**
+   - When `startOffset` is advanced because the earliest in-flight records are terminal, reduce the counter by the number of terminal records that are moved out of in-flight due to this offset movement.
+   - If cache compaction/removal clears terminal records as part of moving `startOffset` or clearing cache entirely, ensure the counter is reduced/reset accordingly.
+
+5. **Handle Log Start Offset (LSO) movement correctly**
+   - When log start offset moves forward and `startOffset` is updated, some terminal records that were previously counted may fall out of the in-flight window.
+   - Correctly decrement the counter by the number of terminal records that are removed from in-flight due to the new LSO, taking into account:
+     - gaps and missing offsets
+     - both batch-level and offset-level tracking
+
+6. **Account for archiving caused by fetch gaps or transaction filtering**
+   - When acquire logic archives stale records (e.g., because fetch responses skip ahead, creating gaps) those records become terminal and must be reflected in the counter if they are still in-flight.
+   - When aborted transactional records are filtered and corresponding cached entries are archived, ensure those archived records are counted as terminal in-flight.
+
+7. **Rollback on persister write failures**
+   - Some operations begin a local transition, then commit it via persister writes. If persister writes fail and local state transitions are rolled back, adjust the counter **only** when rollback moves records from terminal to non-terminal.
+   - Rollback adjustments must respect `startOffset` (i.e., only reverse-count records that still lie in-flight at rollback time).
+
+8. **Expose minimal test visibility**
+   - Provide a test-visible accessor to retrieve the current terminal-record count.
+
+9. **Terminology alignment**
+   - Replace/align any “acknowledged” helper logic that previously treated ACKNOWLEDGED/ARCHIVED equivalently so that naming reflects “terminal” semantics (ACKNOWLEDGED or ARCHIVED).
+
+### Expected outcome
+
+After your change, all updated unit tests in `core/src/test/java/kafka/server/share/SharePartitionTest.java` must pass, validating correctness of the terminal-record count across initialization, acquire/ack/release flows, acquisition lock timeouts, LSO updates, persister failures/rollbacks, gap handling, and transaction-abort filtering.

@@ -1,0 +1,46 @@
+Update the TUI layout and status/help presentation to match a redesigned chat panel and token-usage display.
+
+### Chat panel layout + job indicators
+In `brokk_code/widgets/chat_panel.py`, adjust the `ChatPanel` composition so that:
+- The `StatusLine` appears **above** the chat input (vertical order).
+- A new **help row** exists beneath the input, laid out horizontally, containing:
+  - A loading/spinner indicator that is normally hidden.
+  - An elapsed-time label that is normally hidden.
+  - A right-aligned help text label (static text describing common keys/commands).
+
+Job lifecycle state must be handled at the `ChatPanel` level:
+- `ChatPanel.set_job_running(True/False)` should update both:
+  - The existing `StatusLine` job-running state, and
+  - The help-row spinner visibility and elapsed timer label lifecycle (start, periodic updates while running, stop/reset when finished).
+- The elapsed display should be stable and human-friendly (mm:ss, and hh:mm:ss when applicable), and must not go negative.
+
+Also ensure the panel composes cleanly (no missing imports / NameError issues) and uses appropriate Textual widgets for static labels and the spinner.
+
+### Status line structure
+In `brokk_code/widgets/status_line.py`, adjust the widget structure/styling so that:
+- The status line no longer relies on a filled background.
+- The job timer/spinner area is wrapped such that it can be shown/hidden without hiding other status content.
+- The timer text shown in the status line should be time-only (no “Elapsed:” prefix), and visibility should toggle cleanly with job state.
+
+### Application integration: remove footer + route job state through ChatPanel
+In `brokk_code/app.py`:
+- Remove the custom footer behavior (and any Footer usage) so the app no longer mounts a `Footer` widget.
+- When starting a job, set the job-running UI state through the chat panel interface (rather than reaching into status widgets directly).
+
+### Token usage: show “% context remaining”
+Update token usage rendering to prefer percentages:
+- In `brokk_code/widgets/token_bar.py`, when `max_tokens` is positive, render **percentage of remaining context** (clamped to `[0.0%, 100.0%]`) rather than “used / max”.
+- If `max_tokens` is `None`, retain the existing default behavior (use the prior default max value).
+- If `max_tokens` is explicitly `0` or negative, render an **absolute token count** instead of a percentage.
+- Handle unusual inputs safely (e.g., negative `used_tokens`) in both displayed math and bar-segment calculations.
+
+In `brokk_code/widgets/context_panel.py`, update the context token usage label in the header to match the same “% context remaining” convention when a valid max is available.
+
+### TCSS updates and constraints
+In `brokk_code/styles/app.tcss`, update styling to match the new layout:
+- `#chat-input` should be background-styled (no borders), include padding, and be vertically centered; focus styling should also remain borderless.
+- Add styles for the new help row and its children (spinner, elapsed label, help text), including right alignment for the help text.
+- Ensure the elapsed label has sufficient width/min-width to avoid truncation.
+- Remove obsolete help-label styles from other panels, and ensure no unsupported/invalid TCSS properties are used (e.g., properties that Textual doesn’t support and could crash parsing).
+
+The overall goal is that the redesigned chat panel layout, job progress indicators (spinner + elapsed), footer removal, and percentage-based token usage are implemented consistently across widgets and styling.

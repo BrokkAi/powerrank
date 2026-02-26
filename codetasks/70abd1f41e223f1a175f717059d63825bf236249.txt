@@ -1,0 +1,33 @@
+Extend Lucene’s dense conjunction bulk scoring so it can efficiently handle conjunction clauses implemented as `TwoPhaseIterator`s (eg. doc-values-backed range queries), while preserving existing behavior and optimizations for “normal” `DocIdSetIterator` clauses.
+
+### Context / Goal
+`DenseConjunctionBulkScorer` is an optimized `BulkScorer` used for dense filter-like conjunctions. Today it assumes all clauses are plain iterators and avoids using it when any clause is two-phase. Update the implementation and related query/scorer wiring so dense conjunction scoring can incorporate two-phase clauses, including taking advantage of long contiguous runs of matching doc IDs.
+
+### Requirements
+1. **Dense conjunction supports two-phase clauses**
+   - `DenseConjunctionBulkScorer` must accept and correctly score a conjunction made of:
+     - only `DocIdSetIterator` clauses,
+     - only `TwoPhaseIterator` clauses,
+     - or a mix of both.
+   - For a two-phase clause, the scorer must:
+     - advance using the approximation (`TwoPhaseIterator#approximation()`),
+     - and verify matches using `TwoPhaseIterator#matches()` before collecting.
+   - Any existing “window” behavior and optimizations (eg. skipping work when a clause fully covers a doc-id window) must remain correct in the presence of two-phase clauses.
+
+2. **Expose run-end information for two-phase iterators**
+   - Add a `docIDRunEnd()` capability to `TwoPhaseIterator` (similar in spirit to `DocIdSetIterator#docIDRunEnd()`), describing the end of the current contiguous run of matching doc IDs for the *current approximation position*.
+   - The default behavior should be safe for two-phase implementations that cannot provide better information.
+
+3. **Doc-values range two-phase iterator provides correct run-end**
+   - `DocValuesRangeIterator` (a `TwoPhaseIterator`) must override the new run-end method to expose contiguous match runs when it can determine a “definitely matches” range, enabling dense conjunction optimizations on doc-id ranges.
+
+4. **Scorer selection logic updated**
+   - Places that decide whether to use `DenseConjunctionBulkScorer` must no longer reject it solely because a clause has a non-null `twoPhaseIterator()`.
+   - Update the relevant scorer suppliers so dense scoring is chosen under the same density/maxDoc criteria as before, but now works with two-phase iterators too.
+   - Ensure constant-score bulk scoring can also take advantage of dense conjunction when its iterator is two-phase (via the wrapped iterator).
+
+5. **Compatibility with collectors and competitive iteration**
+   - When a collector provides a `competitiveIterator()`, dense conjunction must incorporate it correctly alongside other clauses, regardless of whether other clauses are two-phase.
+
+### Expected outcome
+After your changes, conjunctions that include two-phase iterators (notably doc-values range queries) can use `DenseConjunctionBulkScorer` without correctness regressions, and the new/updated tests validating two-phase behavior, live-doc filtering, and range intersection scenarios pass.

@@ -1,0 +1,30 @@
+Implement HTTP “Streamable” transport support for the MCP integration while preserving compatibility with existing SSE-based MCP servers.
+
+### MCP client transport selection and fallback
+Update the MCP connection helper used by the integration (`mcp_client` in `homeassistant/components/mcp/coordinator.py`) so it:
+
+- Supports connecting to MCP servers via the streamable HTTP transport (in addition to the existing SSE transport).
+- Uses Home Assistant’s shared async HTTP client infrastructure for the streamable HTTP transport (so the MCP client runs with HA’s configured SSL/proxy behavior and default headers).
+- Accepts a `HomeAssistant` instance as an argument (in addition to the URL and optional token manager), and propagates the bearer token into the outgoing request headers when a token manager is provided.
+- Properly handles failures raised as `ExceptionGroup` from the underlying transport context managers:
+  - Extract and raise the underlying “main” exception (rather than the group) in error cases.
+  - If the streamable HTTP transport fails specifically with an HTTP 405 (“Method Not Allowed”), treat that as a signal that the server may be an SSE MCP server and retry the connection using the SSE transport.
+  - If the SSE retry also fails (again possibly as an `ExceptionGroup`), surface the underlying exception.
+
+All call sites that construct an MCP session (tool calls and coordinator refresh/list-tools flow) must be updated to pass the `HomeAssistant` instance.
+
+### Config flow validation
+Update MCP config flow validation (`homeassistant/components/mcp/config_flow.py`) to use the updated MCP client helper signature (it now requires `hass`).
+
+Also adjust the example URL constant used for display/documentation in the flow from an SSE-looking path to a generic MCP path.
+
+### HTTPX client header behavior
+Enhance `create_async_httpx_client` in `homeassistant/helpers/httpx_client.py` so that:
+
+- It continues to set Home Assistant’s default `User-Agent` header.
+- If the caller provides additional headers via the function kwargs, those headers are merged with (not replacing) the defaults.
+
+This change must not break existing client caching behavior or other consumers that rely on the default headers being present.
+
+### Expected outcome
+After implementing the above, the MCP integration should be able to initialize against servers offering streamable HTTP transport, fall back to SSE when appropriate, and propagate auth headers correctly. The HTTPX client helper must preserve defaults while allowing extra headers. All provided tests (including newly added transport and header cases) must pass.

@@ -1,0 +1,34 @@
+Refactor the `analytics_insights` integration to rename the concept of tracked “add-ons” to tracked “apps”, including config/options keys, sensor identifiers, and stored config entry migrations.
+
+### Functional requirements
+
+1. **Configuration key rename**
+   - Replace the existing options key for tracked add-ons (`tracked_addons`) with a new options key `tracked_apps`.
+   - Update all internal references so the integration reads/writes `tracked_apps` instead of `tracked_addons`.
+   - Ensure translations/UI labels reflect “Apps” rather than “Add-ons” (see `strings.json`).
+
+2. **Config flow + options flow updates**
+   - In `homeassistant/components/analytics_insights/config_flow.py`, update the user and options flows so:
+     - The selectable list is presented under the `tracked_apps` key.
+     - Stored options use `tracked_apps`.
+   - Bump the config flow version to `2` to match the new storage format.
+
+3. **Coordinator data model and sensor updates**
+   - In `homeassistant/components/analytics_insights/coordinator.py`, rename the tracked add-ons handling to tracked apps:
+     - The coordinator should track apps from `tracked_apps`.
+     - The `AnalyticsData` structure should expose an `apps` mapping (not `addons`).
+   - In `homeassistant/components/analytics_insights/sensor.py`, update app-related sensors so:
+     - Entity descriptions use an `app_...` identifier/prefix instead of `addon_...`.
+     - The translation key for these sensors is updated to the new “apps” naming.
+     - The sensor values are sourced from the `apps` data produced by the coordinator.
+
+4. **Config entry migration (v1 → v2)**
+   - Implement an `async_migrate_entry` in `homeassistant/components/analytics_insights/__init__.py` to migrate existing installations:
+     - For config entries with `version < 2`, migrate options from `tracked_addons` to `tracked_apps`.
+     - Update entity registry entries belonging to this config entry whose `unique_id` begins with `addon_` so they now begin with `app_` (preserving the rest of the identifier). Do not modify unrelated entity unique IDs.
+     - After migration, update the config entry to `version = 2`.
+
+5. **Test fixtures alignment**
+   - The integration’s test fixtures and expected outputs use the new “apps” naming (e.g., fixture filenames and unique IDs). Update any integration-side references accordingly so both historical and updated behaviors are supported through migration.
+
+The result should be that a Home Assistant instance upgrading from the old format retains tracked selections and existing entities, but with updated option keys and updated unique IDs for the former add-on sensors.

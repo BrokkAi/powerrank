@@ -1,0 +1,29 @@
+Extend the `nrgkick` Home Assistant integration to support pausing/resuming car charging via a new **switch** entity, and introduce a shared API error-mapping helper for command-style calls and config-flow validation.
+
+### Functional requirements
+
+1. **New switch platform**
+   - Register the switch platform for the integration so it is set up alongside existing platforms.
+   - Expose a single switch entity representing whether charging is enabled (i.e., not paused).
+   - The switch state must be derived from coordinator data coming from the device “control” payload, using the library’s `CONTROL_KEY_CHARGE_PAUSE` semantics (paused vs not paused).
+   - Turning the switch **on** must resume/enable charging; turning it **off** must pause charging.
+   - After executing a command, the integration must refresh coordinator data so the entity state reflects the device’s latest reported state.
+
+2. **API call helper and error mapping**
+   - Add an async helper (in the integration’s API helpers module) that awaits an arbitrary library call and maps common `nrgkick_api` exceptions into user-facing `HomeAssistantError` (with translations) or existing integration-specific exceptions as appropriate.
+   - This helper must be suitable for:
+     - Config flow validation calls (e.g., test connection, fetch device info).
+     - “Command” calls initiated by entities (switch/number/etc.), where failures should surface immediately as `HomeAssistantError`.
+   - Device command rejections raised by the library (e.g., a “command rejected” exception that includes a reason) must be converted into a `HomeAssistantError` with a translation key and a placeholder containing that reason.
+
+3. **Coordinator polling robustness**
+   - During coordinator updates, ensure invalid/garbled responses from the library are handled distinctly from other failures (raised as `UpdateFailed` with an appropriate translation key), rather than being treated as generic communication failures.
+
+4. **Translations / strings**
+   - Add a translatable name for the new switch entity under the integration’s strings.
+   - Add a translatable exception message for “command rejected” (including a `{reason}` placeholder).
+   - Ensure the “invalid response” condition is represented as a translatable exception key used by both polling and one-off calls.
+
+### Notes on integration behavior expectations
+- The command-style library methods used by the integration may return primitive values (not necessarily dictionaries). Your integration code should not rely on dictionary-shaped return values for these setters.
+- The new switch entity must integrate cleanly with the existing coordinator/entity base patterns (unique IDs, device info, etc.), and it must work correctly with Home Assistant services (`switch.turn_on` / `switch.turn_off`).

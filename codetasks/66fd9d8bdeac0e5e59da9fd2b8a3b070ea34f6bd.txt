@@ -1,0 +1,48 @@
+Implement support for **metadata/label name disambiguation** during data object section discovery and predicate pushdown, so that scans don’t incorrectly drop results when a predicate name exists as a **stream label** but not as a **structured-metadata column**.
+
+### Context
+
+The metastore currently:
+- finds candidate data-object sections by scanning “pointer” sections using stream matchers + time range, and
+- optionally applies bloom-filter-based pruning using equality predicates.
+
+This can produce **false negatives** when an equality predicate targets a **label name** (e.g. `app="foo"`) but bloom filtering treats it as a metadata column and fails to find a corresponding bloom index entry.
+
+### Requirements
+
+#### 1) Combine pointer scanning and bloom filtering in a single reader
+Provide an `ArrowRecordBatchReader` that:
+- selects pointer rows by tenant, stream matchers, and time window (same semantics as before), and
+- then applies bloom filtering for relevant predicates.
+
+This reader must:
+- only consider **equality** predicates for bloom pruning (`labels.MatchEqual`);
+- return `io.EOF` when nothing matches (including when bloom pruning eliminates everything);
+- expose bloom stats via a `totalReadRows() uint64` method compatible with the existing `bloomStatsProvider` usage.
+
+#### 2) Prevent bloom filtering from using stream-label predicates
+Before bloom filtering, remove predicates that reference any label name known to exist on the streams matched by the selector. In other words:
+- Determine the set of stream label names for the streams in scope (those satisfying the selector/time range).
+- Any bloom predicate whose name is in that label-name set must be ignored for bloom pruning (to avoid treating labels as metadata).
+
+This filtering must happen inside the combined reader so it works for both direct metastore section listing and index scanning.
+
+#### 3) Surface label names per stream to downstream consumers
+Extend section descriptors produced by `CollectSections` so downstream planning can reason about label-vs-metadata ambiguity:
+- Add `LabelsByStreamID map[int64][]string` to `DataobjSectionDescriptor`.
+- When collecting pointers into descriptors, populate/merge this map keyed by the pointer’s stream reference ID, with the slice containing **label names** for that stream.
+- Update the request/response plumbing so `CollectSections` can receive a `LabelsByStreamID` mapping (built from the index’s stream section) and use it while constructing descriptors.
+
+#### 4) Use label context to disambiguate ambiguous columns for pushdown
+In the physical planner, predicates may reference `types.ColumnTypeAmbiguous`. Use the label-name sets present in `LabelsByStreamID` for each `DataObjSections` entry to decide whether an ambiguous column should be treated as metadata:
+- If an ambiguous column name is **not** present in the label-name set for the relevant data object’s streams, reinterpret it as `types.ColumnTypeMetadata` for purposes of pushdown into the scan target.
+- Keep non-ambiguous column refs unchanged.
+- Apply this recursively to compound expressions (binary/unary/variadic forms used by the planner).
+- Store the disambiguated predicates on the scan target (data-object scan configuration) so they can be pushed down independently per object/section.
+
+### Deliverables (behavioral)
+Your changes must ensure:
+- stream/time filtering still works for pointer scans;
+- bloom filtering still prunes correctly for true metadata equality predicates;
+- equality predicates that are actually stream-label filters do **not** cause bloom-based false negatives;
+- section descriptors and planner structures carry enough label-name information to disambiguate ambiguous predicates and enable metadata predicate pushdown when appropriate.

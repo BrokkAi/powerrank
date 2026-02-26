@@ -1,0 +1,45 @@
+Implement enhanced analyzer-language detection so it accounts for *live dependencies* as well as the local repository, while preserving explicit user configuration precedence.
+
+### Required behavior
+
+#### 1) Explicit analyzer language configuration must still win
+In `MainProject`, `getAnalyzerLanguages()` must first consult the project property used for code-intelligence languages (the comma-separated list). If that property is present and non-blank:
+
+- Parse it case-insensitively into `Language` values.
+- Ignore invalid/unknown entries (do not fail).
+- If parsing yields an empty set, return a set containing `Languages.NONE`.
+- Otherwise return the parsed set.
+- This explicit configuration must take precedence over any auto-detection (including from dependencies).
+
+To keep this logic isolated and testable, refactor the property parsing into a dedicated helper (returning “no explicit configuration” distinctly from “configured but empty/invalid”).
+
+#### 2) Auto-detection must include live dependencies
+When no explicit configuration exists, auto-detect analyzer languages by combining:
+
+- Languages inferred from tracked repository files (based on file extension → `Languages.fromExtension`), and
+- Languages inferred from the current live dependencies returned by `getLiveDependencies()`.
+
+Dependency language detection must not rely solely on a dependency’s “primary language” field; it must be able to fall back to scanning the dependency’s files and inferring languages from their extensions (e.g., a single dependency can contribute multiple languages).
+
+If no recognized languages are found across both sources, return `Set.of(Languages.NONE)`.
+
+#### 3) Cache auto-detected results and support invalidation
+Auto-detection should be cached so repeated calls to `getAnalyzerLanguages()` avoid rescanning.
+
+Add an API to invalidate only the *auto-detected* language cache (without clearing explicit user configuration). This invalidation must be reachable through the `IProject` interface and appropriately handled for worktree projects (i.e., forwarded/delegated so invalidation affects the underlying main project).
+
+Auto-detected language cache must be invalidated when live dependencies are updated (so newly added/removed dependencies affect subsequent detection).
+
+#### 4) Dependency language enumeration helper
+Extend the dependency representation (in `IProject.Dependency`) with a way to enumerate all languages present in that dependency by inspecting its files and mapping extensions to `Language`, excluding `Languages.NONE`.
+
+#### 5) Environment/reporting updates for file counts (MOPBridge/UI contract)
+In `MOPBridge`, update the environment/language reporting so:
+
+- The “total file count” reflects repository workspace files intended for analysis (excluding `.brokk` and any configured exclusion patterns), not dependency files.
+- Per-language `fileCount` counts only matching files from the repository workspace set.
+- Per-language `depCount` counts matching files from live dependencies using the language’s extension set (not dependency primary language equality).
+
+Frontend text changes in `frontend-mop/src/components/EmptyState.svelte` should align with the meaning of these counts (workspace vs dependency), and continue to display dependency file contributions distinctly.
+
+All existing tests plus the newly added dependency-focused tests must pass.

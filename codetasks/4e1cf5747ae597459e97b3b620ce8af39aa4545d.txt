@@ -1,0 +1,57 @@
+Implement a preview-only change to Ruff’s fluent formatting for chained attribute/call/subscript expressions (“method chains”).
+
+### Goal
+
+When formatting an expression that qualifies for *fluent layout* (the multi-line “dot-per-line” style inside parentheses), adjust where the *first* fluent break occurs **in preview mode**:
+
+- **Stable (current) behavior:** the first line keeps the base expression together with the first call (e.g., `df.merge()`), and subsequent chained elements start on new lines with leading dots.
+- **Preview behavior (new):** the first line contains only the *chain root* (e.g., `df`), and the first call/subscript in the chain begins on the next line with a leading dot (e.g., `.merge()`).
+
+This change should apply only under `preview` formatting, and stable formatting must remain unchanged.
+
+### Scope / where it applies
+
+- Applies to fluent layout formatting of call chains represented by combinations of:
+  - `ExprAttribute` (e.g., `.merge`)
+  - `ExprCall` (e.g., `(...)`)
+  - `ExprSubscript` (e.g., `[...]`)
+- The decision to use fluent layout is still heuristic-driven and based on the *whole chain*, not just the current node.
+- The behavior change is specifically about breaking **at the first call-like step** in the left-to-right chain (a “call-like” step is a call or subscript attached to an attribute value), rather than only breaking after later call/subscript boundaries.
+
+### Key behavioral rules to preserve
+
+1. **Stable vs preview split point**
+   - In preview, add a soft break so that the first call-like attribute is printed on a new line prefixed by `.`.
+   - In stable, keep existing fluent formatting behavior.
+
+2. **Call/subscript grouping**
+   - Treat consecutive calls/subscripts on the same object as a single call-like “step” for the purpose of locating the first call-like point (e.g., `a()[0]()()` counts as one step).
+
+3. **Parenthesized roots**
+   - Parentheses can change what is considered the chain “root” and can affect the fluent-layout heuristic and the split point.
+   - A chain whose root expression is parenthesized should still format correctly in both modes, and preview should place the first fluent break appropriately relative to that parenthesized root.
+
+4. **Formatting integration**
+   - The formatting of attributes, calls, and subscripts must cooperate so that the formatter knows whether it is:
+     - before the first call-like step,
+     - at the first call-like step (preview-only special break),
+     - or after it.
+   - This affects both where soft line breaks are emitted and how grouping is applied at the call-chain root.
+
+5. **Preview gating**
+   - The new behavior must be behind a preview flag (wired through the formatter context), similar to other preview-only style toggles.
+   - Add/adjust any necessary preview-toggle plumbing so the behavior is enabled when `preview = true`.
+
+### Documentation
+
+Update the formatter documentation (`docs/formatter.md`) to describe the preview fluent-layout style for method chains, including how it differs from stable formatting and Black.
+
+### Expected impact
+
+The provided fixtures/snapshots cover:
+- simple and long call chains,
+- mixtures of attribute/call/subscript,
+- parenthesized roots,
+- interactions with grouping/indentation and other expression formatting contexts (e.g., `await`, lambdas, long dict values).
+
+Your implementation should make preview outputs match the updated snapshots while keeping stable outputs unchanged.

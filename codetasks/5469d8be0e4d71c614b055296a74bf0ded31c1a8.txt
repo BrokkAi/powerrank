@@ -1,0 +1,38 @@
+Implement an optimized “bulk reinvite” path for organization users that can be toggled via a feature flag, while preserving the existing behavior when the flag is off.
+
+### Background / Goal
+The Admin Console exposes a bulk reinvite endpoint that resends pending invitations to multiple organization users. A new bulk command should handle this operation efficiently (batching the invite send) and be used only when a specific feature flag is enabled; otherwise the controller must continue to use the legacy organization service method.
+
+### Required behavior
+
+#### 1) New bulk resend command (Core)
+Introduce a bulk resend operation under the organization user invite feature area:
+
+- Define a new command contract that represents “bulk resend organization invites” and returns per-user results as `(OrganizationUser, errorMessage)` where:
+  - a successful resend for a user yields an empty error message
+  - invalid users yield a non-empty error message
+- Implement the command so that it:
+  - Loads the target organization users by the provided IDs (repository bulk fetch).
+  - Emits invite-state diagnostics via the existing logging/diagnostics utilities.
+  - Verifies the organization exists; if not, raise the appropriate “not found” exception used in the codebase.
+  - Filters users eligible for reinvite strictly to those:
+    - belonging to the specified organization, and
+    - in the “Invited” status.
+  - Sends invites in one batch operation for all eligible users using the existing “send organization invites” command and request model.
+  - Produces a result entry for every loaded user, indicating success vs invalid status/org membership.
+  - Does not attempt to send invites when there are no eligible users.
+
+#### 2) Dependency injection registration (Core)
+Ensure the new bulk command is registered in the service collection so it can be injected where needed.
+
+#### 3) Controller integration (API)
+Update the bulk reinvite action in `OrganizationUsersController` so that it conditionally selects the implementation:
+
+- When the feature flag `IncreaseBulkReinviteLimitForCloud` is enabled, the controller must use the new bulk resend command.
+- When the flag is disabled, it must use the existing legacy resend-invites method currently used by the endpoint.
+- The API response should continue to map the returned `(OrganizationUser, errorMessage)` results into the existing bulk response model format.
+
+### Notes / Constraints
+- The new command must support being called with an inviting user id (passed through from the controller), even if it is not used for filtering.
+- Maintain the existing exception and return conventions already established for the endpoint and related commands.
+- All provided unit tests (including newly added ones) must pass.

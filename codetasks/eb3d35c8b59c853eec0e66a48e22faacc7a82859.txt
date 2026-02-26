@@ -1,0 +1,53 @@
+Implement support for a new `tailscale.com/v1alpha1` custom resource, `ProxyGroupPolicy`, by adding a controller-runtime reconciler that enforces namespace-scoped allowlists for the `tailscale.com/proxy-group` annotation using Kubernetes **ValidatingAdmissionPolicy** (CEL) and **ValidatingAdmissionPolicyBinding**.
+
+### Required behavior
+
+#### 1) Namespace-wide policy aggregation
+When any `ProxyGroupPolicy` in a namespace is created/updated/deleted, the reconciler must:
+- List **all** `ProxyGroupPolicy` resources in that same namespace.
+- Compute two distinct allowlists by taking the **union of unique names** across all CRs:
+  - `spec.ingress[]` (allowed proxy-group names for ingress-style resources)
+  - `spec.egress[]` (allowed proxy-group names for egress-style resources)
+
+#### 2) Create/Update exactly two admission policies per namespace
+For each namespace with at least one `ProxyGroupPolicy`, the reconciler must ensure the existence of exactly two cluster-scoped admission policies (and bindings), one for ingress and one for egress:
+
+- An “ingress” `ValidatingAdmissionPolicy` and matching `ValidatingAdmissionPolicyBinding`
+- An “egress” `ValidatingAdmissionPolicy` and matching `ValidatingAdmissionPolicyBinding`
+
+These objects must be named deterministically based on the namespace (so multiple namespaces do not collide).
+
+Updates must work reliably (including correct handling of `resourceVersion`), and reconciliation should be idempotent.
+
+#### 3) Delete generated policies when no CRs remain
+If a namespace has **zero** `ProxyGroupPolicy` resources, the reconciler must delete any previously-generated validating admission policies and bindings for that namespace (treat “already deleted” as non-fatal).
+
+#### 4) Admission enforcement semantics (CEL)
+The generated validating admission policies must deny invalid usage of the `tailscale.com/proxy-group` annotation on **create and update** with these rules:
+
+- **Ingress policy** must validate:
+  - `networking.k8s.io` `Ingress` resources, and
+  - `v1` `Service` resources that represent “tailscale ingress” (i.e., Services using the Tailscale operator’s ingress mechanism).
+- **Egress policy** must validate:
+  - `v1` `Service` resources that are *not* “tailscale ingress” Services.
+
+Across all validated objects:
+- If `tailscale.com/proxy-group` is **not present**, the object is allowed.
+- If the annotation **is present**, its value must be one of the allowlisted names for that direction (ingress/egress).
+- An **empty allowlist** must behave as “deny all” for any object that sets the annotation.
+- The ingress and egress Service validations must be **mutually exclusive** (a Service should not be denied due to conflicting ingress vs egress rules).
+
+The policies must be configured to fail closed (i.e., rejected when the policy can’t be evaluated) and the bindings must deny on validation failure.
+
+#### 5) Bindings must target only the intended namespace
+Each `ValidatingAdmissionPolicyBinding` must apply the policy only to the namespace that produced it using a namespace selector that matches the namespace name via the standard namespace label (`kubernetes.io/metadata.name`).
+
+#### 6) Deterministic output
+Where lists of allowlisted proxy-group names are embedded into CEL expressions and/or user-facing messages, ordering must be deterministic (stable across reconciliations) so repeated reconciles do not cause needless diffs.
+
+#### 7) Wire into the operator
+Ensure the k8s-operator binary registers and runs this reconciler alongside existing reconcilers so it operates in real clusters/e2e.
+
+### Notes on scope
+- You do not need to implement a new CRD schema; the type already exists.
+- Status fields/conditions are not required for this exercise; focus on admission enforcement via generated policies/bindings and correct reconciliation behavior.

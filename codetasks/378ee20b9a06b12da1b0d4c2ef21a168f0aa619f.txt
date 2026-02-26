@@ -1,0 +1,41 @@
+Implement a stable, versioned JSON output for Tailnet Lock that makes `tailscale lock status --json` (and existing `tailscale lock log --json=...`) suitable for machine consumption and consistent with other Tailnet Lock JSON outputs.
+
+### Requirements
+
+#### 1) Versioned JSON output for `lock status`
+Update the CLI JSON mode for `tailscale lock status` to use the existing “schema version” mechanism (the same style used elsewhere in the CLI), rather than a boolean `--json` flag. When JSON output is requested with schema version `1`, emit a stable JSON object that includes a response envelope with `SchemaVersion: "1"` and a deterministic field layout.
+
+The JSON structure must differ depending on whether Tailnet Lock is enabled:
+
+- **Disabled**: output only the base fields (`Enabled`, and when available the node’s Tailnet Lock public key and node key).
+- **Enabled**: output the full status including:
+  - the **head AUM hash** as the canonical *string form* used by TKA (not a byte array),
+  - trusted keys in a consistent, log-compatible representation,
+  - peer entries split into visible vs filtered with stable peer identifiers and IP formatting,
+  - and a normalized node-key-signature representation.
+
+Unknown schema versions should return an error.
+
+#### 2) Stable formatting rules / normalization
+The JSON emitted by `lock status` schema v1 must be normalized in these ways:
+
+- **AUM hash formatting**: represent AUM hashes as the encoded string form used by TKA APIs (consistent with other Tailnet Lock outputs).
+- **Trusted keys**: represent trusted keys in the same shape/format as the keys produced by the Tailnet Lock log JSON output (including key kind, votes, public key encoding, and metadata).
+- **NodeKeySignature**: fields must be presented consistently with other Tailnet Lock JSON:
+  - signature kind should be a string (not numeric),
+  - public-key-like fields should use consistent `tlpub:`-prefixed encodings,
+  - signatures should be encoded as base64 strings,
+  - nested signatures should be represented recursively in the same normalized form.
+- **Filtered peers**: do not include a node key signature object for filtered peers (it is not meaningful and should be absent rather than an “empty” signature).
+
+Ensure field names match the stable JSON contract (for example, stable peer ID as a string ID, DNS name field naming, etc.) and that optional fields are omitted when empty.
+
+#### 3) Split/rename JSON output plumbing for Tailnet Lock log vs status
+The existing JSON output implementation for Tailnet Lock log should remain available as schema v1, but it should no longer be the same function/type used for status output. Introduce/adjust the JSON output entry points so `lock log` continues to produce its existing v1 schema while `lock status` produces the new v1 schema described above.
+
+#### 4) Populate key “Kind” in Tailnet Lock status state
+`ipnstate.TKAKey` must include a `Kind` field sufficient to drive the JSON output (as a string). Ensure the backend’s `NetworkLockStatus` populates this field from the underlying TKA key material so that callers (including JSON formatters) can emit consistent key data.
+
+### Notes
+- The candidate implementation must keep the non-JSON human-readable output behavior unchanged.
+- All JSON output should be stable (deterministic encodings and consistent shapes) and must include the schema envelope for v1.

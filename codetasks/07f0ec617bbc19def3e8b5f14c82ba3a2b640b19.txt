@@ -1,0 +1,40 @@
+### Goal
+
+Introduce a **test-mode sandbox** for Brokk’s global configuration directory so automated tests never read from or write to a developer’s real machine config paths. The change must work reliably under Gradle (including with test forking and caching) while preserving the existing platform-specific path resolution logic used in production.
+
+### Required behavior
+
+#### 1) Test-mode sandboxing for global config paths
+Extend `ai.brokk.util.BrokkConfigPaths` so that when tests run with:
+
+- system property `brokk.test.mode=true`, **and**
+- system property `brokk.test.sandbox.root` set to a non-blank path,
+
+then Brokk’s “global config directory” resolves inside that sandbox root instead of the normal OS-dependent location. The sandboxed directory must be isolated per JVM process (to avoid collisions when Gradle forks tests).
+
+Test-mode sandboxing must take precedence over any optional “override” parameter passed into the path resolver.
+
+#### 2) Ability to bypass sandboxing (for path-resolution tests)
+Add an API intended for tests that returns the **real platform-specific** global config directory even if test-mode sandboxing is enabled. This is used to validate Windows/macOS/Linux path behavior without being redirected.
+
+#### 3) Migration must not run in test mode
+If your config directory logic includes migration from a legacy location, ensure that when test-mode sandboxing is active (as defined above), migration is effectively disabled/no-op so tests don’t create or modify files outside the sandbox (or try to migrate within it).
+
+#### 4) MainProject must not lock in config paths too early
+`ai.brokk.project.MainProject` currently relies on global config paths for reading/writing global properties, projects properties, and an OOM flag. Update it so:
+
+- It does not permanently bind those paths at class initialization time.
+- It can correctly honor the sandboxed config directory when running tests.
+- Any caching of the resolved global config directory is safe and consistent, and can be reset for tests via a test-visible reset hook.
+- Global properties caching visibility should be tightened so it’s not broadly public.
+
+Also ensure directory creation happens where needed before writing global config files.
+
+#### 5) Gradle test JVM startup properties
+Update the Gradle test task configuration so the sandbox-related system properties are provided as **JVM arguments at startup** (not late-bound during test execution), and are stable for Gradle caching. The sandbox root should be placed under the build directory so it’s ephemeral and CI-friendly.
+
+### Notes / constraints
+
+- The production (non-test-mode) behavior of `BrokkConfigPaths` must remain correct across OSes.
+- The sandbox should provide strong isolation so tests cannot accidentally touch real user config directories.
+- The solution must satisfy both existing tests and the newly provided tests that validate sandboxing, caching/reset behavior, and migration suppression.

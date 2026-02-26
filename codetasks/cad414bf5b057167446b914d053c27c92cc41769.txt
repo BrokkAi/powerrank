@@ -1,0 +1,61 @@
+You need to adjust how ancestor “supporting” context is resolved for code-related fragments, and make those lookups explicitly blocking.
+
+High‑level behavior change
+The system currently adds “supporting” fragments that represent ancestor classes/interfaces (typically as skeleton summaries) for a given code element or file. This must be refined so that:
+
+1. **Ancestors of inner/nested classes are not pulled in unless the inner class itself is the primary target of the fragment.**
+2. **For fragments representing a file or a top‑level code element, only ancestors of the relevant top‑level declarations should be added as supporting context.**
+
+Concretely, this impacts:
+
+- The shared ancestor‑resolution logic in `ContextFragments` (there is a helper there already).
+- `SummaryFragment.supportingFragments` when the summary is for a code unit skeleton.
+- `ProjectPathFragment.supportingFragments` when adding ancestor skeletons for the classes in a file.
+- Any other fragment that uses ancestor skeletons (e.g., code‑oriented fragments) should be consistent with this behavior.
+
+Required behavior details
+
+1. **Centralized ancestor resolution**
+
+   Introduce or update a helper in `ContextFragments` that:
+
+   - Accepts a collection of `CodeUnit` instances and the `IContextManager`.
+   - Uses the analyzer to find direct ancestors for relevant code units.
+   - Filters out anonymous ancestors.
+   - Produces appropriate supporting fragments (e.g., `SummaryFragment` instances for ancestor code unit skeletons).
+
+   All code paths that need ancestor skeletons for supporting context (e.g., `SummaryFragment` and file‑based fragments) should rely on this helper so they behave consistently.
+
+2. **Exclude inner class ancestors when they are not the primary focus**
+
+   - When resolving supporting ancestor fragments for a **file‑based context** (e.g. `ProjectPathFragment`):
+     - Only consider **top‑level** declarations in that file when computing ancestor skeletons.
+     - Do *not* add ancestors that belong only to nested/inner classes defined inside those top‑level declarations.
+
+   - When resolving supporting ancestor fragments for a **summary or code fragment targeting a specific class**:
+     - Include ancestors of the **targeted code unit**.
+     - Do *not* add ancestors of inner classes that merely happen to reside inside that target’s declaration and are not themselves the target.
+
+   The result should be that, for an outer class with an inner class, only the base types of the outer class are added as supporting skeletons when the fragment is about the outer class (or its file). Base types of the inner class should not appear unless the fragment is directly about that inner class.
+
+3. **Use a blocking, non‑null analyzer access**
+
+   - `ContextFragment.supportingFragments()` is now treated as a blocking operation.
+   - Wherever `supportingFragments()` implementations resolve information via the analyzer, they must:
+     - Use the context manager’s **blocking/uninterrupted** analyzer accessor.
+     - Assume a non‑null `IAnalyzer` (no optional/nullable checks that silently return empty results).
+   - The shared ancestor‑resolution helper in `ContextFragments` should also use this blocking analyzer path.
+
+4. **Annotations**
+
+   - Mark `ContextFragment.supportingFragments()` with the appropriate `@Blocking` annotation.
+   - Any helper or overriding `supportingFragments()` that performs blocking analyzer calls should also be annotated `@Blocking` for consistency.
+
+Functional expectations
+
+After these changes:
+
+- A fragment summarizing or showing code for a top‑level class should add supporting skeleton summaries for that class’s direct ancestors only.
+- A fragment for a file containing an outer class with inner classes should add ancestor skeletons only for the file’s top‑level declarations.
+- Ancestors associated solely with nested/inner classes are excluded from supporting context unless an inner class itself is being targeted.
+- All supporting‑fragment resolution that touches the analyzer is explicitly blocking and uses the non‑null, uninterrupted analyzer access path.

@@ -1,0 +1,20 @@
+Brokk stores each chat session as a `.zip` under the project’s `.brokk/sessions` directory, with a `manifest.json` describing the session metadata. A regression was observed where opening a project in an older Brokk build could effectively “lose” sessions created by a newer build, due to incompatible on-disk session metadata.
+
+Update the sessions metadata and loading logic to support **session format versioning**:
+
+- Extend the session manifest metadata model (`SessionManager.SessionInfo`) to include a **nullable** session-format `version` field that is serialized to / deserialized from `manifest.json`.
+  - Newly created/updated `SessionInfo` should carry the **current** session format version by default.
+  - Previously stored manifests that do not have a version field must continue to load (treat missing/`null` version as supported).
+
+- When scanning/loading sessions from disk (e.g., when building the in-memory sessions list/cache from the `.zip` files), the manager must:
+  - **Skip** sessions whose manifest declares a version **newer** than the current supported format.
+  - Skipped sessions must remain untouched on disk (they are not deleted or quarantined simply for being newer).
+  - If a manifest’s version string is malformed/unparseable, treat it as **unsupported** (and do not load it).
+
+- Ensure that operations that rewrite metadata (e.g., renaming a session, saving/updating a session’s modified timestamp, etc.) do not accidentally drop or change the stored `version` value for that session. Metadata updates should preserve the existing version unless the session is being created fresh with the current version.
+
+- Provide a version comparison facility suitable for dotted numeric versions (e.g., `"4.0"`, `"4"`, `"4.0.1"`, `"1.10"`), where:
+  - Comparison is numeric per component (so `1.10` is greater than `1.9`).
+  - Missing components compare as `0` (so `"1.0" == "1.0.0"` and `"4" == "4.0"`).
+
+The end result should allow newer Brokk builds to write versioned session manifests, while older or current code safely ignores sessions written with a future format instead of corrupting, migrating, or otherwise making them appear “lost.”

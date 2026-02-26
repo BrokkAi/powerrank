@@ -1,0 +1,25 @@
+### Problem
+
+Ruff’s `flake8-use-pathlib` rules provide auto-fixes that replace certain `os.*` calls with `pathlib.Path` equivalents. For some rules (notably `PTH104`, `PTH105`, `PTH109`, `PTH115`), the suggested replacement changes the expression’s runtime type (e.g., `None` → `Path`, `str/bytes` → `Path`). Those fixes must be considered **unsafe** whenever the call’s return value is *observably used*.
+
+At the moment, the implementation incorrectly treats some calls as “top-level expression calls” based solely on expression-parent information. This misclassifies calls that appear in compound statements—such as:
+
+- `if os.rename(...): ...`
+- `for _ in os.getcwd(): ...`
+
+In these cases the call isn’t nested inside another expression, but its value is still used by the surrounding statement (truthiness test, iteration, etc.). Marking such fixes as safe can change runtime behavior.
+
+### What to change
+
+Update the logic that decides whether a call is “unused” (and therefore safe with respect to return-type changes):
+
+- Only treat a call as safely “unused” when it is the sole expression in an **expression statement** (i.e., a standalone statement like `os.getcwd()` on its own line).
+- Calls used as part of other statement forms (e.g., `if` conditions, `while` conditions, `for ... in ...`, `try`/`except` constructs, etc.) must **not** be considered top-level-unused for fix safety purposes.
+
+### Expected behavior
+
+- The diagnostics for `PTH104`, `PTH105`, `PTH109`, and `PTH115` should still be reported in the new fixture additions under `crates/ruff_linter/resources/test/fixtures/flake8_use_pathlib/full_name.py`.
+- However, in “preview” mode (where fixes are displayed), the suggested fixes for these new compound-statement cases must be classified as **unsafe** (because applying them could change runtime behavior due to return type differences).
+- Existing safety behavior around comment deletion (e.g., comment-range intersections) must continue to be respected.
+
+The relevant code lives under `crates/ruff_linter/src/rules/flake8_use_pathlib/`, including shared helper logic and the specific rule implementations for the affected checks.

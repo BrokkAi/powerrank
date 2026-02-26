@@ -1,0 +1,33 @@
+Enhance the `invalid-assignment` diagnostic so it points at the most relevant source range and provides clearer, structured annotations for both the declared target type and the incompatible value.
+
+### What to change
+
+When reporting an invalid assignment in the type checker (the logic that emits the `invalid-assignment` lint):
+
+1. **Improve the diagnostic span (“where the error is reported”)**
+   - For assignments that have a value expression, the diagnostic range should cover the value in a way that:
+     - Includes any *outer* parentheses surrounding the RHS expression (including multi-line parenthesized expressions).
+     - Allows `# ty: ignore` placed on either the opening or closing parenthesis line to suppress the diagnostic.
+   - If there is no RHS value expression available, fall back to a reasonable range associated with the target.
+
+2. **Add source annotations for both sides of the mismatch**
+   - The diagnostic should visually identify:
+     - The *declared type* location:
+       - For **annotated assignments** (`x: T = ...`), annotate the **annotation** (`T`) as the declared type.
+       - For other assignment forms (including unannotated assignment to a previously annotated symbol, tuple targets, and named expressions), annotate the **target** as having declared type `...`.
+     - The incompatible value:
+       - The RHS/value should be the primary labeled span, with a message indicating the value’s inferred type is incompatible.
+
+3. **Avoid redundant messaging**
+   - Ensure the one-line/concise diagnostic message does not repeat the inferred value type multiple times once the annotated labels are present.
+   - Preserve the special-case messaging for implicit shadowing of classes/functions (still an `invalid-assignment`), but make sure it benefits from the improved annotation behavior.
+
+4. **Named expression target handling**
+   - For `NamedExpression` (`x := value`) cases, ensure the diagnostic is anchored/attributed to the assignment *target* appropriately (not the entire named-expression node), so the declared-type annotation and overall range behave consistently.
+
+### Expected impact
+
+These changes should improve:
+- The caret/underline range used by the diagnostic (especially for parenthesized/multi-line RHS expressions).
+- Suppression behavior via `# ty: ignore`, which relies on overlap with the diagnostic’s reported range.
+- The clarity of `invalid-assignment` output by adding explicit “declared type” vs “incompatible value” annotations across assignment forms (annotated, unannotated, named expression, multiple targets).

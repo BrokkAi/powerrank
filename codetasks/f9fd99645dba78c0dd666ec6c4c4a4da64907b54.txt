@@ -1,0 +1,37 @@
+### Problem: Terminal capture misses content (history and selection)
+
+Users report that “Terminal Capture” does not reliably capture everything visible in the terminal, especially when output has scrolled into history or when capturing a selection. Update the terminal integration so captures include:
+
+1. **The full terminal buffer** (scrollback/history + active screen).
+2. **The selected text**, when a selection exists, with correct handling across lines and wrapped lines.
+
+### Required behavior
+
+#### Full-buffer capture
+Add support for extracting the *entire* terminal text buffer as a single string, including:
+- All history/scrollback lines (those that precede the active screen).
+- All visible lines in the active screen buffer.
+- Lines must be joined with `\n` between each buffer line in order.
+- Trailing whitespace should be preserved in the raw extraction step (trimming is handled later by the capture flow).
+
+#### Selection capture
+When the user has a terminal selection, capture *only* the selected content:
+- Accept start and end coordinates in terminal grid space (x = column, y = line index), and handle:
+  - reversed selections (start after end),
+  - selections spanning multiple lines (including history lines),
+  - coordinates that fall outside valid bounds (must be clamped),
+  - wrapped lines: if a line is wrapped into the next line, do **not** insert a newline between those two lines when assembling the selection text.
+- Treat the selection end as **inclusive** (the character at the end coordinate must be included when present).
+- If either selection endpoint is missing, return `null`.
+
+#### Thread-safety / locking
+Terminal buffer reads must be performed while holding the appropriate buffer lock, and always release it.
+
+### Capture action integration
+Update the “Capture” action so that it:
+- Captures selection text when a selection exists; otherwise captures the full buffer.
+- Performs the buffer read off the UI thread (background task) and then submits the captured content back to the workspace/context pipeline.
+- Before adding captured content to the workspace/context, trim trailing whitespace **from each line** (without otherwise altering internal whitespace).
+
+### Testability requirement
+Introduce a small abstraction (or equivalent mechanism) so the core “full buffer text” and “selection text” extraction logic can be unit tested without needing a real terminal implementation. The extraction logic should be callable in tests with a stubbed buffer provider and must match the behaviors above.

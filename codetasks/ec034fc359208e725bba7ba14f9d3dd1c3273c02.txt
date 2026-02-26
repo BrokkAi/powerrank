@@ -1,0 +1,25 @@
+Add support for a new diagnostics setting, `diagnosticMode: "off"`, that fully disables diagnostics emission from `ty_server` while still allowing it to function as an LSP for non-diagnostic features.
+
+### Requirements
+
+1. **New enum variant**
+   - Extend `DiagnosticMode` in `crates/ty_server/src/session/options.rs` to include a new variant representing diagnostics being disabled.
+   - Ensure it is serialized/deserialized using the existing `camelCase` convention (so `"off"` is accepted from client/workspace settings).
+   - Provide an ergonomic way to check for this mode (similar to existing helpers like `is_workspace()` / `is_open_files_only()`).
+
+2. **Settings combination semantics**
+   - The logic that merges/combines diagnostic mode values across initialization/workspace/global settings must treat explicit non-default values as authoritative.
+   - In particular, it must be possible for `"off"` to override the default mode, and it must not be unintentionally ignored during combination.
+
+3. **No diagnostics published when off**
+   - When `diagnosticMode` is off, the server must not send any `textDocument/publishDiagnostics` notifications (including “clearing” diagnostics by publishing an empty list).
+   - Places that publish or clear diagnostics should consult the global settings and become no-ops in this mode. This includes normal file diagnostics and any “settings diagnostics” the server may emit.
+
+4. **Pull diagnostics behavior when off**
+   - If the client uses pull diagnostics (`textDocument/diagnostic`), and diagnostics are off, the server must respond successfully with an empty diagnostic report (not an error), rather than computing or returning real diagnostics.
+
+5. **Dynamic registration / capabilities**
+   - If the server supports dynamic registration of diagnostics, it must not register diagnostic capabilities when diagnostics are off.
+   - Where server capabilities mention diagnostics support, ensure the description aligns with the fact that the server can support both workspace and pull diagnostics when enabled.
+
+Implement the above so that disabling diagnostics via client/workspace configuration reliably prevents any diagnostics from being produced or transmitted, while leaving the rest of the language server operational.

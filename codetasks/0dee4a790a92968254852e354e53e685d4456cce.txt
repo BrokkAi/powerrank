@@ -1,0 +1,47 @@
+Implement a refactor of Tree-sitter–based duplicate handling and C++ signature extraction so that language analyzers can safely collapse “semantic duplicates” while still preserving true overloads/specializations.
+
+### 1) Add language hooks for “benign” duplicates
+Extend `TreeSitterAnalyzer` with language-overridable hooks that let an analyzer declare that two encountered `CodeUnit`s are semantically equivalent even when they are not strict `equals()` matches. This should be used to suppress noisy duplicate warnings/logging and (where appropriate) allow earlier collapsing of duplicates during a single parse pass.
+
+### 2) Make duplicate collapsing robust for both top-level and child code units
+Tighten the duplicate-resolution logic used when adding:
+- top-level `CodeUnit`s (translation-unit scope), and
+- nested/child `CodeUnit`s (members, methods, etc.)
+
+The behavior must correctly:
+- avoid re-adding identical `CodeUnit`s,
+- keep distinct overloads/specializations (same FQN but different signature) when the language requires it,
+- and fully remove replaced entries from all associated local state (children links, signatures, ranges, body flags, and any lookup indexes) so that no “orphan” descendants or stale index entries remain.
+
+### 3) Prefer definitions over forward declarations when duplicates represent the same entity
+When a function or class appears multiple times with the same semantic identity (including signature where relevant), the analyzer must prefer the version that has a body/definition over a forward declaration. This preference must work consistently for:
+- top-level declarations/definitions, and
+- nested members added as children.
+
+The “has body” determination should come from AST/body-field inspection rather than string heuristics.
+
+### 4) Improve C++ signature and identity handling (including templates)
+Update `CppAnalyzer` signature extraction so that C++ overload disambiguation reliably distinguishes:
+- function overloads (parameter types + qualifiers),
+- function templates (template parameter list becomes part of signature),
+- class/struct templates (template parameter list becomes part of signature for class-like entities),
+- and constructors inside templated classes (constructor signature must reflect enclosing class template parameters).
+
+Additionally, fix signature stability issues related to parameter parsing:
+- handle anonymous parameters more robustly (use the type node when available),
+- normalize template argument formatting so equivalent types produce consistent signatures (e.g., spacing after commas),
+- and correct any namespace/package comparisons that depend on differing separators (e.g., `::` vs `.`).
+
+### 5) Adjust C++ duplicate policy for template classes
+In C++, class/struct duplicates should not be collapsed solely because the fully-qualified name matches. Template variants/specializations with different template parameter lists must be able to coexist; only truly identical template signatures should be treated as duplicates for class-like entities.
+
+### 6) Ensure symbol-based definition lookup remains correct
+Where the analyzer maintains a symbol-to-`CodeUnit` index used by `getDefinitions(...)`, ensure:
+- newly created/derived code units (including module-level synthetic units for languages that use module imports) are registered,
+- duplicates/replacements update the index correctly (both adding and removing),
+- and lookups by both identifier and short name behave consistently.
+
+### 7) Tree-sitter query coverage for C++ templates
+Ensure the C++ Tree-sitter query resources capture template-declared classes/structs so that template class/struct declarations are discovered and analyzed the same way as non-template ones.
+
+A short Markdown document (`CPP_DUPLICATE_HANDLING.md`) is added in the commit; include it as part of the change set to describe the intended C++ identity/dedup rules at a maintainable level.

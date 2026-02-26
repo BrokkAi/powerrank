@@ -1,0 +1,33 @@
+Refactor style-guide aggregation so it operates on the project’s file abstraction (`ai.brokk.analyzer.ProjectFile`) rather than raw `java.nio.file.Path`.
+
+### Goal
+`ai.brokk.util.StyleGuideResolver` should accept a collection of `ProjectFile` inputs (representing files currently in context) and build a single composite style guide by locating and concatenating relevant `AGENTS.md` files within the project.
+
+### Required behavior
+- **Input type and API changes**
+  - Update the resolver so it is constructed from `ProjectFile` instances (not `Path`s).
+  - Provide a convenience `resolve(...)` entry point that accepts a list of `ProjectFile` inputs and returns the aggregated guide string.
+  - Keep a test-visible method (annotated or otherwise) that returns the ordered set/list of candidate `AGENTS.md` `ProjectFile`s used for aggregation.
+
+- **Discovering relevant `AGENTS.md` files**
+  - For each input `ProjectFile`, consider its **parent directories up to the project root**, including the root itself.
+  - Convert those directories into potential `AGENTS.md` locations (i.e., `<dir>/AGENTS.md`) and include only those that exist.
+  - De-duplicate across all inputs.
+
+- **Ordering**
+  - The resolver must return/aggregate `AGENTS.md` files in a deterministic “nearest-first” directory order as defined by the updated implementation and expectations in the provided tests (this ordering is no longer the previous round-robin layering across inputs).
+
+- **Aggregation format and limits**
+  - The composite guide is a sequence of sections. Each section has:
+    - A markdown header of the form `### AGENTS.md at <label>`
+    - Then a blank line
+    - Then the file contents (trimmed/stripped)
+  - The `<label>` is the `AGENTS.md` directory path relative to the project root; use `"."` for the root directory.
+  - Respect caps controlled by system properties (section count and total character budget). If adding a section would exceed the character cap, include a truncated final section when possible and append a truncation note.
+
+- **ProjectFile usage**
+  - Use `ProjectFile` capabilities (e.g., existence checks, reading file contents, relative paths, root/parent relationships) instead of direct `Files.*` calls on `Path`s.
+  - Any now-unused path-string utilities previously on `ProjectFile` should not be required by the new resolver.
+
+### Integration
+Update prompt-building code that previously collected absolute/normalized `Path`s for style-guide resolution so it instead collects the appropriate `ProjectFile` inputs from the current context and calls the updated resolver API.

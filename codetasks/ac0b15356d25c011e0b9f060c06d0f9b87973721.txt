@@ -1,0 +1,47 @@
+### Goal
+
+Update the control-plane → client plumbing for the tailnet “default auto-update” setting so it is primarily delivered as a node capability (nodeattr) instead of a top-level `MapResponse` field, while keeping backward compatibility with the old field. Adjust supporting infrastructure used by integration tests so the new and old behaviors can both be exercised reliably.
+
+### What to change
+
+#### 1) Represent the default auto-update setting as a node capability
+Introduce a new node capability key in `tailcfg` (alongside existing `NodeAttr*` constants) that represents the tailnet’s default auto-update preference. The value is communicated via a node’s capability map and is encoded as a JSON boolean.
+
+Also update the capability versioning in `tailcfg` to reflect that clients understand this new capability.
+
+#### 2) Deprecate the old top-level `MapResponse.DefaultAutoUpdate` field
+In `tailcfg.MapResponse`, rename the existing field to a deprecated form (while preserving its JSON wire name so older control servers/clients still interoperate). Any static checks/allowlists related to JSON tags should be updated accordingly.
+
+This deprecated field remains supported for compatibility, but the new nodeattr is the preferred path.
+
+#### 3) Teach the control client to read the setting from either source
+In `control/controlclient` (the map-response handling path), update the logic that publishes/records the default auto-update signal so it can come from:
+
+- the node capability map on the “self” node (preferred), and
+- the deprecated top-level `MapResponse` field (fallback/compat).
+
+The node capability form may contain unexpected values; handle invalid/unknown encodings defensively (do not crash) and log appropriately.
+
+#### 4) Ensure “default auto-update” is treated as a first-map-response initialization signal
+The client should only use the tailnet default to initialize local state once (i.e., once it has been applied and persisted locally, subsequent map responses from control should not override that stored value). This applies regardless of whether the value arrived via the new node capability or the deprecated top-level field.
+
+#### 5) Add test-only infrastructure to force auto-update availability
+Some platforms/builds may report that auto-update is unavailable. The integration tests need a way to force-enable this capability during test runs without changing production behavior:
+
+- Extend the feature-hook system (`feature`) with a test-only setter that can temporarily override hooks and restore them afterward, and ensure it cannot be called from non-test code.
+- Allow tests to force `feature.CanAutoUpdate()` to return true when a specific environment variable is present.
+
+#### 6) Add a control-server hook to modify only the first MapResponse in a stream
+In the test control server implementation, add a hook that can mutate the first `MapResponse` produced for a given map stream request, and ensure it is invoked exactly once per stream. This is required to model that the default auto-update signal is only meaningful on initial map state delivery.
+
+#### 7) Keep netmap patch/“non-patch fields” detection consistent
+Any code that checks whether a `MapResponse` contains “non-patch” fields should be updated to reflect the renamed/deprecated field name so behavior remains correct.
+
+### Expected outcome
+
+After these changes:
+
+- Clients understand and honor the new nodeattr-based default auto-update setting.
+- Backward compatibility remains with the old top-level `MapResponse` field.
+- The initialization-only semantics are preserved (control cannot flip a node’s stored default after it has been set).
+- Integration tests can reliably run across platforms by forcing auto-update availability and by injecting the setting into the first map response only.

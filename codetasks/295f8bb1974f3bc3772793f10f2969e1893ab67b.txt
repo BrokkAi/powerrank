@@ -1,0 +1,31 @@
+### Problem: Speed up session dropdown AI-count loading without reading full history
+
+The UI shows a list/dropdown of past sessions (`SessionInfo`) and displays, for each session, a “task” count that corresponds to how many AI responses exist in that session’s stored history. Currently this count is derived by loading and deserializing the full session history, which is too slow for rendering the session list.
+
+Implement a lightweight counting path that can compute the AI-response count directly from the session’s persisted history archive, without constructing a full `ContextHistory`. Update the UI to use this faster path and ensure the list remains responsive and renders efficiently.
+
+#### Requirements
+
+1. **Lightweight AI-response counting in history archives**
+   - Add a utility in `ai.brokk.util.HistoryIo` that takes the path to a session’s history zip and returns the number of AI responses stored in it.
+   - The history is stored as a zip that contains a JSON Lines file for contexts (e.g., `contexts.jsonl`). The counter must scan the contexts file line-by-line and count entries that represent AI results.
+   - The JSON format may vary across history versions; the counting logic must be robust enough to work across supported formats.
+   - Handle missing zip files gracefully by returning `0`.
+   - Malformed JSON lines and blank lines in the contexts file must not fail the entire operation; they should be ignored.
+
+2. **Expose counting via `SessionManager`**
+   - Add a method on `ai.brokk.SessionManager` that counts AI responses for a given session ID by delegating to the new `HistoryIo` capability.
+   - The method must not throw if counting fails; it should log and return `0` on error.
+   - Mark the method as blocking (there is an existing `@Blocking` annotation used for similar operations).
+
+3. **Use lightweight counting in the session list UI**
+   - In `ai.brokk.gui.HistoryOutputPanel`, replace the existing approach that loads history to compute the count with the new lightweight counting method.
+   - The count load is triggered lazily per session when the cell is rendered and a cached count is not yet available.
+   - Concurrent/duplicate loads for the same session should continue to be deduplicated (there is already infrastructure for this).
+   - Once a count is computed, ensure the session list repaints so the new value appears without requiring user interaction.
+
+4. **Improve JList sizing performance**
+   - The session list is a `JList<SessionInfo>` rendered in the history panel. Configure it to avoid expensive per-row renderer sizing work by using an appropriate prototype cell value.
+   - This change should not alter functional behavior, only performance/responsiveness.
+
+The provided test suite includes new tests that validate the counting behavior for real zip histories, non-existent sessions, and archives containing blank/malformed JSON lines. Ensure your implementation satisfies those behaviors while maintaining existing functionality.

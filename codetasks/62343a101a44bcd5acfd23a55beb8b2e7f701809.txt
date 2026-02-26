@@ -1,0 +1,42 @@
+Implement support for `# fmt: skip` on **single-line compound statements** in the Ruff Python formatter.
+
+### Background
+
+Ruff already supports `# fmt: skip` to preserve source formatting verbatim for certain nodes. However, one-line compound statements like:
+
+- `if <cond>: <stmt>  # fmt: skip`
+- `def f(): return x  # fmt: skip`
+- `try: ...  # fmt: skip` / `except ...: ...  # fmt: skip`
+- `for ...: ...  # fmt: skip` with `else: ...`
+- `match ...:` with one-line `case ...: ...  # fmt: skip`
+
+must also be preserved exactly **when the `fmt: skip` comment applies to the clause body** and the entire clause fits on a single physical line.
+
+### Required behavior
+
+When formatting a compound-statement *clause* (header + suite/body), detect the case where:
+
+1. The clause body exists and has a last child statement.
+2. The last child statement has a trailing `# fmt: skip` comment (according to Ruff’s existing skip-comment detection rules).
+3. From the clause header’s colon through the end of that last child statement, the source spans **only one line**.
+
+If all conditions are met, the formatter must emit the original source text for the whole clause (header and its body) verbatim, while still integrating correctly with surrounding formatting and comment handling.
+
+### Scope
+
+This must work across the formatter’s clause-based constructs, including (but not limited to):
+
+- `if` / `elif` / `else`
+- `for` / `while` and their `else` clauses
+- `try` / `except` / `else` / `finally`
+- `with` / `async with`
+- `match` and `case`
+- one-line `def` / `async def`
+- one-line `class`
+
+It must **not** suppress formatting for clauses that are already multi-line, or where the skip comment does not apply to the clause body’s last child.
+
+### Notes
+
+- The solution should preserve exact source text in the suppressed region (including spacing) and ensure comments inside the suppressed region are treated as formatted so they do not get printed again elsewhere.
+- Alternate-branch handling (e.g., `else`, `elif`, `except`, `finally`) must continue to place any “leading branch” comments correctly relative to the preserved verbatim clause output.

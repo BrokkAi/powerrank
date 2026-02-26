@@ -1,0 +1,11 @@
+Task-list rendering and auto-execution behavior for the Search flow is currently inconsistent across objectives and suffers from timing issues in the UI.
+
+Update the Search agent and related context/view filtering so that the “task list” special content is visible whenever Search is run in modes that are supposed to produce/show tasks (not only the historical “Lutz” case). This requires aligning the viewing-policy signal used by `SearchAgent` with whatever `SpecialTextType` uses to decide whether to render the task-list block for Search results.
+
+In the UI, `InstructionsPanel` has two actions that run Search with different intent: one mode generates tasks and may auto-execute them in EZ mode, and another mode generates tasks without auto-executing. Make the code derive both the Search objective and the auto-execute decision from the triggered action itself (rather than passing separate flags), so the behavior is consistent and cannot drift.
+
+Fix a race in the “auto-play gate” logic: the set of “pre-existing incomplete tasks” must reflect the task list state *before* the Search execution mutates the list. Ensure the capture happens synchronously at the correct time so newly generated tasks are not mistaken as pre-existing ones.
+
+Finally, address a timing issue in `TaskListPanel` where auto-play may check an out-of-date task model due to deferred UI updates. Ensure the model is current before determining whether there are tasks to act on.
+
+Your changes should make task-list visibility correct for the relevant Search objectives, remove the timing-related flakiness around capturing incomplete tasks and auto-play decisions, and keep the UI behavior consistent across the two Search actions while satisfying the provided unit tests.

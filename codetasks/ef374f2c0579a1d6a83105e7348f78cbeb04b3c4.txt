@@ -1,0 +1,43 @@
+Implement an **ISSUE-mode pre‑PR verification gate** with an **overall fix/retry budget**, plus supporting API/persistence and a reusable “run explicit command” build helper.
+
+### 1) JobSpec: persistable overall ISSUE retry budget
+Extend `ai.brokk.executor.jobs.JobSpec` to include a nullable integer field `maxIssueFixAttempts` and define a default constant (default value: **5**). Add an accessor such as `effectiveMaxIssueFixAttempts()` that returns the configured value or the default when null.
+
+Ensure all existing factory helpers (including ISSUE job constructors) populate this field appropriately (defaulting when not explicitly provided), and that `ai.brokk.executor.jobs.JobStore` persists/loads it as part of the job metadata JSON.
+
+### 2) Headless ISSUE job endpoint: accept and validate maxIssueFixAttempts
+Update the `POST /v1/jobs/issue` request shape in `ai.brokk.executor.HeadlessExecutorMain` to accept an optional `maxIssueFixAttempts`.
+
+Behavior:
+- If omitted/null, use the JobSpec default.
+- If provided, it must be a **positive integer**; reject zero/negative with a validation error response.
+- The created job must persist the resulting value in its `JobSpec` so it can be read back from the job store.
+
+### 3) BuildAgent: runExplicitCommand with streaming output and build-result integration
+Add a reusable method in `ai.brokk.agents.BuildAgent` named `runExplicitCommand` (both a context-pushing variant and a context-based overload, consistent with existing BuildAgent patterns).
+
+Required behavior:
+- Executes an arbitrary caller-supplied shell command in the project root using the same execution environment configuration used for builds (including environment variables from build details and configured command timeout).
+- Streams command output line-by-line to the console during execution (so tests can observe streamed tokens).
+- Updates the session “Build Results” fragment the same way build verification does: on success, set build as succeeded with a blank/empty build error; on failure, set build as failed with processed build output suitable for LLM consumption.
+- If the command is blank/whitespace: **skip execution**, emit a clear “skipping” message, and **clear any previous build error** (i.e., treat as success).
+- When subprocess exceptions contain null message/output, do not embed the literal string `"null"` in the composed build error.
+
+### 4) JobRunner ISSUE mode: model resolution and pre‑PR gate with fix/retry loop
+Update `ai.brokk.executor.jobs.JobRunner` so ISSUE mode resolves the required LLM models the same way as other authoring modes (planner + code model). ISSUE execution must fail fast if required models are absent.
+
+After ISSUE tasks have been executed and per-task build verification has run, add a **pre‑PR gate** that:
+- Runs the “full tests” and “lint/build lint” commands from the active build details (job overrides included).
+- Treats blank gate commands as **SKIP** (do not attempt execution) and consider them passing.
+- If either gate fails, create a fix task prompt describing the failing command(s) and their output, run it through the normal “fix task” execution path, then rerun the gate.
+- Repeat until both gates pass or the overall attempt budget is exhausted.
+
+The overall retry budget is `spec.effectiveMaxIssueFixAttempts()` and caps how many pre‑PR gate attempts are allowed before the job fails and **must not proceed to PR creation**.
+
+Also emit user-visible status notifications/events around gate attempts/results (best-effort: failure to notify must not crash the job).
+
+### 5) Test utilities: console output visibility for streamed/custom messages
+Adjust the test console implementation (`ai.brokk.testutil.TestConsoleIO`) so that output produced via streaming and custom LLM output paths is accumulated into the same log buffer used by tests to assert on console output content.
+
+### 6) Concurrency safety for tests touching global command runner factory
+Some tests modify a shared/global shell runner factory. Ensure the test suite can run reliably by preventing parallel execution conflicts in the relevant test classes (the harness will include updated tests expecting this).

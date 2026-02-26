@@ -1,0 +1,22 @@
+## Task: Exclude anonymous (`$anon$`) code units from summaries and context output
+
+Anonymous/synthetic code elements (e.g., lambdas or compiler-generated classes) are represented in this codebase as `CodeUnit`s whose names include the marker `"$anon$"`. These should **never appear** in user-facing context output or summary/skeleton formatting.
+
+Update the implementation so that any `CodeUnit` considered anonymous is consistently filtered out from:
+
+1. **Context “related identifiers” output**
+   - The tree/list produced by `Context.buildRelatedIdentifiers(...)` (and its internal recursion) must omit anonymous entries at every level (top-level units, children, grandchildren, etc.).
+   - Output indentation must remain correct and match the formatting expectations of existing language analyzer tests (notably JavaScript-related formatting).
+
+2. **Skeleton/summary formatting**
+   - In `ContextFragment.SkeletonFragmentFormatter`, ensure anonymous code units are excluded when grouping/printing skeletons by package.
+   - When formatting a summary “with ancestors”:
+     - Do not render skeleton content for an anonymous “primary” target.
+     - Exclude any anonymous ancestors from both the printed ancestor header (if present) and the ancestors’ skeleton output.
+     - If the primary is anonymous, the formatter must suppress any “direct ancestors of …” header text, while still allowing non-anonymous ancestors’ skeletons to be rendered.
+
+3. **Anonymous detection**
+   - Provide a single, reliable way to determine whether a `CodeUnit` is anonymous based on whether its fully-qualified name contains `"$anon$"`.
+   - Use this consistently across context building and skeleton/summary formatting.
+
+The end result should be that generated context text and summary/skeleton output never includes `"$anon$"` identifiers, while preserving correct structure, package grouping, and formatting.

@@ -1,0 +1,33 @@
+Several parts of the codebase treat a “rev” string (e.g., `HEAD`, branch names, tag names, abbreviated SHA, `origin/foo`, or more complex rev-specs) as if it always resolves to a **commit**. In JGit, `Repository.resolve(...)` can legally return non-commit objects (notably annotated tag objects, trees via expressions like `^{tree}`, etc.). This causes failures when the resolved id is passed into commit-only operations (merge, rebase, log, rev-walk parsing, etc.).
+
+Update the repository abstraction to clearly separate:
+
+1) **Resolving to any Git object id** (commit/tag/tree/blob), without coercion, for cases where non-commit objects are expected/valid.
+
+2) **Resolving to a commit id** (“commit-ish”), including correct handling of tags (lightweight, annotated, and tag chains) so that callers always receive an `ObjectId` that refers to a commit, or a clear exception if the ref ultimately does not point to a commit.
+
+### Requirements
+
+- Extend the `IGitRepo` API to expose two distinct resolution operations:
+  - One that resolves a rev-spec to a raw object id (no type guarantees).
+  - One that resolves a rev-spec to a commit id, peeling tags as needed and rejecting non-commit targets.
+
+- Implement the new behavior in `GitRepo`:
+  - The “object” resolver must behave like JGit’s normal rev resolution: it should return the object id JGit resolves (including trees when requested), and throw an appropriate `GitAPIException` when resolution fails.
+  - The “commit” resolver must accept common “commit-ish” inputs (branch names, remote-tracking refs like `origin/x`, raw and abbreviated commit SHAs, lightweight tags, annotated tags, and tag-of-tag chains) and return the underlying commit `ObjectId`.
+  - If the rev ultimately refers to a non-commit object (e.g., a tag pointing to a tree), the method must fail with a dedicated/clear state-type exception (not a confusing incorrect-type exception leaking from lower layers).
+
+- Update all call sites that conceptually require commits to use the commit-resolving method (examples include merge/rebase/cherry-pick/revert, commit-log retrieval, “files changed between commits/branches”, merge-base computation, reachability checks, and UI/agent logic that assumes a commit).
+  - Keep or switch to the object-resolving method in places where a tree/object rev-spec is intentional (e.g., resolving `HEAD^{tree}`).
+
+- Ensure exception wrapping is consistent with `GitAPIException`-based signatures: I/O failures and resolution failures should propagate as `GitAPIException` (or subclasses already used in the project) with meaningful messages.
+
+### What will be validated
+
+The updated implementation will be exercised by unit tests that cover a range of ref-ish inputs, including:
+- branch names and remote-tracking names,
+- lightweight and annotated tags (and tag chains),
+- raw and abbreviated SHAs,
+- and the failure mode when resolving something that does not represent a commit.
+
+The goal is to make commit-only operations safe and deterministic by guaranteeing commit ids where required, while preserving the ability to resolve arbitrary objects when needed.

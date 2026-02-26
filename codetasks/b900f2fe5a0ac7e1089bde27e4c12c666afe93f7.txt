@@ -1,0 +1,87 @@
+### Goal
+
+Extend Kafka’s share-partition state persistence to include a new integer attribute named **`deliveryCompleteCount`**, representing **how many offsets at or beyond the share-partition `startOffset` have reached a terminal “delivery completed” state** (e.g., acknowledged or archived). This value must be carried end-to-end through:
+
+- the broker RPC used to persist share group state (`WriteShareGroupState`),
+- the server-side persister abstractions that build and interpret this request,
+- the share coordinator’s durable records (`ShareSnapshot` / `ShareUpdate`) and in-memory model.
+
+All provided tests (both pre-existing and newly added/updated) must pass.
+
+---
+
+### Functional requirements
+
+#### 1) Wire format / protocol schema changes
+
+1. **`WriteShareGroupStateRequest`**
+   - Introduce a new field **`DeliveryCompleteCount`** inside per-partition data.
+   - The field must be supported in a **new request version** (version bump required).
+   - It must be **optional for older versions** and safe for forward/backward compatibility.
+   - A sentinel value (e.g., `-1`) is used when the value is unknown/unset.
+
+2. **`WriteShareGroupStateResponse`**
+   - Its version range must remain compatible with the request versioning changes (even if the response body is unchanged).
+
+3. **Coordinator log records**
+   - Add **`DeliveryCompleteCount`** to both:
+     - `ShareSnapshotValue`
+     - `ShareUpdateValue`
+   - This should be added in a way that preserves compatibility with existing serialized records (i.e., records written before the change can still be read).
+   - Use the same sentinel default when not present.
+
+---
+
+#### 2) SharePartition runtime behavior
+
+- The share partition must **track** a value equivalent to “number of terminal offsets currently counted as delivery-complete within the in-memory cached state, considering only offsets ≥ `startOffset`”.
+- This counter must stay consistent across the share partition lifecycle, including:
+  - initialization from persisted state,
+  - acknowledgements and archival transitions,
+  - changes to `startOffset` (e.g., when log start offset advances and cached state is pruned),
+  - rollback scenarios when state persistence fails.
+- When building a `WriteShareGroupState` request, the partition must **include this tracked value** as `deliveryCompleteCount`.
+
+(Your implementation must preserve all existing share-partition semantics; only the additional field and its correct maintenance/propagation are being introduced.)
+
+---
+
+#### 3) Persister and server-side data model propagation
+
+Update the persister-facing model so the new value can be carried without loss through:
+
+- the partition-level persister DTOs/interfaces used by the broker,
+- any factory/builders used to create partition data objects,
+- the state manager that turns persister operations into `WriteShareGroupStateRequestData`,
+- the default persister implementation that constructs requests from these DTOs.
+
+The new field must participate correctly in equality/hash semantics where these objects are compared in tests.
+
+---
+
+#### 4) Share Coordinator integration
+
+The share coordinator must:
+
+- accept the `deliveryCompleteCount` coming from the write-state request path and persist it into coordinator records,
+- include it when generating both snapshot and update records,
+- store it in the in-memory representation of share group offsets,
+- handle initialization paths where this value is not yet known (use the sentinel default).
+
+---
+
+### Compatibility and defaults
+
+- **Older protocol versions / older stored records** must remain readable/processable.
+- When the value is not provided (older client/request/record), it must behave as **unset** using the sentinel default.
+- Newer components must be able to interoperate with older ones by treating the field as optional/ignorable where required.
+
+---
+
+### What the candidate will see in the harness
+
+You will receive:
+- the list of files you may edit,
+- updated and new tests that assert correct propagation and consistency of `deliveryCompleteCount` across the involved layers.
+
+Your solution should focus on implementing the new field, keeping state correct, and ensuring compatibility across the request/record versions and the existing code paths.

@@ -1,0 +1,31 @@
+Implement support for “import …” quick-fix code actions for unresolved-name diagnostics, without doing import resolution during type inference.
+
+### Required behavior
+
+* When the user requests code actions for a document range, the server should continue to return any precomputed quick-fix edits already attached to diagnostics (the existing mechanism via serialized diagnostic data).
+* Additionally, for diagnostics whose code/id corresponds to the type-check lint for unresolved references (the `unresolved-reference` rule), the system must offer import-suggestion quick fixes that insert an appropriate import statement.
+  * These import suggestions must be computed lazily at code-action time (not as part of diagnostic/type inference computation).
+  * The suggestions should be derived from the existing completion/symbol machinery, but must match the missing symbol name exactly (not fuzzy/substring matching).
+  * Multiple valid imports may be suggested for the same missing name.
+
+### API and integration points
+
+* Add an IDE-layer entry point that, given `(db, file, diagnostic_range, diagnostic_id)`, can return a list of quick-fix actions (title + edits + preferred flag) for the unresolved-reference diagnostic when applicable.
+* Ensure the unresolved-reference lint identifier is accessible where needed (it must be publicly usable outside the semantic/types crate).
+* Update the LSP code-action request handler to:
+  * Filter diagnostics by source and intersection with the requested range (existing behavior).
+  * Merge both kinds of actions: (1) fixes embedded in diagnostics, and (2) newly computed fallback actions for unresolved references.
+  * Convert internal edit representations into LSP `WorkspaceEdit` form correctly (including URI mapping and range conversions using the document’s position encoding).
+* Update the WASM/Playground API to support returning multiple code actions for a single diagnostic (not just a single optional action), including whether each is preferred, and update the editor integration to consume the new shape.
+
+### Query/matching changes
+
+The symbol-query infrastructure must support both:
+* fuzzy matching for general symbol search/completion scenarios, and
+* exact matching for “missing import” suggestions so only the unresolved name is considered a match.
+
+Adjust existing call sites accordingly so symbol search and workspace symbol search keep their intended fuzzy behavior.
+
+### Files involved
+
+The change spans the IDE crate (code-action plumbing and matching), the semantic/types lint visibility, the server’s LSP code-action handler (including edit conversion), and the WASM + playground editor bindings.

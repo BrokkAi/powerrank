@@ -1,0 +1,34 @@
+Implement a fix in the Querytee middleware pipeline so that “unsupported” request types do not get incorrectly routed through the logs/metrics splitting paths, and instead fall back to the preferred downstream backend handler.
+
+### Context
+
+Querytee builds an HTTP handler chain that:
+- fans out and compares supported query types, and
+- optionally “splits” requests based on query type and time range, sending recent data to a preferred backend and older ranges to fanout/comparison (including Goldfish sampling).
+
+Some Loki API requests are not handled by the splitting logic (for example: instant queries, series, label/label values). These requests must still be served correctly.
+
+### Requirements
+
+1. **Unsupported request fallback**
+   - In the splitting handler logic, when a request type is not one of the split-capable query types, it must be handled by the *default downstream handler* that targets the preferred backend (not by the logs query splitting handler, and not by fanout).
+   - If there is **no preferred backend configured**, splitting cannot be performed; in that case, requests should fall back to the existing fanout path.
+
+2. **Preferred backend downstream handler creation**
+   - When a preferred backend exists, the splitting handler must have a “default downstream” handler that forwards requests to that backend using the queryrange codec/roundtripper setup (the same mechanism used for recent-query routing).
+   - Errors during construction of this downstream handler must be surfaced to callers, so handler creation can fail cleanly rather than silently falling back.
+
+3. **Tenant / org ID propagation**
+   - Ensure tenant identity is correctly available in the request context for both:
+     - the queryrange handler chain, and
+     - the HTTP downstream handler forwarding path.
+   - Requests missing tenant information should be rejected as unauthorized, and logged at warning level.
+
+4. **Goldfish manager abstraction**
+   - Replace direct reliance on a concrete `*goldfish.Manager` with a `goldfish.Manager` interface, and update all plumbing to accept the interface (including endpoint wiring, handler factory, and proxy struct fields).
+   - The Goldfish constructor should return the interface type, not a concrete pointer, while still supporting the existing behavior.
+
+5. **Handler factory API**
+   - Update the handler factory to return `(http.Handler, error)` so errors from splitting handler setup can propagate to startup/route wiring.
+
+The change should be implemented in a way that preserves existing querytee behavior for supported split-capable requests and continues to integrate with Goldfish sampling/comparison, while fixing routing for unsupported request types.

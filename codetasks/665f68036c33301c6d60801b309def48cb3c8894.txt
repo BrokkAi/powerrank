@@ -1,0 +1,26 @@
+Extend Ruff’s `analyze graph` functionality with a user-configurable option to include or exclude imports that exist only for type checking (imports inside `if TYPE_CHECKING:` blocks).
+
+### Requirements
+
+1. **New setting in analyze configuration**
+   - Add a boolean setting under the existing `[analyze]` configuration namespace named `type-checking-imports`.
+   - Default behavior must be **enabled** (i.e., type-checking-only imports are included in the import graph unless explicitly disabled).
+   - The setting must flow through Ruff’s configuration pipeline (options → configuration → resolved analyze settings) and be displayed in “show settings” output alongside other `analyze.*` fields.
+
+2. **New CLI flags for `ruff analyze graph`**
+   - Add a visible `--type-checking-imports` flag and a corresponding `--no-type-checking-imports` flag (the latter may be hidden, but must work).
+   - The two flags must override each other appropriately, and CLI behavior must override configuration file values when explicitly provided.
+
+3. **Graph collection behavior**
+   - When type-checking imports are **enabled**, the import graph should include imports found inside `if TYPE_CHECKING:` blocks as normal.
+   - When **disabled**, imports located within `if TYPE_CHECKING:` blocks must be ignored during import collection for the graph.
+   - The detection of `TYPE_CHECKING` conditions must recognize at least:
+     - `if TYPE_CHECKING:`
+     - `if typing.TYPE_CHECKING:`
+   - It does **not** need to detect aliased or dynamically referenced variants (e.g., `TC`, `typing as t`, etc.).
+
+4. **End-to-end wiring**
+   - The resolved boolean must be passed from the CLI/config settings used by `crates/ruff/src/commands/analyze_graph.rs` into the graph/import collection logic in `crates/ruff_graph`.
+   - Ensure this setting is part of the graph analysis settings cache key / settings struct as appropriate, so different values produce different behavior consistently.
+
+The implementation should integrate cleanly with existing `analyze` settings (like `string_imports`, `include_dependencies`, and `preview`) and preserve existing CLI/config patterns.

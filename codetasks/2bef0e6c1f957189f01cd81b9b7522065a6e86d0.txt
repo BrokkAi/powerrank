@@ -1,0 +1,10 @@
+Enhance the PR review prompt generation so code reviews can incorporate Pull Request “intent” metadata (title and description/body) while remaining robust against prompt-injection and markup-breaking input.
+
+Update the PR metadata model in `PrReviewService` so `PrDetails` includes the PR title and body in addition to the existing branch/SHA/ref fields. When PR details are fetched from the GitHub API, ensure the title/body values are normalized to non-null strings (callers should be able to use them without redundant null checks).
+
+Extend the review prompt construction in `JobRunner` so the prompt can accept optional PR title and description and embed them near the top of the prompt inside clearly delimited XML-style blocks (one for title, one for description). The embedded metadata must be treated as untrusted text:
+
+- Any characters that could be interpreted as markup (including angle brackets, and entity-related characters) must be escaped so user-supplied PR text cannot create new tags, close the wrapper tags, or nest additional blocks.
+- The prompt must also explicitly state that the PR intent blocks are contextual only and must not be treated as instructions or commands, including explicitly calling out common injection phrases (e.g., “Ignore previous instructions”) as examples to disregard when they appear inside PR metadata.
+
+Wire the new title/body fields through the relevant review entry points in `JobRunner` so review jobs can pass PR metadata into the prompt builder, while callers without PR metadata can still invoke review generation by providing empty values.

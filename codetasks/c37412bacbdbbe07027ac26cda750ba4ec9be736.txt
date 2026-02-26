@@ -1,0 +1,20 @@
+You’re working in the IdentityServer token/request validation pipeline. A now-obsolete feature flag previously controlled whether SSO enforcement used a legacy “require SSO” check (policy-based) or a newer `ISsoRequestValidator`-based scheme. That flag has been retired and the system should always follow the newer SSO validation path.
+
+Update the production code so SSO validation behaves consistently without any feature-flag branching, and align the request validator surface area accordingly.
+
+### Required changes (behavioral)
+- **Remove the retired feature flag key** (`pm-1632-redirect-on-sso-required`) from the feature-flag constants and eliminate any conditional logic that depends on it.
+- **Always perform SSO validation via the SSO request validator** during token validation. The outcome should be:
+  - If the SSO validator indicates success, token validation proceeds.
+  - If it indicates failure, the validator’s error result and any custom response payload must be returned through the normal validation error mechanism (i.e., the same mechanism used for other validation errors), rather than a separate “SSO-specific” result path.
+- **Ensure SSO failures propagate custom response data** (e.g., an error model and optional organization identifier) into the final grant/validation result in the same shape expected by the updated test suite.
+- **Ensure SSO failure messaging supports the “2FA recovery happened, but SSO is required” scenario** using the same SSO-validator-provided error description/custom response mechanism (rather than constructing bespoke messages inside the base validator).
+
+### Required changes (API/structure)
+- The base request validator previously exposed an SSO-specific result hook and contained a deprecated helper that determined whether SSO was required based on policies and grant type. With the flag removed:
+  - **Delete the unused/deprecated SSO-specific result pathway** (the abstract “set SSO result” hook and any concrete overrides).
+  - **Remove the deprecated SSO requirement helper method** that performs policy checks and grant-type exceptions, along with any now-unneeded imports/usings tied to that legacy logic.
+- Where the code and tests refer to custom response entries, **use the shared response-key constants** (rather than hard-coded dictionary keys) so error models and SSO metadata are accessed consistently.
+
+### Scope expectations
+The end state should be a single, consistent SSO enforcement flow driven by the SSO request validator, with no remaining dependency on the retired flag or the legacy “require SSO” decision logic, and with SSO errors surfaced through the standard validation error plumbing (including custom response propagation).

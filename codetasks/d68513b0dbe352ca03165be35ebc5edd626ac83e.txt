@@ -1,0 +1,34 @@
+Extend Tailscale’s “serve” HTTP handler configuration to support HTTP redirects.
+
+### Goal
+Add a new redirect capability to the existing `ipn.HTTPHandler` so a handler can respond with an HTTP redirect instead of serving text, proxying, or serving a file/directory.
+
+### Requirements
+
+1. **Configuration/API surface**
+   - Add a new `Redirect` field to `ipn.HTTPHandler` (in `ipn/serve.go`), serialized in JSON and omitted when empty.
+   - Ensure any generated clone/view plumbing that enforces “needs regeneration” compilation checks is updated to include the new field (the repository uses these checks to prevent stale view/clone structs).
+
+2. **Redirect behavior**
+   - When an HTTP handler has a non-empty redirect target configured, incoming requests matching that handler should receive an HTTP redirect response.
+   - The default redirect status must be **302 (Found)**.
+
+3. **Custom redirect status codes**
+   - Support optionally specifying the redirect status code as a prefix of the redirect string in the form:
+     - `"<3-digit 3xx code>:<url>"`
+     - Example: `"301:https://tailscale.com"`
+   - Only treat the prefix as a status code if:
+     - it is exactly three digits followed by `:`, and
+     - the parsed value is in the range **300–399**.
+   - If the prefix does not meet these rules (non-3xx, malformed, wrong length, missing `:`), the entire string must be treated as the URL, using the default status (302).
+
+4. **Template variables in redirect URLs**
+   - The redirect URL must support per-request expansion of:
+     - `${HOST}` → the request’s `Host` header value
+     - `${REQUEST_URI}` → the request’s full request URI (path plus query string, as provided by `r.RequestURI`)
+   - Expansion should occur for every request before issuing the redirect.
+
+5. **Integration point**
+   - Implement this in the HTTP serving path used by the local backend (the handler that maps an incoming HTTP request to the configured `HTTPHandler`), so redirects work through the standard serve config mechanism.
+
+The provided tests exercise both parsing of the optional status-code prefix and end-to-end redirect responses (status code and `Location` header), including template expansion.

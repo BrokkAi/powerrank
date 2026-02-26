@@ -1,0 +1,24 @@
+Update the codebase so `ShareAcquireMode` is treated as an internal consumer implementation detail rather than part of the public consumer API, while keeping all share-fetch functionality working across clients, server, and tests.
+
+### Requirements
+
+1. **Relocate `ShareAcquireMode` into the internal consumer namespace**
+   - `ShareAcquireMode` must live under `org.apache.kafka.clients.consumer.internals`.
+   - All references throughout the project (consumer client code, request/response classes, server/share code, and tests) must use the internal type.
+   - Ensure no remaining compilation dependencies on the old public location.
+
+2. **Preserve and standardize `ShareAcquireMode` behavior**
+   - Keep the same logical modes and numeric ids.
+   - String parsing must be case-insensitive and must fail fast for invalid inputs, including `null`.
+   - The enum’s string representation should be appropriate for configuration/documentation output (and consistent with validation messaging).
+
+3. **Configuration validation**
+   - The config validator used for the share acquire mode must reject invalid values and report errors using `ConfigException`.
+   - Its `toString()` should enumerate allowed values in a stable, user-facing format suitable for `ConfigDef` descriptions.
+
+4. **Share partition metrics correctness**
+   - There is a correctness issue in `kafka.server.share.SharePartition` involving updating in-flight batch/message metrics relative to the acquired records’ computed last offset.
+   - Adjust the logic so the in-flight metrics reflect the correct message counts for an acquired batch (especially in record-limit mode scenarios), and the ordering of state updates does not cause inconsistent metric values.
+   - The updated behavior must satisfy the new metric-focused assertions added to the share-partition-related tests.
+
+The final result should compile cleanly and ensure all provided unit/integration tests (including those covering parsing/validation and share-partition in-flight metrics) pass.

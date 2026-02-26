@@ -1,0 +1,55 @@
+Implement a consolidated model + reasoning selection experience in the Textual TUI.
+
+### Required behavior
+
+#### 1) Combined selection modal
+Add a new modal screen that lets a user select:
+- a planner **model** (from the executor’s model list), and then
+- a planner **reasoning level** (from the fixed set: `disable`, `low`, `medium`, `high`)
+
+The modal must present both selections in a **side-by-side** layout and support keyboard navigation via `ListView` selection:
+- On mount, each list’s **highlighted row** must initially correspond to the app’s current model / current reasoning level (when present in the list).
+- When the user selects a model, the modal should update the model choice indicator in the list and move focus to the reasoning list.
+- When the user selects a reasoning level, the modal should dismiss and return both chosen values as a tuple.
+
+Selection indicators must be visible as literal text (e.g. `"[x]"` / `"[ ]"`), not interpreted as markup.
+
+The modal must also be resilient to unexpected list indices / IDs (avoid crashes if parsing fails or indices are out of bounds).
+
+#### 2) Commands: open menus when no arguments
+Update command handling in `brokk_code/app.py` so that:
+- `/model <name>` still sets the planner model immediately (and persists it).
+- `/model` with **no argument** opens the **combined** model+reasoning modal described above.
+- `/reasoning <level>` still sets the planner reasoning level immediately (and persists it).
+- `/reasoning` with **no argument** opens the existing reasoning selection UI (not the combined modal).
+
+Any user-facing help text for `/help` should no longer mention removed keyboard shortcuts for model/reasoning.
+
+#### 3) Remove old keyboard shortcuts / bindings
+Remove the previous direct keyboard shortcuts for model and reasoning selection from:
+- the main app bindings
+- the chat input widget bindings
+
+The footer/help-bar ordering should reflect that model/reasoning are no longer bound actions.
+
+#### 4) Styling / layout updates
+Update `brokk_code/styles/app.tcss` to style and size the combined modal appropriately:
+- The combined container must have a fixed width suitable for two panes, and a max height constraint.
+- The modal should be centered on screen (consistent with other centered modals).
+- Each pane should have a titled header and a scroll wrapper with a max height.
+- Focused list items should have a distinct highlight style.
+
+Keep existing styling rules for any standalone model/reasoning containers if they still exist.
+
+#### 5) Persistence and status updates
+When the combined modal returns a selection, update:
+- `current_model`
+- `reasoning_level`
+and persist both to settings (using the existing settings mechanism), then refresh any statusline/summary UI that reflects these settings.
+
+Also ensure the model-only selection action still exists and continues to use the model-only modal, returning a single model string when used.
+
+### Scope notes
+- Model lists returned by the executor may be strings or dicts containing a `name` field; ignore invalid entries.
+- The UI must ensure `[x]` markers remain visible in the rendered list rows (i.e., disable markup interpretation where necessary).
+- Tests include CSS rule assertions, so the required selectors and key properties must exist in `app.tcss` with the expected values.

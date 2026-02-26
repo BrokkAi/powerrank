@@ -1,0 +1,29 @@
+Add a new analysis-level configuration option that controls whether `type: ignore` comments are treated as suppressions by **ty**.
+
+### Required behavior
+
+1. **New configuration section and option**
+   - Introduce an `[analysis]` configuration group.
+   - Add a boolean option named `respect-type-ignore-comments` (kebab-case in config) with a default of `true`.
+   - The option must be settable via the CLI `--config` mechanism using the dotted key `analysis.respect-type-ignore-comments=...`.
+
+2. **Effect on suppressions**
+   - When `respect-type-ignore-comments=true` (default), `# type: ignore` behaves as it currently does (suppresses diagnostics and participates in ignore-comment validation/unused reporting as applicable).
+   - When `respect-type-ignore-comments=false`:
+     - `# type: ignore` must **not** suppress any diagnostics.
+     - `type: ignore` comments must be treated as ordinary comments for the purposes of ignore-comment handling; in particular, they must not trigger “invalid ignore comment” style diagnostics, and they must not be considered for “unused ignore” style diagnostics.
+     - Other suppression mechanisms (e.g., `ty: ignore`) must continue to work normally.
+
+3. **Plumbing through the analysis database**
+   - Add an analysis settings container in the semantic layer (e.g., in `ty_python_semantic`) to hold `respect_type_ignore_comments`.
+   - The semantic `Db` trait must expose analysis settings so that suppression parsing can consult the option.
+   - All relevant database implementations across the workspace (project DBs, test DBs, fuzz DBs, etc.) must provide a sensible value (defaulting to `true` unless configured otherwise).
+
+4. **Project configuration integration**
+   - Extend the project configuration model so `[analysis]` is parsed/validated (unknown keys rejected) and incorporated into the computed settings used by the project/database.
+   - Ensure diagnostics and debug/printed settings representations include the new analysis settings where appropriate (so snapshot-based tests remain stable).
+
+5. **Markdown test harness support**
+   - The mdtest configuration format must allow specifying the analysis option (mirroring the config structure), and the test database used by that harness must apply it during test execution.
+
+The end result should allow users to disable support for `type: ignore` comments globally via configuration, while keeping all existing suppression behavior unchanged when the option is left at its default.

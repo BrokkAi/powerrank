@@ -1,0 +1,57 @@
+Implement a new Home Assistant integration `hypontech` (“Hypontech Cloud”) that exposes Hypontech micro-inverter/plant production data via the third‑party `hyponcloud` library.
+
+### Functional requirements
+
+#### 1) Config entry setup / unload (`homeassistant/components/hypontech/__init__.py`)
+- Create a `HyponCloud` client using the config entry’s `username` and `password`, and Home Assistant’s shared `aiohttp` session.
+- Connect during setup:
+  - If the library raises `AuthenticationError`, fail setup with `ConfigEntryAuthFailed`.
+  - If the library raises request/transport style errors (including `RequestError`, `TimeoutError`, `ConnectionError`), treat the entry as not ready (`ConfigEntryNotReady`).
+- Store a coordinator instance as the config entry runtime data and perform an initial refresh before platforms are set up.
+- Forward setup to the sensor platform.
+- Support unloading the entry cleanly via platform unload.
+
+#### 2) Config flow with reauthentication (`homeassistant/components/hypontech/config_flow.py`)
+- Provide a user step that asks for `username` and `password`.
+- Validate credentials by connecting to Hypontech Cloud and retrieving the account/admin information.
+- Use the returned account identifier as the config entry unique ID and enforce a single entry per account.
+- Error handling in the form:
+  - Invalid credentials → `invalid_auth`
+  - Connection/timeouts → `cannot_connect`
+  - Any other unexpected exception → `unknown`
+- Support a reauthentication flow:
+  - Reauth should reuse the same credential validation.
+  - If the credentials belong to a different account than the entry being reauthed, abort with a specific “wrong account” reason.
+  - On successful reauth, update stored credentials and abort as “reauth successful”.
+
+#### 3) Data coordinator (`homeassistant/components/hypontech/coordinator.py`)
+- Implement a `DataUpdateCoordinator` that polls Hypontech Cloud periodically (once per minute).
+- Each refresh must fetch:
+  - An “overview” dataset (account-level)
+  - A list of “plants”, keyed by plant ID
+- If the library raises `RequestError` during refresh, surface it as an `UpdateFailed` using a translation-aware error (domain `hypontech` and a dedicated translation key).
+
+#### 4) Entities and sensors
+- Provide base entity classes (`homeassistant/components/hypontech/entity.py`) that:
+  - Use coordinator data
+  - Set `has_entity_name`
+  - Expose appropriate `DeviceInfo`
+    - One “Overview” device for the account
+    - One device per plant, named using the plant name
+  - Plant entities must become unavailable when their plant ID is no longer present in coordinator data.
+- Implement the sensor platform (`homeassistant/components/hypontech/sensor.py`) with:
+  - Account overview sensors and per-plant sensors for:
+    - Current PV power (W, device class `power`, state class `measurement`)
+    - Lifetime energy (kWh, device class `energy`, state class `total_increasing`)
+    - Today energy (kWh, device class `energy`, state class `total_increasing`)
+  - Stable unique IDs derived from account ID / plant ID plus the metric key.
+  - Entity naming consistent with Home Assistant’s “entity name” model (friendly names should combine device name + entity name).
+
+#### 5) Integration metadata / translations
+- Add the integration manifest for `hypontech` including `config_flow: true` and the `hyponcloud` requirement.
+- Provide `strings.json` for:
+  - Config flow UI text (including the “wrong account” abort reason)
+  - Sensor translation keys for energy sensors
+  - A translated message for the coordinator’s connection/update failure
+
+The goal is a fully functioning, typed Hypontech Cloud integration that can be configured via UI, supports reauthentication, periodically polls cloud data, and creates the expected overview and per‑plant sensors with correct device/registry metadata and error handling.

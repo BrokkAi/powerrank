@@ -1,0 +1,56 @@
+Implement two related changes: (1) move `JAVA_HOME` management from project-scoped build details into workspace-scoped JDK settings, and (2) replace the “Legacy” Java `WatchService` implementation naming/selection to reflect its actual role and update platform defaults.
+
+## 1) Migrate `JAVA_HOME` from build details to workspace JDK settings
+
+### Data model / persistence
+- `JAVA_HOME` must no longer be persisted inside the serialized build details JSON (the value should not appear in `buildDetailsJson` stored under `.brokk/project.properties`).
+- Add/extend a workspace-level JDK setting stored in `.brokk/workspace.properties` (e.g., a `jdk.home` property) and make it accessible via the project API.
+- On project load, if legacy build details contain `JAVA_HOME` in their environment variable map:
+  - Canonicalize/normalize the path appropriately for an environment value.
+  - Migrate it into the workspace JDK setting.
+  - Ensure the loaded build details’ environment variables do **not** include `JAVA_HOME` afterward.
+- When saving build details, ensure `JAVA_HOME` is omitted from the environment variables that get serialized.
+
+### Project API
+- Expose a way to:
+  - Get the effective JDK home for the project (workspace-configured or otherwise).
+  - Set/clear an explicit workspace JDK override.
+  - Detect whether an override is explicitly set (distinct from merely having an “effective” JDK).
+
+### Build verification environment injection
+- Update build verification so that, when executing commands, `JAVA_HOME` is injected dynamically based on the project’s configured JDK setting, rather than relying on persisted env vars.
+- Only inject `JAVA_HOME` when the configured JDK value is:
+  - Present and non-blank,
+  - An absolute path,
+  - A valid JDK home (validated consistently with the UI/selector validation logic).
+- Support a sentinel value that means “do not inject `JAVA_HOME` from the project JDK setting” (used to prevent fallback behavior when the user explicitly disables the override for verification runs).
+- Preserve any additional environment variables provided by callers; merge behavior must not drop existing entries unrelated to `JAVA_HOME`.
+
+### UI behavior (project build settings panel)
+- The Java build settings UI must no longer write `JAVA_HOME` into the build details environment variable map.
+- Instead, the panel should read from / write to the project’s JDK setting using the project API (set/clear override).
+- When verifying commands from the UI, the computed environment passed into verification must reflect:
+  - The selected/normalized JDK path when the override checkbox is enabled,
+  - The sentinel to explicitly suppress project-level injection when the override checkbox is disabled.
+- Normalize JDK paths coming from the UI (including environment-string canonicalization and macOS bundle handling where a selected bundle root may need to resolve to a real JDK home).
+
+### Test utilities
+- Ensure the lightweight `IProject` test implementation can store/return the JDK setting and report whether it is overridden.
+
+## 2) Watch service implementation rename and selection behavior
+
+### Implementation naming
+- Replace the prior “legacy” Java `WatchService` implementation class with a `JavaProjectWatchService` (same functionality, new name), and update references accordingly.
+
+### Factory defaults and platform selection
+- Update the watch service selection logic so that:
+  - A “default/auto” mode is supported as the fallback preference (not hard-coded to “legacy”).
+  - On Linux and Windows, the default selection should use the Java watch service implementation.
+  - On macOS, default behavior should prefer the native implementation (with a fallback strategy if native creation fails).
+  - Unknown platforms may still prefer native with fallback.
+- Ensure the explicit configuration values (e.g., “Legacy”, “Native”, and default/auto) remain supported and override platform logic when set.
+
+### Advanced settings visibility
+- The “file watcher implementation” control in advanced settings should only be visible under developer/advanced conditions (the UI should not always show it to regular users), and changing it should indicate restart requirements.
+
+These changes must be integrated such that migration occurs seamlessly for existing projects, workspace-scoped JDK configuration does not leak across machines via project-scoped files, build verification uses the correct effective JDK behavior, and watch service selection/tests align with the updated defaults and naming.

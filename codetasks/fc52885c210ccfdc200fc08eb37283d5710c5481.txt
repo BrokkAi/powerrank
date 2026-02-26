@@ -1,0 +1,42 @@
+Extend the KNX integration to allow configuring a “time server” from the UI (stored in the KNX config store) so Home Assistant can expose local **time**, **date**, and/or **datetime** on the KNX bus.
+
+### Functional requirements
+
+1. **Persisted UI configuration**
+   - Add a new `time_server` section to the KNX config store model (alongside `entities`) and ensure it is initialized by default when the store is empty.
+   - Bump the config store **minor** version and implement migration so older stored data gains an empty `time_server` mapping.
+
+2. **Time server configuration schema + validation**
+   - Define and validate the `time_server` configuration with a schema that supports the optional keys:
+     - `time`
+     - `date`
+     - `datetime`
+   - Each of these keys must accept the same style of group-address selector objects used elsewhere in KNX UI config, but constrained to the correct DPT per entry (time/date/datetime).
+   - Invalid configurations must be rejected via the existing “validation error payload” pattern used by the KNX websocket API.
+
+3. **Websocket API**
+   - Add admin-only websocket commands:
+     - `knx/get_time_server_config` → returns the current `time_server` section from the config store.
+     - `knx/update_time_server_config` → validates and persists the provided config and applies it immediately.
+   - The update command should return a success-style response object consistent with other KNX “update” websocket handlers.
+
+4. **Runtime behavior (exposures)**
+   - When the integration starts, load the stored `time_server` config and activate it.
+   - When the `time_server` config is updated via websocket, immediately apply the new configuration (including removing previously active time-server exposures).
+   - When the integration unloads, stop the time server behavior and remove its exposures cleanly.
+
+5. **KNX bus exposure details**
+   - For each configured entry (`time`, `date`, `datetime`) that contains a `write` group address, create and register an appropriate xknx time-related device (time/date/datetime) so that:
+     - It writes the current value to the configured group address.
+     - It responds correctly to read requests for that group address.
+   - The value must be based on Home Assistant’s configured local time zone.
+
+6. **Internal refactor support**
+   - Generalize existing config-store validation utilities so they can validate different config-store sections (not only entity data) while keeping the existing entity validation behavior intact.
+   - If the existing KNX “time exposure” logic is used both for YAML-based exposure and the new UI time server, adjust it so both sources can create the same runtime object without duplicating parsing logic.
+
+### Notes / integration points
+
+- The KNX module should own a small controller responsible for starting/stopping the UI-driven time server exposures.
+- The config store should expose getters/setters for the `time_server` config and ensure persistence to storage.
+- Test fixtures and diagnostics expect the new `time_server` key to exist in stored/diagnostic data, even when empty.

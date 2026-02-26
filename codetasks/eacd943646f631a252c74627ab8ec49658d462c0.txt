@@ -1,0 +1,29 @@
+Implement end-to-end propagation of Loki “ingestion policy” across Kafka by carrying the policy through Kafka record headers.
+
+### Background / Goal
+Loki already supports selecting an ingestion policy via request metadata and storing it in `context.Context` (see `pkg/validation/ingestion_policies.go`). When ingestion is routed through Kafka, that policy must survive the hop from the producer side to the consumer side.
+
+### Required behavior
+1. **Producer side (context → Kafka headers)**
+   - When producing Kafka records, if the current `context.Context` contains an ingestion policy (via the existing context helpers in `pkg/validation`), the policy must be added to **every** produced Kafka record as a header.
+   - The header key must match the ingestion policy header name already used by the ingestion policy feature (the lower-cased form used elsewhere in `pkg/validation`).
+   - If no policy exists (or it is empty), producing must behave as normal and no header should be added.
+   - This logic must be available as a reusable interceptor-style function in `pkg/validation` that can be applied to Kafka produce calls.
+
+2. **Consumer side (Kafka headers → context)**
+   - When reading records from Kafka, if a record has the ingestion policy header, that policy must be injected into the `context.Context` associated with that record (using the existing injection helper in `pkg/validation`).
+   - If the header is not present, the record context must remain unchanged.
+   - This logic must be available as a reusable header-extraction function in `pkg/validation`.
+
+3. **Kafka client integration**
+   - The Kafka producer implementation in `pkg/kafka/client` must support an optional, configurable “records interceptor” that runs before records are written, and can modify the records (eg. add headers) or fail the operation.
+   - The Kafka partition reader in `pkg/kafka/partition` must support an optional, configurable “header-to-context extractor” that can derive a per-record context from Kafka record headers during polling.
+   - These integrations should be configurable in a way that allows existing call sites to remain unchanged unless they opt in.
+
+4. **Wiring into Loki components**
+   - The distributor path that writes to Kafka must opt in to the producer-side ingestion policy forwarding.
+   - The ingester/Kafka consumption path must opt in to the consumer-side ingestion policy extraction so downstream processing sees the policy in the record context.
+
+### Notes
+- The implementation must work with Franz-go record types (`*kgo.Record`, `kgo.RecordHeader`).
+- Error handling should ensure that if an interceptor rejects a produce operation, the caller receives an error result for the affected records in a way consistent with the producer API’s return type.

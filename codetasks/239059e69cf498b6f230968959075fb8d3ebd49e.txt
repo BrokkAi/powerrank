@@ -1,0 +1,46 @@
+Implement support for querying and scoring a single term across multiple fields in **lucene-core** by introducing a new `org.apache.lucene.search.CombinedFieldQuery` that behaves like Lucene’s existing sandbox implementation, and by keeping the sandbox API working via deprecation.
+
+### Core requirements
+
+* Provide a `CombinedFieldQuery` in the `org.apache.lucene.search` package that:
+  * Represents a **single-term** query executed against a set of fields with optional **per-field weights**.
+  * Scores as if all configured fields were concatenated into a **single virtual field** (BM25F-style behavior), using the searcher’s `Similarity`.
+  * Treats a field weight as contributing proportionally to:
+    * the effective term frequency aggregated across fields
+    * collection/term statistics used by the similarity
+
+* Provide a `CombinedFieldQuery.Builder` API in core:
+  * Constructed from a term (`String` or `BytesRef`).
+  * Supports `addField(field)` and `addField(field, weight)`.
+  * Rejects weights `< 1`.
+  * Enforces `IndexSearcher.getMaxClauseCount()` consistently when building.
+
+* Scoring behavior must be compatible with common built-in similarities (e.g., BM25, Classic, LM variants), and must:
+  * Work when **norms are enabled for all configured fields**.
+  * Work when **norms are disabled for all configured fields**.
+  * Detect and reject configurations where only **some** fields have norms while others omit them (error must be thrown at query weight creation / search time, not silently ignored).
+
+* When scores are not needed (score mode without scoring), the query must behave like a simple OR across `TermQuery` instances for the configured fields.
+
+### Norm handling across multiple fields
+
+Since the query conceptually combines multiple fields into one, implement core-side support for scoring with a document-length normalization that is derived from **multiple per-field norms**:
+
+* The combined norm must be computed by summing per-field norm contributions (respecting field weights), and then encoded in the same way as Lucene norms that use `SmallFloat.intToByte4`.
+* Norm decoding must be robust to unusual norm values (including negative encoded bytes), so decoding must not assume a signed byte domain.
+
+### Statistics merging
+
+To score the combined field correctly, compute appropriate “pseudo” statistics for the similarity:
+
+* Term statistics and collection statistics must be derived from the configured fields in a way that reflects the combined-field abstraction (and supports missing fields in segments).
+* The implementation must use the searcher’s similarity (`IndexSearcher#getSimilarity`) and standard Lucene scoring infrastructure.
+
+### API surface / compatibility
+
+* Keep `org.apache.lucene.sandbox.search.CombinedFieldQuery` available but mark it deprecated and update its documentation to point to the core query.
+* Ensure any observable string representation differences required by the core version are reflected where relevant (notably the term formatting in `toString`).
+
+### Documentation update
+
+Update the search package documentation to introduce/recommend this query as the preferred way to score across multiple fields (BM25F-style).

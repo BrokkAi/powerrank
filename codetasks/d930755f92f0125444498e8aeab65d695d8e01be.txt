@@ -1,0 +1,54 @@
+Implement a new Home Assistant integration `idrive_e2` that adds IDrive e2 (S3-compatible) as a **backup provider** and is fully set up via a **config flow**. The integration must expose backup agents to the core `backup` component and support listing, downloading, uploading, and deleting Home Assistant backups stored in an IDrive e2 bucket.
+
+### Functional requirements
+
+#### 1) Config entry setup / teardown (`homeassistant/components/idrive_e2/__init__.py`)
+- Create and store an async S3 client (aiobotocore) for each config entry and keep it available as `entry.runtime_data`.
+- Validate the configuration during setup by checking that the configured bucket exists and is reachable.
+- Map setup failures into Home Assistant config-entry exceptions using translation keys under the `idrive_e2` domain:
+  - Bucket not found (e.g., 404 / `NoSuchBucket`) → configuration error indicating the bucket doesn’t exist.
+  - Invalid credentials/authorization → configuration error indicating credentials are invalid.
+  - Invalid endpoint URL → configuration error indicating endpoint URL is invalid.
+  - Connection/endpoint problems → raise “not ready” so setup is retried.
+- Ensure the S3 client is closed on unload, and also closed on setup failure without masking the original failure if closing itself errors.
+
+Additionally, the integration must notify backup-agent listeners when relevant config entry state changes occur (agents added/removed), using a shared listener registry stored in `hass.data`.
+
+#### 2) Backup agent implementation (`homeassistant/components/idrive_e2/backup.py`)
+Provide a `BackupAgent` implementation that:
+- Is discoverable via `async_get_backup_agents(hass)` and returns one agent per loaded config entry.
+- Supports registering/unregistering listeners via `async_register_backup_agents_listener(...)`, storing callbacks in `hass.data`, and cleaning up the data key when the last listener is removed.
+- Stores backups in the configured bucket using **two objects per backup**:
+  - The tar archive (`.tar`)
+  - A metadata JSON file (`.metadata.json`) containing `AgentBackup.as_dict()` output.
+- Uses Home Assistant’s `suggested_filename()` convention to derive a stable base name; from that base derive both the tar and metadata filenames.
+- Implements:
+  - List backups: list bucket objects, consider only metadata files, fetch and parse them into `AgentBackup` instances, and ignore corrupted/unparseable metadata with a log warning.
+  - Get backup by id: find matching `backup_id` from parsed metadata; raise `BackupNotFound` if not present.
+  - Download backup: stream the tar object as an async iterator of bytes.
+  - Upload backup:
+    - Upload the tar first, then upload metadata JSON.
+    - Choose between single PUT and multipart upload based on backup size; multipart must respect S3 minimum part sizing (use a fixed minimum part size threshold and ensure non-final parts meet it).
+    - On multipart failures, abort the multipart upload best-effort.
+    - Convert underlying boto/aiobotocore failures into `BackupAgentError` where appropriate.
+  - Delete backup: remove both tar and metadata objects associated with the backup.
+
+Add a small in-memory cache for listing backups with an expiration TTL; invalidate/reset the cache after successful upload and delete.
+
+#### 3) Config flow (`homeassistant/components/idrive_e2/config_flow.py`)
+Create a two-step config flow:
+- Step `user`: ask for access key id + secret access key (secret should be treated as a password field).
+  - Use the `idrive-e2-client` library to resolve the correct region endpoint from the access key id.
+  - Use the resolved endpoint + provided credentials to query available buckets via S3 and continue only if at least one bucket is found.
+  - Map errors to user-visible flow errors using the same translation keys as above (invalid credentials, cannot connect, invalid endpoint URL, and “no buckets found”).
+- Step `bucket`: present a dropdown selector populated with buckets discovered in the previous step; create the config entry storing endpoint URL, access key id, secret access key, and selected bucket.
+- Prevent duplicate entries for the same endpoint + bucket combination.
+
+#### 4) Integration metadata / constants
+- Define constants for domain and config keys in `const.py`.
+- Provide `manifest.json` compatible with a config-flow integration and required dependencies.
+- Provide `strings.json` exception and config-flow text keys used by the exceptions and flow error handling.
+
+### Notes on interoperability
+- The agent must integrate cleanly with Home Assistant’s backup websocket/API behavior by implementing the expected `BackupAgent` interface methods and error types (`BackupAgentError`, `BackupNotFound`, etc.).
+- Logging should be meaningful when metadata is corrupted or multipart abort fails, but operational failures should surface as the correct Home Assistant exception types.

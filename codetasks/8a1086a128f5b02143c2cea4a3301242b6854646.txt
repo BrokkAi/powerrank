@@ -1,0 +1,44 @@
+Implement support for delaying **level-1 TSDB block compactions** until an external process (e.g. Thanos sidecar) confirms upload via a JSON metadata file.
+
+### Functional requirements
+
+1. **New CLI flag (Prometheus server mode)**
+   - Add a flag named `--storage.tsdb.delay-compact-file.path`.
+   - When set to a non-empty path, Prometheus must configure TSDB so that compaction planning can *exclude* certain blocks based on the contents of that file.
+   - Emit an informational log line when this feature is enabled (content not important, but it must not crash).
+
+2. **External upload metadata format**
+   - The file at `--storage.tsdb.delay-compact-file.path` is JSON with the shape:
+     - a top-level object containing an `uploaded` field
+     - `uploaded` is a list of block ULID strings
+   - A block is considered “uploaded” if its ULID string appears in that list.
+
+3. **Compaction exclusion rules**
+   - Only **level 1** blocks are subject to this delay/exclusion behavior.
+   - A level-1 block **must be excluded from compaction** until it is marked as uploaded in the JSON file.
+   - Blocks with compaction level **greater than 1 must not be delayed** by this mechanism.
+
+4. **Error handling**
+   - If the upload metadata file cannot be read (missing, permission issues, etc.) or cannot be parsed as valid JSON, compaction must proceed normally (i.e., do not exclude blocks solely due to file errors).
+
+5. **Caching**
+   - Reading/parsing of the JSON metadata must be cached so that the file is not re-read more frequently than **once per minute**.
+   - Within the cache window, decisions must be based on the cached content even if the file changes or disappears.
+
+### Plumbing into TSDB compaction
+
+To make the feature effective, introduce a TSDB-level hook that the compactor can consult while planning compactions:
+
+- Define an appropriate function type (e.g. “block exclude filter”) that takes a `*tsdb.BlockMeta` and returns whether the block should be excluded from compaction planning.
+- Extend TSDB options so Prometheus can pass such a filter into TSDB.
+- Ensure the leveled compactor uses this filter during planning, such that excluded blocks are not selected as compaction candidates. If all blocks are excluded (or no eligible blocks remain), planning should produce no compaction work.
+
+### Tests
+
+A new test file under `cmd/prometheus/` validates the exclusion behavior, including:
+- missing/corrupt metadata file handling
+- uploaded list membership checks
+- differing behavior between compaction levels
+- cache usage vs. cache expiry
+
+All existing tests (old and new) must pass.

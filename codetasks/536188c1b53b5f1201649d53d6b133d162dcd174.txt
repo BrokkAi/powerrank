@@ -1,0 +1,62 @@
+Extend `tsnet.Server` so it can obtain a node registration auth key not only from a static auth key, but also by dynamically generating one via either:
+
+1) an OAuth client secret flow, or  
+2) workload identity federation (client ID + ID token).
+
+### Functional requirements
+
+#### 1) `tsnet.Server` configuration and environment fallbacks
+Add support for three new server-provided credentials:
+
+- `ClientSecret`: OAuth client secret used to mint auth keys.
+- `ClientID`: client ID used for workload identity federation.
+- `IDToken`: identity provider token used for workload identity federation.
+
+Each value, when non-empty on the `Server`, must take precedence over its corresponding environment variable:
+
+- `TS_CLIENT_SECRET`
+- `TS_CLIENT_ID`
+- `TS_ID_TOKEN`
+
+Static auth keys continue to come from `Server.AuthKey` or `TS_AUTH_KEY` as before.
+
+#### 2) Centralized auth key resolution
+When `tsnet.Server` starts, it must resolve the final auth key via a single flow that:
+
+- Starts from the current “raw” auth key value (static key if present).
+- If the OAuth-based auth key resolver hook is available, attempts to resolve through it:
+  - If a static auth key is present, pass that value to the resolver (it may itself be an OAuth client secret string).
+  - Otherwise, use the configured OAuth client secret.
+  - Errors from this step must be returned immediately.
+- If, after the OAuth step, there is still no auth key and the workload-identity resolver hook is available, attempt workload identity federation:
+  - Only proceed when *both* client ID and ID token are present.
+  - If exactly one of them is set, return a descriptive error.
+  - Pass the control URL along with the identity inputs and tags to the resolver.
+  - Errors from this step must be returned.
+- If neither resolver applies (or both are unavailable), the resolved auth key is whatever static auth key was provided (possibly empty).
+
+This logic must ensure that workload identity federation is only attempted when no auth key has been determined yet.
+
+#### 3) Enable federated-identity registration support in `tsnet`
+Ensure `tsnet` includes the feature registration needed for workload identity federation so the corresponding resolver hook can become available when built with that feature.
+
+#### 4) OAuth client secret optional attributes parsing
+In `feature/oauthkey`, support client secret strings that may include optional URL query attributes appended to the secret (e.g. `...?ephemeral=false&preauthorized=true&baseURL=...`).
+
+Implement attribute handling so that:
+
+- Only `ephemeral`, `preauthorized`, and `baseURL` are accepted.
+- Unknown attributes cause an error.
+- Boolean attributes must parse as valid booleans; invalid values cause an error.
+- Defaults are:
+  - `ephemeral = true`
+  - `preauthorized = false`
+  - `baseURL = https://api.tailscale.com`
+- The client secret value used for OAuth must be the secret **without** any appended query attributes.
+- Auth key generation via OAuth must continue to require non-empty tags when using an OAuth client secret (i.e., values that indicate an OAuth client secret rather than a static auth key).
+
+A helper responsible purely for parsing/validating these optional attributes should be available for unit testing.
+
+### Notes
+- The new behavior must be exercised through the existing hook mechanism used for auth key resolution.
+- The updated tests include cases for precedence, error handling, and correct selection between OAuth vs workload identity federation.

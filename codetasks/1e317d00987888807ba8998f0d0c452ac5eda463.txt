@@ -1,0 +1,42 @@
+Introduce a configuration-driven switch for “extra scrape metrics” and deprecate the existing feature-flag pathway.
+
+### Goal
+Prometheus should allow enabling/disabling the additional per-scrape time series (`scrape_timeout_seconds`, `scrape_sample_limit`, `scrape_body_size_bytes`) via configuration, both:
+
+- globally (under `global:`), and
+- per scrape job (under each `scrape_configs:` entry),
+
+with per-job settings overriding the global value. The default must remain disabled unless explicitly configured.
+
+### Required functional changes
+
+1. **Configuration schema and defaults**
+   - Extend `config.GlobalConfig` to support a YAML option `extra_scrape_metrics` with a default of `false`.
+   - Extend `config.ScrapeConfig` to support the same YAML option, but allow it to be unset so it can inherit from the global value.
+   - Ensure both global and per-scrape effective values are always resolved during config loading/validation (i.e., `ScrapeConfig.Validate(...)` should end up with an explicit effective value).
+   - Update “zero value” logic where applicable so the presence/absence of this new field doesn’t incorrectly affect “is empty” checks.
+
+2. **Runtime behavior (scraping)**
+   - The scrape loop must decide whether to emit/store these extra metrics based on the **effective scrape config value**, not on a scrape-manager option/feature flag.
+   - Add/adjust a small helper on `ScrapeConfig` (e.g. `ExtraScrapeMetricsEnabled()`) to encapsulate checking the effective setting and make call sites readable.
+
+3. **Feature flag migration**
+   - The `--enable-feature=extra-scrape-metrics` flag must be treated as **deprecated**:
+     - It should no longer directly toggle scrape behavior.
+     - Instead, it should only affect the **default** for the new config setting (so that users relying on the flag still get the same outcome when they don’t set `extra_scrape_metrics` in config).
+     - Emit a deprecation warning indicating the flag will become a no-op in a future version and that users should set `extra_scrape_metrics` in the config instead.
+
+4. **Feature reporting**
+   - Where Prometheus reports enabled scrape features (via the feature registry used by `scrape.NewManager`), “extra scrape metrics” should be considered enabled as a feature capability (since it is no longer gated by a feature flag), while the actual on/off behavior remains controlled by configuration.
+
+5. **Documentation and metadata updates**
+   - Update configuration documentation to describe:
+     - `global.extra_scrape_metrics` (default `false`)
+     - `scrape_configs[].extra_scrape_metrics` (default inherits from global)
+   - Update feature flag documentation to mark `extra-scrape-metrics` as deprecated in favor of the new config option.
+   - Adjust any repository metadata/test fixtures that capture default feature/config snapshots accordingly (e.g., JSON fixtures that reflect feature defaults).
+
+### Compatibility expectations
+- Existing configs without the new field must behave exactly as before (extra scrape metrics off by default).
+- Setting `extra_scrape_metrics` at either level must deterministically control whether the extra time series are produced for that job.
+- Using the deprecated CLI feature flag must still result in extra scrape metrics being enabled by default unless overridden in the config.

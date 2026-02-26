@@ -1,0 +1,43 @@
+Implement support for sharing a worker’s thread pool across multiple scheduler connections by introducing an explicit “ready subscription” handshake and refactoring how tasks are handed off to worker threads.
+
+### Protocol / wire format
+Extend the engine wire protocol to add a new `WorkerSubscribeMessage`:
+- Update `pkg/engine/internal/proto/wirepb/wirepb.proto` so `MessageFrame.kind` includes `worker_subscribe = 11` (and regenerate/update the generated Go bindings accordingly).
+- Update the scheduler wire layer (`pkg/engine/internal/scheduler/wire/...`) so:
+  - `WorkerSubscribeMessage` exists as a first-class `Message` type with its own `MessageKind`.
+  - The protobuf codec can encode/decode it (both directions).
+- Update comments/semantics: a worker must send a `WorkerReadyMessage` in response to a `WorkerSubscribeMessage` once at least one worker thread is available; the subscription is satisfied by the next ready signal (i.e., it is not a permanent stream of events).
+
+### Scheduler behavior
+Modify the scheduler so it actively requests a “ready notification” from workers instead of assuming it can always rely on unsolicited ready messages:
+- After handling `WorkerHelloMessage`, the scheduler should send a `WorkerSubscribeMessage` to that worker connection to request notification when a thread becomes available.
+- When task assignment fails due to “no threads available” / too-many-requests semantics, the scheduler should:
+  - treat it as a backoff case (as before),
+  - and re-subscribe by sending another `WorkerSubscribeMessage` so it will be notified again when capacity returns.
+
+### Worker behavior and thread sharing
+Refactor the worker so thread availability is global to the worker process, not tied to a single scheduler connection:
+- The worker must handle incoming `WorkerSubscribeMessage` from any connected scheduler by arranging for that scheduler to receive a `WorkerReadyMessage` once any worker thread becomes available.
+- When a `TaskAssignMessage` arrives:
+  - If there is a ready thread waiting to accept work, the task should be delivered to exactly one thread.
+  - If there is no ready thread, the worker must reject the assignment with an error that is interpreted as HTTP `StatusTooManyRequests` by the scheduler (matching existing “backoff” behavior).
+- Ensure cancellation/shutdown does not deadlock: if a thread stops waiting for work, pending senders must be unblocked appropriately.
+
+This requires introducing an internal coordination mechanism between threads (“I’m ready to run a task”) and scheduler connections (“here is a task assignment”). Implement it in `pkg/engine/internal/worker` as a reusable manager that allows:
+- worker threads to block waiting for a job,
+- scheduler-handling goroutines to attempt to deliver a job only when a thread is waiting,
+- and scheduler-handling goroutines to wait until at least one thread is ready before sending `WorkerReadyMessage` after a subscription.
+
+Update `pkg/engine/internal/worker/thread.go` to use this shared coordination mechanism rather than a per-connection request/response channel.
+
+### Metrics
+Add worker metrics and expose them at the engine worker level:
+- Add worker-scoped metrics for:
+  - total tasks assigned,
+  - task execution duration.
+- Add a Prometheus collector that reports the number of worker threads by state (`idle`, `ready`, `busy`).
+- Expose `RegisterMetrics` / `UnregisterMetrics` on both the internal worker and the public `pkg/engine/worker.go` wrapper.
+- Register these metrics from the Loki module initialization (`pkg/loki/modules.go`) and ensure they are unregistered when the worker service stops/fails.
+
+### Tests
+The updated and existing tests (including scheduler/codec tests and the new worker coordination tests) must pass, so the behavior must be correct across message encoding/decoding, scheduler subscription semantics, task assignment/backoff flow, and worker thread coordination.

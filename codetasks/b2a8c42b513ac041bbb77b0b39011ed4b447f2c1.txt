@@ -1,0 +1,27 @@
+Implement correct LSP semantic-token encoding for tokens that span multiple lines, taking into account the client capability `textDocument.semanticTokens.multilineTokenSupport` and the negotiated position encoding (UTF-8/UTF-16/UTF-32).
+
+### Background / problem
+The server produces semantic tokens with ranges derived from source text. Some tokens (notably triple-quoted strings / docstrings) can span multiple lines. In LSP, semantic tokens are sent as a delta-encoded stream (`deltaLine`, `deltaStart`, `length`, …). Many clients **do not support multiline semantic tokens**; for those clients, any token that crosses a line boundary must be represented in a way the client can consume without mis-highlighting or offset corruption. Additionally, `length` must be measured in the **client’s position encoding**, not assumed to be byte length or simple slicing.
+
+### Required behavior
+1. **Single-line tokens** must continue to be encoded normally: `length` equals the difference between start and end character positions on the same line, in the negotiated encoding.
+
+2. **Multiline tokens when the client supports multiline tokens**:
+   - Encode the token as a single LSP semantic token starting at the token’s start position.
+   - The `length` must represent the full span of the token in the negotiated encoding, including content across line breaks, consistent with how positions are computed for the same encoding.
+
+3. **Multiline tokens when the client does *not* support multiline tokens**:
+   - Do not send a single token that spans lines.
+   - Instead, emit a sequence of semantic tokens that cover the same overall range but are each confined to a single line (first line: from the start character to the end of that line; middle lines: full line; last line: from column 0 to the end character).
+   - Each emitted token must preserve the original token’s type and modifiers.
+   - Delta encoding (`deltaLine`, `deltaStart`) must remain valid across the expanded sequence.
+
+4. **Correct character counting / line length in different encodings**
+   - Ensure computations for “characters between two offsets” and “length of a line” respect:
+     - UTF-8: byte count
+     - UTF-16: UTF-16 code unit count
+     - UTF-32: Unicode scalar value (`char`) count
+   - Avoid incorrect results for non-ASCII input; ASCII fast-path behavior should still be correct.
+
+### Scope
+The change should ensure semantic token generation uses correct per-encoding length calculations and handles multiline token capability differences. New end-to-end tests validate both the “multiline supported” and “multiline not supported” client scenarios via full semantic token requests.

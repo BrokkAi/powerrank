@@ -1,0 +1,34 @@
+Add support for time-based eviction to the tiered-storage remote index file cache, controlled by a new internal broker configuration.
+
+### Background
+`RemoteIndexCache` (in `storage/src/main/java/org/apache/kafka/storage/internals/log/RemoteIndexCache.java`) currently relies on a size-based eviction policy. This can allow old entries to remain cached indefinitely, especially when partitions stop being actively read/served by a broker, which leads to stale cache accumulation and poor cache behavior under backfill/read-from-replica scenarios.
+
+### Requirements
+1. **New internal config**
+   - Introduce a new internal configuration key in `storage/src/main/java/org/apache/kafka/server/log/remote/storage/RemoteLogManagerConfig.java`:
+     - Name: `remote.log.index.file.cache.ttl.ms`
+     - Type: long
+     - Default: 15 minutes (900000 ms)
+     - Valid values: `-1` or any non-negative value (reject values less than `-1`)
+   - Provide a public accessor method on `RemoteLogManagerConfig` to read this value.
+
+2. **Integrate into RemoteLogManager**
+   - When `RemoteLogManager` constructs its `RemoteIndexCache` (in `storage/src/main/java/org/apache/kafka/server/log/remote/storage/RemoteLogManager.java`), it must pass the TTL value from `RemoteLogManagerConfig` so the cache can apply time-based eviction.
+
+3. **RemoteIndexCache behavior**
+   - Extend `RemoteIndexCache` so it can be created with:
+     - a TTL in milliseconds
+     - an option to enable/disable cache stats recording
+     - an injectable time source suitable for deterministic testing (e.g., a pluggable ticker/clock)
+   - **TTL semantics**:
+     - If TTL is `-1`, time-based eviction is disabled (only size-based eviction applies).
+     - If TTL is positive, cache entries must expire based on *time since last access* (sliding expiration).
+     - Expiration must interact correctly with size-based eviction (both policies may apply).
+   - Ensure existing constructors remain usable and preserve previous behavior when TTL is not provided.
+
+4. **Config validation tests**
+   - The broker config validation tests have already been updated to include the new property and reject invalid values (non-numeric and values less than `-1`).
+
+### Notes
+- The cache eviction mechanism must remove entries via the cache’s standard eviction process (not via manual removal logic), so file cleanup/removal listeners continue to behave correctly.
+- The implementation should enable deterministic time advancement in unit tests without relying on real wall-clock time.

@@ -1,0 +1,33 @@
+### Problem: Fix remote-write resharding under backpressure and restore queue-level tracking
+
+A regression was introduced in Prometheus remote-write that can cause **resharding (scaling up shards) to stall when the remote-write queue is constantly full**, potentially leading to a deadlock or permanent failure to scale up. This is most visible when the remote endpoint is slow and the queue capacity is small.
+
+Your task is to adjust the remote-write implementation so that **resharding can still make progress even when shards are saturated**, while also restoring/maintaining the metrics and internal tracking needed by the shard calculation logic.
+
+#### Context and expectations
+
+Remote-write uses `storage/remote` queue managers to batch and ship samples/exemplars/histograms. It periodically recalculates a “desired shards” value based on recent ingest and send rates and a notion of backlog derived from timestamps. Recent refactoring moved some of that tracking around, which broke assumptions in the sharding logic.
+
+You must:
+
+1. **Ensure shard resharding logic can scale up reliably under sustained full-queue conditions** (slow remote endpoint + tiny queue capacity), without blocking indefinitely.
+2. **Restore correct shard calculation inputs** that were previously tracked per queue manager, including:
+   - A meaningful “incoming data rate” signal that continues to advance over time (and isn’t dependent on enqueue success).
+   - Accurate backlog/delay estimation based on the highest timestamp *received* versus highest timestamp *successfully sent*.
+   - Correct behavior when data is being dropped (e.g., due to series references missing), so shard calculations aren’t skewed as if that data were still pending.
+3. **Keep the remote-write metrics surface consistent with the expectations of the tests**, including metrics used to observe desired shard counts and timestamp progress.
+
+#### Concrete areas involved
+
+- `storage/remote/queue_manager.go` contains the shard sizing logic (`calculateDesiredShards`) and tracks rate/backlog signals used by resharding decisions.
+- `storage/remote/write.go` contains the write storage and appender path (including timestamp tracking during `Commit`) and is responsible for maintaining the “incoming” signal used by shard sizing.
+- The end-to-end test in `cmd/prometheus/main_test.go` exercises a real Prometheus process with a slow remote endpoint and asserts that the system can still increase `prometheus_remote_storage_shards_desired` beyond the initial value.
+
+#### Key behaviors your fix must preserve
+
+- The “highest received timestamp” must reflect data arriving via the appender path (not merely successfully enqueued/sent data).
+- Shard sizing must not treat dropped data as pending backlog; calculations should reflect only data that can actually be sent.
+- Any periodic/rate-based inputs used by shard sizing must continue to update even when enqueue operations are failing or blocked due to a full queue.
+- Shutdown/cleanup must not leak goroutines or keep tickers running after close.
+
+Implement the necessary changes so that the newly added deadlock regression test passes and all existing remote-write/queue manager tests continue to pass.

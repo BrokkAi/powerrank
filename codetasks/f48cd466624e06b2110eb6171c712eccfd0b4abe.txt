@@ -1,0 +1,45 @@
+Implement support for “subdomain resolving” MagicDNS entries gated by a new node capability.
+
+### Background
+The DNS system currently supports:
+- `Hosts`: exact-name MagicDNS records mapping FQDN → IPs
+- “authoritative” behavior for certain suffixes via `LocalDomains`/routes
+
+You must extend this so that *some* MagicDNS hostnames can also answer for any of their subdomains (including multi-label subdomains), e.g. if `node.tailnet.ts.net.` is enabled for subdomain resolution, then `anything.node.tailnet.ts.net.` and `a.b.node.tailnet.ts.net.` resolve to the same IPs as `node.tailnet.ts.net.`.
+
+### Requirements
+
+#### 1) New node capability
+Add a new `tailcfg.NodeCapability` constant:
+- Name: `dns-subdomain-resolve`
+- Identifier in code: `NodeAttrDNSSubdomainResolve`
+- Semantics: when present on a node (self or peer), subdomains of that node’s MagicDNS name should resolve to the node’s IPs.
+
+#### 2) DNS configuration plumbing
+Extend the DNS configuration types so the “subdomain-resolve” behavior can be expressed and propagated:
+- Add a field to the DNS config representing a set of FQDNs (drawn from `Hosts`) that should act as wildcard parents for subdomain queries.
+- Ensure any cloning/view layers that mirror `dns.Config` remain correct and consistent with the new field.
+- Ensure the DNS manager passes this new configuration through to the resolver configuration it compiles.
+
+#### 3) Populate config from netmap
+When building DNS config from a `netmap.NetworkMap`:
+- Continue populating `Hosts` for self and peers as before.
+- Additionally, if self has the new capability enabled (via the appropriate “all caps”/self capability mechanism), include self’s MagicDNS FQDN in the new “subdomain hosts” set.
+- For each peer, if that peer’s capability map contains the new capability, include the peer’s MagicDNS FQDN in the set.
+
+#### 4) Resolver behavior for subdomain queries
+In the local resolver logic that answers from `Hosts`:
+- Exact-name resolution must continue to work unchanged.
+- If a queried name does not exist in `Hosts`, the resolver must attempt to find a parent domain (repeatedly) that is present in the “subdomain hosts” set; if found, answer using that parent’s `Hosts` IPs.
+- This must work for deeply nested subdomains (multiple labels).
+- If no eligible parent is found, normal local authoritative behavior (e.g. NXDOMAIN for names under local suffixes that aren’t known) must remain consistent with existing semantics.
+
+#### 5) DNS name utility: parent domain
+Add a utility on `dnsname.FQDN` to obtain the parent domain by removing the leftmost label:
+- Example: `foo.bar.baz.` → `bar.baz.`
+- For root or single-label domains (e.g. `.`, `com.`), return the empty FQDN.
+- This should integrate cleanly with existing `dnsname.FQDN` conventions (notably trailing-dot normalization).
+
+### Notes
+- The new behavior is opt-in per node via the capability; nodes without it must not wildcard-resolve their subdomains.
+- The “subdomain hosts” set is a configuration concern: it should not create additional `Hosts` entries, only change how lookups behave when an exact match is absent.

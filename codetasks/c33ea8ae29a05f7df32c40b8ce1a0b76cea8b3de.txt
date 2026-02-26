@@ -1,0 +1,92 @@
+### Goal
+
+Reverse import lookup (e.g., “which files reference this file?”) is currently too expensive because it effectively forces a full import-resolution pass across the whole project to populate a reverse cache. Change the implementation to use a **two-phase approach**:
+
+1. **Cheap, text-based pre-filtering** to quickly discard files that cannot possibly import a given target file.
+2. **Expensive resolution** only for the remaining candidate files, populating the reverse cache as needed.
+
+This must be implemented in a way that preserves correctness: the pre-filter **must not produce false negatives** (it may produce false positives).
+
+---
+
+### Required API / Behavior
+
+#### 1) Add a conservative import pre-filter hook on the analyzer base
+Introduce a new method on `TreeSitterAnalyzer` used for pre-filtering:
+
+- A default implementation should be conservative (i.e., safe if not overridden).
+- Provide an overload that receives the **source file** in addition to its parsed `ImportInfo` list, to support language-specific rules where imports are implicit.
+
+The pre-filter answers: **“Could the imports in `sourceFile` plausibly refer to `target`?”**  
+It is explicitly allowed to return `true` when unsure.
+
+#### 2) Replace reverse import population strategy
+Update reverse lookup (the logic used by `referencingFilesOf(ProjectFile file)` in the shared `TreeSitterAnalyzer` implementation) so that it no longer requires pre-populating reverse imports for every file in the project.
+
+Instead:
+
+- Gather candidate files by running the new `couldImportFile(...)` check against each file’s import statements.
+- Only for those candidates, trigger the normal (expensive) forward import resolution so the reverse cache is populated for the queried target.
+- Return the reverse-cache result for the target file once candidates have been resolved.
+
+---
+
+### Language-specific pre-filter rules
+
+Implement `couldImportFile` overrides where appropriate. These checks are *heuristics*, but must avoid false negatives.
+
+#### C++ (`CppAnalyzer`)
+- Only treat `#include "..."` (quoted includes) as candidates for project files.
+- Ignore `#include <...>` (angle-bracket includes), treating them as external/system headers.
+- Match should be based on normalized relative paths and should allow suffix matching (e.g., `"utils/helper.h"` matching a target at `src/utils/helper.h`).
+
+#### Go (`GoAnalyzer`)
+- Match imports by **package directory**, not by `.go` filename.
+- Parse import path literals from import statements (including aliased/blank identifier forms).
+- Use conservative path-segment matching between the imported package path and the target’s directory path.
+- Avoid treating standard-library imports as matching project files.
+
+#### Java (`JavaAnalyzer`)
+- Determine the target’s package from its declarations.
+- Consider:
+  - Explicit imports (`import a.b.C;`)
+  - Wildcard imports (`import a.b.*;`)
+  - Static imports (`import static a.b.C.M;`)
+  - Static wildcard imports (`import static a.b.C.*;`)
+  - Nested type imports (`import a.b.Outer.Inner;` should still count as potentially referencing `Outer.java`)
+- Matching should account for cases where the target type name appears as a parent segment in the imported path (e.g., static member import referencing the owning class file).
+- Add a **source-aware overload**: Java has implicit visibility within the same package, so if source and target are in the same package (including default package), `couldImportFile(sourceFile, ...)` must treat the target as potentially importable even with no explicit import statements.
+
+Additionally, adjust Java import parsing so the `ImportInfo.identifier` reflects the last segment of the import target (including static member imports), as downstream logic relies on that.
+
+#### JavaScript/TypeScript (`JsTsAnalyzer` / `TypescriptAnalyzer`)
+- Only consider **relative module specifiers** (`./...` or `../...`) as potentially referencing project files.
+- Treat non-relative imports (e.g., package imports like `"lodash"`) as external and not candidates for project files.
+- Matching should handle common TS/JS resolution patterns:
+  - Import path without extension resolving to a file with a known extension.
+  - Importing a directory resolving to that directory’s `index` module.
+
+#### Python (`PythonAnalyzer`)
+- Compare imports against the target’s resolved module/package qualified name.
+- Support both `import X` and `from X import Y` forms.
+- Support relative imports beginning with dots:
+  - Resolve them relative to the source file’s package location when possible.
+  - If relative resolution cannot be determined, the heuristic must remain conservative (i.e., do not incorrectly return `false`).
+- Consider cases where the imported identifier combines with the module path to form the target module (e.g., `from pkg import utils` matching `pkg/utils.py`).
+
+---
+
+### Java reverse lookup nuance (same-package references)
+Java files can reference types in the same package without import statements. Reverse lookup should reflect that: for a target Java file, same-package files should be considered “referencing” only if they actually use identifiers declared by the target (avoid blindly including every same-package file).
+
+---
+
+### Tree parsing / caching robustness
+There is existing behavior where `treeOf(file)` may return `null`. Update the behavior so that when a tree is missing but needed during analysis, the analyzer attempts to parse that file **on-demand**, and ensures the result is cached such that it will be available after the next `update()`.
+
+---
+
+### Constraints
+- The pre-filter must be **sound** (no false negatives).
+- It should be **cheap** (string-based; no full resolution during filtering).
+- All existing import resolution behavior must continue to work; the change is about optimizing reverse lookup and adding targeted heuristics.

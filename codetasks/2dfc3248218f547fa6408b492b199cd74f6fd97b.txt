@@ -1,0 +1,20 @@
+### Problem: Make histogram bucket iterators resilient to invalid span/bucket data
+
+In `model/histogram`, several bucket iterators assume that histogram `Spans` precisely match the number of underlying bucket entries. With corrupted or malformed histograms (e.g., data read from disk that doesn’t match the expected invariants), those assumptions can lead to runtime panics such as “index out of range” during iteration.
+
+Update the iterators so that iteration never panics when span metadata and bucket arrays are inconsistent.
+
+#### Required behavior
+
+When iterating buckets:
+
+- If the span metadata describes **more buckets than are actually present** in the corresponding bucket slice, the iterator must **terminate cleanly** (i.e., `Next()` returns `false`) rather than panicking.
+  - Missing buckets do **not** need to be surfaced as an error; simply stop iterating once bucket data is exhausted.
+- If there are **more buckets than spans describe**, the iterator should naturally **ignore the extra buckets** (since spans define what is iterated), and still terminate normally.
+
+This robustness is required for:
+- Float histogram bucket iteration, including cases where iteration involves schema/target-schema logic and/or merging behavior.
+- Reverse iteration over float histogram buckets (ensure span traversal cannot underflow the span index).
+- Regular and cumulative bucket iteration for the integer histogram type.
+
+The change should be limited to correctness/safety: iterators should keep their existing semantics for valid histograms, while avoiding panics for invalid ones.

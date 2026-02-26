@@ -1,0 +1,51 @@
+Implement wildcard TLS certificate support in the local certificate issuance flow (`ipn/ipnlocal/cert.go`) while preserving the existing exact-domain behavior.
+
+### Required behavior
+
+1. **Domain formats accepted by certificate APIs**
+   - `GetCertPEMWithValidity(ctx, domain, minValidity)` must accept:
+     - an exact node cert domain (e.g. `node.ts.net`)
+     - an explicit wildcard form covering single-level subdomains (e.g. `*.node.ts.net`)
+   - Requests for concrete subdomains like `app.node.ts.net` must be rejected (callers must request `*.node.ts.net` explicitly if they want subdomain coverage).
+
+2. **Wildcard capability gate**
+   - Wildcard requests are only allowed when the node has the `NodeAttrDNSSubdomainResolve` capability.
+   - If a wildcard is requested without this capability, return an error indicating wildcard certs aren’t enabled for the node.
+
+3. **Netmap-based validation and resolution**
+   - Replace the existing “is this domain allowed” check with a resolver that:
+     - validates the request against the current netmap’s `DNS.CertDomains`
+     - returns the *certificate domain to request* (exact or wildcard)
+   - Error cases must include:
+     - missing/empty domain
+     - no netmap available
+     - account/node has no `CertDomains` (TLS certs unsupported)
+     - invalid domain not in the allowed set, and for wildcard requests, invalid parent/base domain
+
+4. **Storage key and renewal tracking**
+   - Certificate storage and renewal tracking must continue to use a stable key derived from the base domain:
+     - exact: `node.ts.net` → stored/tracked as `node.ts.net`
+     - wildcard: `*.node.ts.net` → stored/tracked as `node.ts.net`
+   - This ensures wildcard and non-wildcard forms do not create separate files/entries.
+
+5. **CSR contents for wildcard certificates**
+   - When requesting a wildcard certificate, the CSR must include **both**:
+     - the wildcard name (`*.node.ts.net`)
+     - the base domain (`node.ts.net`)
+   - The base-domain SAN is required so cached-certificate verification keyed by the base domain succeeds.
+
+6. **ACME order authorization identifiers**
+   - For exact certificates, authorize only the exact domain identifier.
+   - For wildcard certificates, authorize **both** the wildcard identifier and the base domain identifier.
+
+7. **DNS challenge name for wildcard**
+   - DNS-01 challenges must be set on the base domain’s `_acme-challenge` name (i.e. derived from the identifier with any `*.` prefix removed), so wildcard challenges use `_acme-challenge.node.ts.net`.
+
+8. **Input sanity checks**
+   - Update `validLookingCertDomain` to allow only the specific wildcard form `*.` at the beginning (no embedded `*`, no nested wildcards, and the remaining portion must still look like a domain).
+   - All existing non-wildcard validations must remain intact.
+
+9. **TLS cert status endpoint**
+   - Any handler that reports certificate status by domain should treat `*.domain` as the same underlying stored certificate as `domain` (i.e., normalize appropriately before lookup).
+
+The updated implementation should support issuing and renewing wildcard certs when permitted, while keeping existing exact-domain issuance and caching semantics unchanged.

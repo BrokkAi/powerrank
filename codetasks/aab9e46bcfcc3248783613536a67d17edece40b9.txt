@@ -1,0 +1,56 @@
+Implement query splitting support in **querytee** by introducing a middleware-based request pipeline for *read/query* endpoints, while keeping the existing “fan out raw HTTP to backends” behavior for *write* endpoints.
+
+### Required behavior and public API changes
+
+1. **Export the engine router middleware in the Loki queryrange package**
+   - In `pkg/querier/queryrange/engine_router.go`, rename the constructor to be exported:
+     - `NewEngineRouterMiddleware(...)` (and update all internal call sites and tests accordingly).
+   - This middleware is used by querytee to split a single range query into multiple time segments and route each segment to different downstream handlers.
+
+2. **Introduce a queryrangebase.Handler implementation that fans out to multiple backends**
+   - Add a handler (in querytee) implementing `queryrangebase.Handler` which:
+     - Encodes the decoded queryrange request back into an HTTP request using a `queryrangebase.Codec`.
+     - Sends the request concurrently to multiple backends.
+     - Returns the *preferred backend* response to the caller as soon as it is available (subject to preferred-backend failure handling).
+     - Still collects non-preferred backend responses asynchronously for optional comparison and Goldfish sampling.
+     - Supports backend filtering (a backend may opt out for a given URL).
+     - Records per-backend request duration and response-count metrics using existing querytee metrics.
+
+3. **Support “non-decodable” error responses**
+   - When a backend response cannot be decoded into the typed response, querytee must still be able to return an error to the client while preserving the original status/body for observability/forwarding.
+   - Add a minimal `queryrangebase.Response` implementation for error cases (status code + body) and ensure it can be encoded/handled by the proxy endpoint code path.
+
+4. **Goldfish: add query splitting configuration and update the manager API**
+   - Extend Goldfish configuration to include:
+     - `ComparisonMinAge` (duration): when `> 0`, enables query splitting based on recency.
+     - `ComparisonStartDate` (date): optional; older-than-this data should not be compared (only queried on the preferred backend).
+   - Update validation accordingly.
+   - Update Goldfish manager to:
+     - Expose getters for the above fields.
+     - Replace the old “process query pair” entrypoint with a method that accepts two lightweight backend-response payloads (status/body/duration/trace/span/backend name) and performs response capture + comparison internally.
+     - Keep the existing persistence/comparison behavior intact.
+   - Ensure user extraction from query tags is available externally (exported helper), since querytee will use it when logging/annotating requests.
+
+5. **Create a handler factory that enables splitting only when configured**
+   - Build a small factory component in querytee that creates the correct `queryrangebase.Handler` for a route:
+     - If Goldfish is not enabled or `ComparisonMinAge == 0`, use the fan-out handler directly (legacy behavior, but via the typed handler pipeline).
+     - If `ComparisonMinAge > 0`, wrap the preferred-backend downstream handler with the exported engine-router middleware such that:
+       - Recent data (newer than “now - ComparisonMinAge”) goes only to the preferred backend.
+       - The “compare window” portion (eligible time range) is routed to the fan-out handler so both backends are queried and compared.
+       - Data older than `ComparisonStartDate` (when set) is treated as preferred-backend-only.
+     - Metric range queries must apply step-alignment middleware where required so split boundaries align correctly.
+
+6. **ProxyEndpoint: use typed handlers for read/query routes, but keep raw fanout for write routes**
+   - Update the querytee HTTP endpoint implementation to support two modes:
+     - **Read/query mode**: decode incoming HTTP requests via the Loki queryrange codec into `queryrangebase.Request`, choose the appropriate handler (logs vs metrics), execute it, and encode the typed response back to HTTP.
+       - Detect whether the query is a metric query vs log query and route to the metric handler when appropriate.
+       - Preserve original incoming HTTP headers across the decode/encode cycle (the codec does not retain all custom headers).
+       - When the handler returns an error alongside a “non-decodable response”, return the original backend status/body to the client.
+     - **Write mode**: keep the existing raw forwarding behavior (writes cannot be decoded into a `queryrangebase.Request`), including filters and preferred-backend logic.
+   - Ensure Goldfish integration works in both flows: in typed read mode, Goldfish sampling/comparison is driven by the fan-out handler; in write mode, it remains driven by the existing raw path.
+
+7. **Comparator interface alignment**
+   - Ensure querytee and goldfish comparison plumbing consistently uses a comparator interface that compares raw response bodies and can return a structured summary (including “skipped” and “missing metrics” counts), so metrics can be recorded when enabled.
+
+### What to deliver
+Update/introduce the necessary querytee components (fan-out handler, handler factory, non-decodable response support, proxy endpoint integration) and the Goldfish manager/config changes, plus the exported engine router middleware constructor, so the full suite of provided tests (including newly added query splitting tests) pass.

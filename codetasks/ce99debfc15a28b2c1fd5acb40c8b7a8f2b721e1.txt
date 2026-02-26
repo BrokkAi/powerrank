@@ -1,0 +1,53 @@
+Implement a refactor of persisted Tree-sitter analyzer snapshots to improve load/save performance, reduce snapshot size, and make future format changes safer.
+
+### Goals
+
+1. **Switch snapshot compression from GZIP to LZ4 (frame format)**
+   - Snapshot files are currently stored as Jackson Smile-encoded blobs compressed with GZIP.
+   - Replace this with LZ4 frame compression.
+   - Update the expected on-disk naming convention so per-language snapshot files use the extension **`.bin.lz4`** (instead of legacy `.bin.gz` / `.bin.gzip`).
+   - Ensure snapshot persistence remains **atomic** (write to a temp file then move/replace), and does not leave temp files behind after success/failure.
+
+2. **Introduce schema versioning for persisted analyzer state**
+   - Add a lightweight SemVer utility (under the existing `ai.brokk.util.Version` type) to parse and compare `MAJOR.MINOR.PATCH` strings.
+   - Add an optional `schemaVersion` field to the serialized AnalyzerState DTO used by `TreeSitterStateIO`.
+   - Define a “current schema version” constant in `TreeSitterStateIO`.
+   - Loading rules:
+     - If `schemaVersion` is missing (legacy snapshots), accept the snapshot as “unversioned”.
+     - If the snapshot’s schema **major version differs** from the current major version, treat it as incompatible and ignore it (load returns empty).
+     - Minor/patch mismatches are acceptable for now; provide a migration hook that can be extended later.
+
+3. **Treat import/type-hierarchy graphs as cache rather than authoritative persisted state**
+   - Persist only the structural analyzer state needed to reconstruct these graphs (e.g., file/code-unit properties that already contain the underlying information).
+   - Do **not** serialize authoritative ImportGraph and TypeHierarchyGraph data into the new DTO schema.
+   - When loading:
+     - If graphs are absent (new-format snapshots), initialize them as empty/“cache-only”.
+     - If graphs are present in legacy snapshots, still be able to interpret them and populate the in-memory structures so older persisted files can be read.
+
+4. **Add a purge routine for persisted analyzer snapshot files during explicit refresh**
+   - When the user triggers an explicit “refresh code intelligence” / full rebuild, delete any persisted analyzer snapshot files for the project’s analyzer languages before rebuilding.
+   - This must remove:
+     - Current-format per-language `.bin.lz4` snapshots
+     - Legacy `.bin.gz` and `.bin.gzip` snapshots that may still exist alongside the new files
+   - The deletion routine should be best-effort: log failures but do not abort the rebuild.
+   - Add this capability to the analyzer wrapper interface so implementations can override it, with a no-op default.
+
+### Required behavioral details (by component)
+
+- **`Language.getStoragePath(...)`**
+  - Update the returned path so it points to a stable per-language file ending in `.bin.lz4` under the project’s `.brokk` directory.
+
+- **`TreeSitterStateIO`**
+  - Update `save(...)` and `load(...)` to use LZ4 frame streams around the Smile payload.
+  - Add schema management as described above and ensure `schemaVersion` is written when saving.
+  - Keep backward compatibility with older serialized representations that may still contain fields for imports/reverseImports/supertypes/subtypes, including older list/map shapes.
+  - Maintain the existing “return empty on corrupt/unreadable snapshot” behavior (e.g., truncated files, malformed content).
+
+- **`AnalyzerWrapper` / wrapper API**
+  - Add an API surface to delete persisted analyzer state files.
+  - Ensure that an explicit refresh path invokes this purge prior to rebuilding analyzers.
+
+- **Dependencies**
+  - Add the LZ4 library dependency used for frame input/output streams.
+
+The end result should be a drop-in replacement for snapshot persistence that prefers `.bin.lz4` going forward, can still read older snapshot variants where reasonable, and safely rejects incompatible major schema versions.

@@ -1,0 +1,29 @@
+Implement support for returning a user’s **license information independently of subscription data**.
+
+### Required behavior
+
+1. **New VNext billing endpoint**
+   - Add a new `GET` endpoint under the VNext account billing controller (`src/Api/Billing/Controllers/VNext/AccountBillingVNextController.cs`) that returns the current user’s license information.
+   - The endpoint must use the existing user-injection pattern (the controller already uses `[InjectUser]` elsewhere in the codebase) and return an HTTP 200 response with a typed response body.
+
+2. **License query operation**
+   - Introduce a query abstraction in Core Billing that can be invoked by the controller to obtain the license response for a given `User`.
+   - The query must:
+     - Generate the user license via the existing user licensing flow (already present in Core services).
+     - When possible, parse/derive a `ClaimsPrincipal` from the generated license using the existing licensing service.
+     - Produce a response object suitable for API output.
+
+3. **API response model for license**
+   - Create a dedicated response model for the license payload (in Core Billing license models) that:
+     - Contains the generated `UserLicense`.
+     - Exposes an `Expiration` value.
+     - Uses the expiration from the license token’s claims when a token is present/parsable (i.e., when a `ClaimsPrincipal` is available), and only falls back to the license file’s expiration when claims are not available.
+     - Identifies itself as a response model with an appropriate type/name for “license” responses (consistent with other `ResponseModel` usage in the codebase).
+
+4. **Dependency injection registration**
+   - Ensure the new query operation is registered in the Billing service collection so it can be resolved at runtime.
+   - Wire this registration into the existing Billing DI setup (`src/Core/Billing/Extensions/ServiceCollectionExtensions.cs`) without breaking existing registrations.
+
+### Constraints
+- Existing subscription-related behavior and older billing controller tests must remain compatible.
+- The new endpoint and query must be testable using the provided test suite (including both the existing controller tests and the newly added VNext controller tests).

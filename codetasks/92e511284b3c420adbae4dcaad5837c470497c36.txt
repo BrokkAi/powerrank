@@ -1,0 +1,35 @@
+Implement support for an updated “prelogin” response contract in the Identity service while keeping the existing prelogin route usable.
+
+### Goal
+The prelogin endpoint must return KDF configuration in both:
+1) the legacy flat fields (`Kdf`, `KdfIterations`, `KdfMemory`, `KdfParallelism`), and  
+2) a new nested object (`KdfSettings`) that carries the same information.
+
+Additionally, the response must include a `Salt` value which, for now, is simply the email value supplied in the request.
+
+### API surface changes
+- Introduce a new POST endpoint under `AccountsController` at `prelogin/password` intended for password-based prelogin.
+- Keep the existing `prelogin` POST route available for backward compatibility, but mark it as obsolete and ensure it behaves identically to the new route (same logic, same output fields).
+
+### Request/response models
+- Replace the previous prelogin request/response models with password-specific equivalents:
+  - `PasswordPreloginRequestModel` (email-based request, same validation constraints as before).
+  - `PasswordPreloginResponseModel` which:
+    - exposes the legacy KDF fields (nullable is acceptable for the migration period), and
+    - exposes `KdfSettings` (using the existing `KdfSettings` type in the Core key management area),
+    - exposes `Salt` populated from the request email.
+
+The legacy and new representations must be consistent with each other (i.e., the flat fields and `KdfSettings` must describe the same KDF configuration).
+
+### KDF lookup and defaulting
+The controller must continue to determine KDF configuration as follows:
+- Look up `UserKdfInformation` by email via the user repository.
+- If no user is found, compute a default KDF configuration:
+  - If no default HMAC key is configured, use the PBKDF2 default.
+  - If a default HMAC key is configured, select the default KDF result deterministically based on an HMAC-SHA256 of the normalized email, using the existing list of default KDF results.
+
+### Data model update
+`UserKdfInformation` in `Core/Models/Data` must treat `Kdf` and `KdfIterations` as required (non-optional) properties so consumers can safely construct response data from it.
+
+### Compatibility requirement
+Both routes (`prelogin` and `prelogin/password`) must produce the same response structure and values for the same input, including the new fields (`KdfSettings` and `Salt`).

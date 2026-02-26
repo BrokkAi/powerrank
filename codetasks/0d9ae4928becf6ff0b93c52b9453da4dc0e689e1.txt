@@ -1,0 +1,44 @@
+Implement support for “follower fetch from last tiered offset” by extending the fetcher/leader endpoint APIs and wiring them through the local and remote leader implementations.
+
+### 1) Fetcher decision hook
+Add a new decision point to the fetcher thread abstraction so replication code can decide, per `TopicPartition`, whether a follower should start fetching from the leader’s “last tiered” position rather than from offset 0.
+
+* Extend `kafka/server/AbstractFetcherThread.scala` with a protected method:
+  * `shouldFetchFromLastTieredOffset(topicPartition, leaderEndOffset, replicaEndOffset): Boolean`
+* Provide concrete implementations in fetcher thread subclasses used by tests:
+  * `kafka/server/ReplicaFetcherThread.scala`: implement the policy using broker config + per-log properties (remote log enabled / compaction). The intended behavior is that this is only enabled when the broker setting for this feature is on, remote storage is enabled for the partition, the topic is not compacted, the replica is starting from the beginning (end offset is 0), and the leader actually has data (leader end offset is non-zero).
+  * `kafka/server/ReplicaAlterLogDirsThread.scala`: implement as disabled (`false`).
+  * Test-only fetcher threads (e.g. `MockFetcherThread`) must compile and allow tests to control the return value.
+
+### 2) New LeaderEndPoint API: earliest pending upload offset
+Extend the leader endpoint contract to allow a follower to ask the leader where replication should begin when using the tiered-storage-aware bootstrap behavior.
+
+* Update `server/src/main/java/org/apache/kafka/server/LeaderEndPoint.java` with:
+  * `fetchEarliestPendingUploadOffset(TopicPartition topicPartition, int currentLeaderEpoch): OffsetAndEpoch`
+
+Implement it in both leader endpoint variants used in unit tests:
+
+#### a) Remote leader endpoint
+In `kafka/server/RemoteLeaderEndPoint.scala`, implement the method by issuing a `ListOffsets` request using the dedicated timestamp for “earliest pending upload” and returning the resulting `OffsetAndEpoch`.
+
+#### b) Local leader endpoint
+In `kafka/server/LocalLeaderEndPoint.scala`, implement logic for a local leader to compute the earliest offset that is pending upload for a remote-log-enabled partition:
+
+* If remote log storage is not enabled for the partition, return a sentinel `OffsetAndEpoch(-1, -1)`.
+* Otherwise compute a valid offset/epoch based on:
+  * The leader’s known “highest offset in remote storage” (if any), and
+  * The partition’s earliest offset (log start offset) and local-early offset information.
+* The returned `OffsetAndEpoch` must be consistent with the leader’s epoch cache for the chosen offset, and it must gracefully handle cases where the leader cannot determine a trustworthy pending-upload offset (returning the sentinel in that case).
+
+### 3) Update mocks / helpers for compilation
+Tests rely on mock implementations of the leader endpoint and partition state.
+
+* Extend `kafka/server/MockLeaderEndPoint.scala` to implement `fetchEarliestPendingUploadOffset` and to track any additional per-partition state needed to answer it.
+* Ensure any existing mock fetcher/manager scaffolding compiles with the new abstract methods, and return appropriate defaults where the feature is not exercised.
+
+### 4) Configuration and topic settings integration
+The new behavior depends on:
+* A broker-level flag controlling whether follower fetch from last tiered offset is enabled.
+* Per-topic/per-log settings that determine whether remote log storage is enabled and whether the topic is compacted.
+
+Your implementation must obtain and use these from the existing configuration/log objects (as used throughout the server codebase), so that the new policy and offset API behave correctly across different topic configurations.

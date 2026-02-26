@@ -1,0 +1,33 @@
+### Problem: improve “desperate” import resolution for test-style layouts
+
+`ty` has a module resolver that normally resolves imports using configured search paths (e.g., `src/`, project root, environment roots). When an import can’t be resolved through those normal paths, the resolver falls back to a “desperate” strategy that tries additional search paths derived from the importing file’s location.
+
+This exercise updates that fallback strategy so that absolute imports used from common `tests/` layouts resolve reliably **without** requiring `tests/` to be added as a source root by configuration or heuristics.
+
+#### What needs to change
+
+1. **Separate desperate resolution into two distinct concepts:**
+   - **Absolute desperate search paths**: used when resolving *absolute* imports like `import bar` or `from bar import baz`.
+   - **Relative desperate search paths**: used only for determining the module identity of a file (and therefore how to interpret relative imports like `from .setup import x`).
+
+2. **Absolute desperate search path rule**
+   - When resolving an absolute import from a file under a first-party search path, the resolver should consider *multiple* candidate fallback search paths.
+   - These candidates are derived by walking upward through ancestor directories (from closest ancestor to farthest), but **must exclude directories that are regular Python packages** (i.e., directories containing `__init__.py` or `__init__.pyi`), to avoid “truncating” real packages.
+   - The search must be bounded so it does not escape the relevant first-party root.
+
+3. **Relative desperate search path rule**
+   - For relative-import handling, keep a **single** “best” desperate root based on project boundaries: the closest ancestor directory that contains `pyproject.toml` or `ty.toml`.
+   - This is used when determining a file’s module name (the step that turns a relative import into an absolute module name internally), not as a general-purpose fallback for resolving arbitrary absolute imports.
+
+4. **Behavioral consequence to support**
+   - `tests/` should no longer need to be auto-added as an environment root purely because it exists and is not a package.
+   - Absolute imports from within `tests/` that rely on Python/pytest-like behavior (where test directories are effectively on `sys.path`) should be resolvable via the improved absolute desperate search-path logic instead.
+
+#### Where this shows up in the code
+
+- The module resolver entry points involved in:
+  - resolving module names for imports, and
+  - mapping a file path to a module identity (for relative import interpretation)
+- The environment/root inference logic that previously treated `./tests` specially should no longer be required for correctness with these tests.
+
+Implement the new desperate-resolution behavior so that both the updated and existing test suites pass, including workspace/monorepo scenarios and test-directory import patterns.

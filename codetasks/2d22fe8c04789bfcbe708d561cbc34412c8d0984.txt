@@ -1,0 +1,35 @@
+### Problem: Refactor analyzer signature storage from persisted state to a transient cache
+
+The Tree-sitter–based analyzers currently treat rendered function/class “signatures” (the strings used to build skeleton output) as part of the persisted per-`CodeUnit` snapshot state. This causes persisted snapshots to bloat and makes incremental updates more expensive than necessary.
+
+Refactor the analyzer so that **rendered signatures are no longer stored in the immutable, serialized `AnalyzerState` snapshot**, and are instead managed as **transient, in-memory cache data** that can be preserved across incremental updates when files are unchanged.
+
+#### Required behavior changes
+
+1. **Remove signatures from persisted per-code-unit state**
+   - `TreeSitterAnalyzer.CodeUnitProperties` should no longer include signature lists.
+   - Any logic that merges or filters persisted per-code-unit state should only handle the remaining structural data (e.g., children, ranges, `hasBody`).
+
+2. **Introduce/extend a transient cache entry for signatures**
+   - `AnalyzerCache` must expose a cache for `CodeUnit -> List<String>` signatures.
+   - The cache should be considered in `AnalyzerCache.isEmpty()` and included in any cache snapshot representation if one exists.
+
+3. **Populate and read signatures via the cache**
+   - During file analysis, collect signatures as part of the per-file analysis result and write them into the analyzer’s cache.
+   - `TreeSitterAnalyzer.signaturesOf(CodeUnit)` must read from the transient cache as the primary source.
+   - When signatures are absent (e.g., after loading a snapshot from disk), signature lookup should degrade gracefully to an empty list while still allowing other structural rendering to proceed.
+
+4. **Preserve signatures across incremental updates**
+   - When `update(...)` produces a new analyzer snapshot, unchanged files’ signature entries must be carried forward into the new analyzer instance.
+   - Signatures associated with changed files must be invalidated and recomputed from re-analysis.
+   - The cache transfer should defensively copy signature lists to avoid sharing mutable list instances between snapshots.
+
+5. **Maintain backward compatibility for older persisted snapshots**
+   - `TreeSitterStateIO` must be able to load older snapshot payloads that still contain legacy fields (including signatures inside code-unit properties).
+   - The DTO shape used for persistence should no longer include signatures, but deserialization must ignore unknown/extra fields so older files can still be read without errors.
+   - Saving should not write signatures into the persisted state.
+
+6. **Documentation alignment**
+   - Update analyzer architecture documentation/comments to reflect that large “presentation” data like rendered signatures belongs in the transient `AnalyzerCache`, while `AnalyzerState` remains compact and structural.
+
+The end result should keep snapshot persistence compact, allow recomputation of signatures when needed, and ensure incremental updates keep signatures for unchanged files without reprocessing them.

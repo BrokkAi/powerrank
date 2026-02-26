@@ -1,0 +1,34 @@
+Enhance `ContextAgent` so that, in addition to recommending source files and classes, it can also recommend *related test/spec files* and include them in the produced context as *summaries/skeletons* (not full file contents).
+
+### Required behavior changes
+
+1. **LLM tool contract extension**
+   - Update the context-recommendation tool exposed by `ContextAgent` to accept and record a third category: **test/spec/e2e/integration file paths**.
+   - The tool must support returning:
+     - files to add (full file contents / editable files),
+     - classes to summarize,
+     - tests to add (included as summary/skeleton only).
+   - Update prompt/tool documentation text accordingly, including the requirement that paths must match those provided (no invented paths).
+
+2. **Recommendation data model**
+   - Extend the internal recommendation result structure used by `ContextAgent` to carry a distinct collection for **recommended test files** in addition to recommended files and classes.
+   - Ensure all existing flows that create/merge/filter recommendations correctly propagate this new category.
+   - Make token usage accumulation and reasoning concatenation null-safe and stable when combining partial results.
+
+3. **Fragment assembly rules**
+   - When building context fragments from the final recommendation:
+     - Recommended **files** must continue to be included as path/content fragments (current behavior).
+     - Recommended **classes** must continue to be included via summary fragments (current behavior).
+     - Recommended **tests** must be included as **`SummaryFragment` entries of type `FILE_SKELETONS`**, keyed by the file’s relative path identifier.
+   - Apply de-duplication and filtering rules:
+     - Do not add test fragments for files that are already present in the workspace context.
+     - Do not add test fragments for items that are already selected as full files to add (if the same path is recommended as both file and test, it should appear only once, as a file/path fragment—not as a test skeleton).
+     - Classes whose source file is included (either as a full file or as a test fragment) should not be redundantly recommended as class summaries.
+
+4. **Token budgeting robustness**
+   - `ContextAgent` must be resilient to models that do not provide a default completion token budget (i.e., `maxCompletionTokens()` may be null). In that case, use a conservative fallback so initialization and budgeting cannot throw.
+
+5. **Test support hook**
+   - Provide a way for unit tests to assemble context fragments directly from a set of recommended files/tests/classes and existing workspace files, using the same production logic used for normal recommendations.
+
+The changes should be implemented so that the updated `ContextAgentTest` suite passes, while preserving compatibility with pre-existing behavior and older tests.

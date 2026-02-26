@@ -1,0 +1,36 @@
+Refactor the coordinator runtime so shard-scoped components (the timer and asynchronous executor) no longer depend directly on the full `CoordinatorRuntime` API, while preserving the existing threading and cancellation semantics.
+
+### Goals
+
+1. **Introduce a shard-scoped scheduling abstraction**
+   - Add a small interface (in `coordinator-common/src/main/java/org/apache/kafka/coordinator/common/runtime`) that allows components tied to a shard to schedule a *write operation* back onto the runtime/event loop without knowing anything else about the runtime.
+   - The interface must return a `CompletableFuture<Void>` representing completion/failure of the scheduled write.
+
+2. **Update `CoordinatorExecutorImpl` to use the scheduler**
+   - Remove its direct dependency on `CoordinatorRuntime` and shard identity details it previously stored.
+   - Keep the existing behavior:
+     - Only one task per key can be active; scheduling a new one replaces the previous.
+     - A task can be cancelled before execution or after execution but before the corresponding write operation runs.
+     - The completion write operation must receive both the task’s result and any exception it threw.
+     - Failures while scheduling the write operation must clean up internal state so the key is no longer considered scheduled.
+   - Adjust generics accordingly (the executor should no longer need the shard type parameter).
+
+3. **Extract the event-based timer into a standalone implementation**
+   - Create a new `CoordinatorTimerImpl` (under the same runtime package) implementing the existing `CoordinatorTimer` contract.
+   - It must bridge Kafka’s `Timer`/`TimerTask` to the coordinator runtime by converting timer expiry into a scheduled write operation via the new scheduler interface.
+   - Preserve key properties of the previous timer behavior:
+     - Timers are keyed; rescheduling with the same key overrides the previous timer and guarantees the old one will not execute its operation even if it already expired.
+     - Timers can be cancelled individually and en masse.
+     - If the scheduled write fails:
+       - Certain “coordinator not active” failures (e.g. `NotCoordinatorException`, `CoordinatorLoadInProgressException`) are ignored (no retry).
+       - Other failures may trigger retry when enabled, using a configurable backoff (and a default backoff when not explicitly provided).
+     - Internal bookkeeping for scheduled timers must be cleaned up reliably, including when the scheduler returns a failed future without ever running the supplied operation.
+
+4. **Wire the refactor into `CoordinatorRuntime` shard state**
+   - Replace the old nested timer implementation with the new `CoordinatorTimerImpl`.
+   - Instantiate both the timer and executor using shard-scoped scheduling functions that route write operations back through the runtime in the correct shard scope.
+
+### Compatibility constraints
+
+- All existing public contracts in the coordinator runtime package should remain coherent (types, names, and behaviors), but internal dependencies should shift from “runtime-aware” to “scheduler-aware”.
+- Both the existing executor tests and the newly added timer tests must compile and pass, which requires correctly updating method signatures, generics, and exception/cancellation handling semantics throughout the refactor.

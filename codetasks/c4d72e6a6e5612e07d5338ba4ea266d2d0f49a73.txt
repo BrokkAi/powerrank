@@ -1,0 +1,40 @@
+Implement C/C++ import handling and unify the C/C++ language definition around the tree‑sitter–based C++ analyzer.
+
+The goal is that C/C++ code is analyzed via a single `C/C++` language configuration backed by the existing `CppAnalyzer`, and that `#include` directives are treated as imports which can be both extracted as raw statements and resolved to other files and their declarations within the project.
+
+### Requirements
+
+1. **Import capture from tree‑sitter**
+
+   - Introduce a dedicated capture name for import/include declarations (e.g. for `#include` directives) and wire it into the generic tree‑sitter analysis pipeline.
+   - Update the C++ tree‑sitter queries so that C/C++ preprocessor include directives are captured as import declarations.
+   - When asked for a file’s import statements, the analyzer must return one entry per `#include` directive in that file, with each entry containing the full source text of that directive line (including any trailing comments).
+
+2. **C/C++ import resolution**
+
+   - Make the C++ analyzer provide import analysis (via the existing import analysis interfaces in the codebase).
+   - Implement resolution of C/C++ `#include` directives as imports:
+     - Only **quoted** includes (e.g. `#include "header.h"`) are resolved to project files.
+     - **Angle‑bracket** includes (e.g. `#include <vector>`) are treated as system headers and must not resolve to any project file or code units.
+   - For quoted includes:
+     - Resolve the included path relative to the including file’s directory.
+     - Normalize the resulting path and ensure it does not escape the project root. Any include that would resolve outside the project must be ignored for resolution.
+     - Only consider a resolved file as valid if it is part of the project as seen by the analyzer (i.e. it has declarations/top‑level code units known to the analyzer).
+     - For a given including file, `importedCodeUnitsOf` must return the set of `CodeUnit`s declared in all successfully resolved included files.
+   - The implementation must be robust against invalid include paths and against comments or additional text following the include (including quotes inside comments).
+
+3. **Reverse import lookup**
+
+   - Implement the reverse mapping such that, given a project file, you can obtain all other project files that reference it via resolvable quoted `#include` directives.
+   - This should be exposed through the existing reverse import lookup API (e.g. `referencingFilesOf`), using the same resolution rules as above.
+
+4. **C/C++ language definition unification**
+
+   - Introduce a dedicated `Language` implementation for C/C++ that:
+     - Represents the unified `C/C++` language.
+     - Uses the existing `CppAnalyzer` for analysis and state loading/saving.
+     - Covers the appropriate C/C++ file extensions (including both typical C and C++ source and header extensions).
+     - Provides the same search patterns for functions and classes that were previously used for C/C++ in this project.
+   - Make this unified `C/C++` language the single C/C++ language exposed from the `Languages` registry and ensure that all places that previously used the tree‑sitter specific C++ language now use this unified C/C++ language instead.
+
+All existing behaviour for C/C++ analysis (parsing, symbol extraction, update logic, state persistence) must continue to work under the new unified language and with the new import handling.

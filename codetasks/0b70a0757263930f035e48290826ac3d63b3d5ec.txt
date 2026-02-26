@@ -1,0 +1,104 @@
+### Goal
+
+Introduce a TSDB-side implementation of the **`storage.AppenderV2` ingestion API** (plus supporting metadata semantics and feature flags), while keeping the existing append flow functional. The end result must satisfy both the newly provided tests and any pre-existing tests.
+
+---
+
+### Required functional changes
+
+#### 1) Metadata semantics (`model/metadata/metadata.go`)
+Extend the `metadata.Metadata` type with:
+
+- `IsEmpty() bool`  
+  Returns `true` only when the metadata carries no meaningful information (including the “unknown” metric type case).
+
+- `Equals(other Metadata) bool`  
+  Compares metadata **semantically**, treating “unknown” and empty type as equivalent. Unit/help must match exactly.
+
+A new unit test file validates this behavior.
+
+---
+
+#### 2) DB-level AppenderV2 entrypoint (`tsdb/db.go`)
+Add a new DB method:
+
+- `func (db *DB) AppenderV2(ctx context.Context) storage.AppenderV2`
+
+It must wrap the Head’s V2 appender similarly to how the existing `Appender` wraps the Head’s v1 appender.
+
+On `Commit()`, the wrapper must trigger head compaction scheduling when the head becomes compactable (same behavior as the v1 wrapper).
+
+The wrapper must also support `storage.GetRef` when the wrapped appender supports it.
+
+---
+
+#### 3) Head feature flags (`tsdb/head.go`)
+Extend `HeadOptions` with two feature flags:
+
+- `EnableSTAsZeroSample`  
+  Controls whether “start timestamp” (`st`) can be ingested by emitting a synthetic “zero sample” at `st` before the real sample.
+
+- `EnableMetadataWALRecords`  
+  Controls whether per-series metadata updates can be recorded via the append path.
+
+These options are exercised by V2 ingestion tests.
+
+---
+
+#### 4) Head AppenderV2 (`tsdb/head_append_v2.go` and shared logic)
+Implement **`storage.AppenderV2` for `Head`**.
+
+Key requirements:
+
+- `Head` must expose:
+  - `func (h *Head) AppenderV2(context.Context) storage.AppenderV2`
+- When the head is not initialized yet, return an init-wrapper that:
+  - Initializes head time bounds on the first appended sample timestamp
+  - Lazily creates the real underlying appender
+
+- Provide a V2 appender implementation whose primary entrypoint matches the V2 API:
+  - Accepts float samples and native histograms through a single `Append(...)` method.
+  - Supports exemplar ingestion via options (`storage.AOptions`) rather than separate exemplar calls.
+  - Supports optional per-sample metadata ingestion via options (`storage.AOptions.Metadata`).
+
+- V2 appends must enforce the same correctness constraints as TSDB ingestion:
+  - Out-of-bounds handling
+  - Out-of-order handling, including fast rejection based on options
+  - Duplicate handling consistent with existing TSDB behavior (including float-vs-histogram timestamp conflicts)
+  - Stale markers must be handled correctly (including the “stale float becomes stale histogram” optimization behavior when applicable)
+
+- Exemplars:
+  - Must be ignored when exemplar storage is disabled.
+  - When exemplar validation fails, exemplar-specific failures must be returned as a **partial append error** (not as a full sample append failure), and duplicates must not fail the append.
+
+- Metadata:
+  - Only processed when `EnableMetadataWALRecords` is enabled.
+  - Must be skipped when empty (`IsEmpty()`).
+  - Must only emit a metadata record when the series metadata is actually changing (using semantic comparison rules).
+
+- Start timestamp as zero sample (`EnableSTAsZeroSample`):
+  - When enabled and an `st` is provided, attempt to append a synthetic “zero sample” at time `st` appropriate to the sample kind (float / histogram / float histogram).
+  - This behavior must be **best-effort**: errors must not fail the primary sample append.
+  - `st >= t` must be treated as invalid and ignored in this best-effort path.
+  - The synthetic sample must use counter-reset semantics for histogram types.
+
+---
+
+#### 5) Internal refactor to share commit/logging machinery (`tsdb/head_append.go`)
+The V2 appender should reuse existing Head append machinery for batching, WAL logging, committing, and rollback, rather than duplicating it.
+
+To enable that, refactor the existing head appender so that common state and operations can be shared between v1 and v2 implementations (without changing externally visible v1 behavior). The existing commit/rollback/WAL interactions must remain correct.
+
+---
+
+### Compatibility constraints
+
+- Existing v1 append code paths must remain usable and consistent.
+- Both v1 and v2 appenders must correctly maintain head metrics and appender lifecycle accounting (active appenders, etc.).
+- WAL behavior must remain valid for series creation, samples, histograms, exemplars, tombstones, and (when enabled) metadata.
+
+---
+
+### What you’ll be given
+
+The harness will provide the updated/added tests from this change set. Your task is to implement the necessary production code so all tests pass.

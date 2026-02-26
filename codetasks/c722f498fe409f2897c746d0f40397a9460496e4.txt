@@ -1,0 +1,26 @@
+Implement expanded `flake8-bugbear` rule **B901 (`ReturnInGenerator`)** detection so it correctly flags `return <value>` in generator-like functions, including cases where `yield` / `yield from` appears **inside larger statements or expressions** (not only as a standalone expression statement).
+
+### Required behavior
+
+1. **Synchronous generators (regular `def`)**
+   - Continue to report **B901** when a function both:
+     - contains at least one `yield` or `yield from` anywhere in its body (including nested inside expressions like `return (yield)`, argument lists, assignments, etc.), and
+     - contains a `return` statement **with a value**.
+   - The analysis must **not** treat `yield` occurrences inside nested scopes as belonging to the outer function (e.g., nested `def`, `class`, and lambda bodies should not influence the enclosing function’s result).
+
+2. **Asynchronous generators (`async def` containing `yield`)**
+   - Treat `return <value>` inside an async generator as a **semantic syntax error** produced by the parser’s semantic-syntax checking, surfaced to the linter as **B901** (when the rule is enabled).
+   - `return` with **no value** in an async generator must remain allowed.
+   - As with sync functions, nested scopes must not affect whether the async function is considered to contain `yield`.
+
+3. **Diagnostic plumbing**
+   - Ensure the linter can convert the new semantic syntax error kind into the existing **B901** diagnostic, honoring rule enablement.
+   - Add/extend the semantic error kind and formatting so it integrates with the existing semantic-syntax error reporting pipeline and snapshot-based tests.
+
+### Where this shows up in the codebase
+
+- The existing B901 implementation lives under `crates/ruff_linter/src/rules/flake8_bugbear/...` and currently relies on statement-level patterns; it needs to recognize `yield`/`yield from` even when embedded inside other expressions.
+- The parser’s semantic-syntax checking lives in `crates/ruff_python_parser/src/semantic_errors.rs`; it must emit a dedicated semantic syntax error for `return`-with-value in async generators.
+- The AST checker must map that semantic syntax error to the B901 violation type so the linter output matches expectations.
+
+Make the changes so that all provided fixtures and snapshot tests (including the newly added syntax-error fixture and updated B901 fixture) pass.

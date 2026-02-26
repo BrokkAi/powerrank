@@ -1,0 +1,32 @@
+Implement incremental cache transfer between `TreeSitterAnalyzer` snapshots so that an analyzer `update(Set<ProjectFile> changedFiles)` can reuse cached results for unchanged files while guaranteeing correctness for modified inputs.
+
+### Background / Goal
+`TreeSitterAnalyzer` maintains a transient cache used for lazy computations (e.g., parsed `TSTree`s, import resolution, type hierarchy data). Today, calling `update(...)` produces a fresh analyzer snapshot and effectively discards that cache. Enhance this design so that a new snapshot can receive a *filtered* copy of the previous snapshot’s cache, transferring only entries that remain valid given a set of changed files.
+
+### Required behavior
+1. **TreeSitterAnalyzer snapshot construction**
+   - Extend the snapshot creation flow so that a new analyzer snapshot can optionally be constructed with an existing `AnalyzerCache`.
+   - The `newSnapshot(...)` contract must support passing the prior snapshot’s cache (or a derived cache) into the new analyzer instance.
+   - Language-specific analyzers that override `newSnapshot(...)` must be updated to accept and forward this optional cache when creating the snapshot instance.
+
+2. **Cache transfer with invalidation**
+   - Add a cache “transfer” mechanism in `AnalyzerCache` that creates a new cache instance derived from a previous one plus `changedFiles`.
+   - The transferred cache must:
+     - Preserve entries associated with files *not* in `changedFiles`.
+     - Exclude entries associated with files in `changedFiles`.
+     - For caches keyed by `CodeUnit`, validity must be determined using the `CodeUnit`’s source file (i.e., entries originating from a changed file are invalid and must not transfer).
+
+3. **Bidirectional cache correctness**
+   - Some cached data uses a bidirectional structure (forward mapping + reverse mapping).
+   - When transferring across snapshots, only forward mappings may be reused; reverse mappings must not be carried over (they should be empty and rebuilt lazily), to avoid stale reverse lookups after incremental changes.
+   - Update the `BidirectionalCache` API and its Caffeine implementation to support explicitly inserting/copying forward entries without populating reverse state, and to ensure any stale reverse state is cleared during such a transfer.
+
+4. **Simple cache bulk copy support**
+   - Provide an API on `SimpleCache` (and its Caffeine implementation) to replace the contents of a cache with entries from another cache in one operation, suitable for snapshot transfer scenarios.
+
+5. **Update flow integration**
+   - Modify the `TreeSitterAnalyzer.update(...)` flow so that after computing the next `AnalyzerState`, it creates the filtered transferable cache from the prior snapshot and passes it into the new snapshot instance.
+
+### Notes
+- The solution must preserve correctness across incremental changes: any cached data that could be affected by modified/added/removed files must not survive into the new snapshot.
+- The cache transfer should be structural: the new analyzer snapshot must have its own cache object, populated only with safe-to-reuse entries from the previous snapshot.

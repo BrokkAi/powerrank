@@ -1,0 +1,17 @@
+Update the device-approval (“log in with device”) path used when sending a 2FA email so that validation is performed by the `AuthRequest` domain logic rather than by a dedicated “verify auth request” login feature.
+
+### Required behavior changes
+
+1. **Two-factor email send validation**
+   - In `TwoFactorController`, the branch that handles requests containing an auth-request identifier + access code (the device-approval scenario) must validate the request using `AuthRequest.IsValidForAuthentication(...)`.
+   - If the auth request is valid for the current user and the provided access code, the controller should send the 2FA email and **stop processing further branching** (i.e., don’t fall through to other 2FA send paths after a successful send).
+   - If the auth request cannot be found or is not valid, the controller must not treat it as authenticated for this flow.
+
+2. **Consolidate/remove obsolete verification feature**
+   - The old “login feature” abstraction used solely to verify auth requests (interface/implementation and its DI registration) is no longer used and should be removed/retired so the application compiles cleanly and no longer depends on it.
+
+3. **Auth request validity rules**
+   - Ensure `AuthRequest.IsValidForAuthentication(Guid userId, string password)` (in `Core/Auth/Entities/AuthRequest.cs`) enforces the intended authentication constraints for device approval, including correctness of the user and access code, that the request represents an approved/responded authentication, that it’s the correct auth-request type for authentication, that it is not expired, and that it has not already been consumed/used.
+
+4. **Tests**
+   - New unit tests target `AuthRequest.IsValidForAuthentication` directly. Your changes must satisfy those tests while keeping existing behavior intact elsewhere.

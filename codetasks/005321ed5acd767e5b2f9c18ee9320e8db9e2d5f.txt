@@ -1,0 +1,72 @@
+Implement hierarchical fair scheduling for the v2 engine by introducing a reusable hierarchical fair priority queue and integrating it into workflow/scheduler metadata flow.
+
+### 1) Add a hierarchical fair queue package
+Create a new generic queue type under `pkg/engine/internal/util/queue/fair` that supports **hierarchical scopes** (a scope is a path-like list of strings). The queue must provide:
+
+- A `Scope` type (slice of strings) with:
+  - `String()` returning the path joined by `/`
+  - `Name()` returning the last element of the scope
+- A `Queue[T]` type (zero value usable) with:
+  - `RegisterScope(scope Scope) error`
+    - Registers a scope path; intermediate scopes should be created automatically if missing.
+    - Must reject empty scopes.
+    - Must return a specific error when the full scope already exists.
+  - `UnregisterScope(scope Scope) error`
+    - Removes a scope and, when a parent becomes empty and has no remaining registered children, recursively removes that parent (up to but not including the root).
+    - Must remove any queued items contained in the unregistered subtree and update queue length accordingly.
+    - Must return a specific error when the scope does not exist.
+  - `Push(scope Scope, value T) error`
+    - Enqueues a value into an existing scope.
+    - Must return a specific error when the scope does not exist.
+    - Duplicate values must be allowed.
+  - `Peek() (value T, scope Scope)` and `Pop() (value T, scope Scope)`
+    - When empty, return the zero value of `T` and a `nil` scope.
+    - `Pop` removes the returned item; `Peek` does not.
+  - `AdjustScope(scope Scope, cost int64) error`
+    - Adjusts the priority (“rank”) for the given scope and all its ancestors by `cost`.
+    - Positive cost lowers priority; negative cost increases priority.
+    - Must return a specific error when the scope does not exist.
+  - `Len() int` returning the number of queued items (not registered scopes).
+
+**Priority / fairness rules:**
+- Items are selected by traversing the scope tree, choosing the child with the lowest rank at each level; ties are broken by insertion order (earlier wins).
+- Scopes should not be considered selectable unless they (recursively) contain queued items.
+- When a previously-empty scope becomes active again (by pushing a new item somewhere under it), it must **not “jump the line”** ahead of siblings just because it retained an older low rank. At the same time, a scope with a previously high rank must not be artificially improved when it becomes active again.
+
+Define and use errors consistent with the public API needs above (missing scope name, scope exists, not found).
+
+### 2) Propagate workflow identity into manifests
+Update workflow construction and manifest creation so that each manifest carries identifying information needed for scheduling:
+
+- Extend `workflow.Options` to include:
+  - `Tenant string`
+  - `Actor []string` (a path-like representation)
+- Extend `workflow.Manifest` (in `pkg/engine/internal/workflow/runner.go`) to include:
+  - `ID` (ULID)
+  - `Tenant`
+  - `Actor`
+- Ensure the manifest gets a unique ID when a workflow is initialized, and that tenant/actor from options are recorded into the manifest.
+- Update `workflow.New` to no longer take a separate tenant argument; it should rely on `Options.Tenant` when planning/injecting streams.
+
+### 3) Integrate the fair queue into the engine scheduler
+Replace the scheduler’s existing FIFO task slice with the new hierarchical fair queue:
+
+- Scheduler must maintain a queue of `*task` keyed by a scope derived from the manifest.
+- Each task must remember the scope it belongs to.
+- When registering a manifest, the scheduler must:
+  - Derive a scope that uniquely identifies the manifest within a tenant and actor hierarchy (and include a per-manifest unique component).
+  - Register that scope in the fair queue before enqueueing tasks.
+- When unregistering a manifest, the scheduler must unregister the corresponding scope and ensure queued tasks in that subtree are no longer reachable/counted.
+- When enqueueing tasks, push each task into the queue using its scope; failure to enqueue should be handled without crashing.
+- During assignment:
+  - Select the next task using the queue’s peek semantics.
+  - Skip terminal tasks at the front by removing them from the queue until a non-terminal task is found (or the queue is empty).
+  - After a successful assignment, remove the task from the queue and apply a fairness adjustment to the task’s scope (treat each assigned task with equal cost).
+- Any scheduler metrics that previously used the slice length should now use the queue’s `Len()`.
+
+### 4) Wire tenant/actor into workflow creation and HTTP header propagation
+- Wherever workflows are built (e.g. engine and worker tests/helpers), populate `workflow.Options.Tenant`.
+- In the engine path, also populate `workflow.Options.Actor` from the request context’s actor-path extraction.
+- Ensure the actor-path header is propagated through the query middleware chain by including the relevant header in the propagation middleware configuration.
+
+The end result should make task selection fair across tenants and nested actor scopes while preserving deterministic ordering rules and correct lifecycle cleanup via scope registration/unregistration.

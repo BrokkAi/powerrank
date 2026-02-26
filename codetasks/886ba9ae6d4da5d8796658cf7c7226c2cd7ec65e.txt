@@ -1,0 +1,75 @@
+Refactor the event-integration “send” pipeline so handler results carry structured failure information (for operator visibility and retry logic) instead of ad-hoc booleans and free-form strings.
+
+### 1) Add failure categorization
+Introduce an enum representing integration failure categories used across handlers and listeners:
+
+- `ServiceUnavailable`
+- `AuthenticationFailed`
+- `ConfigurationError`
+- `RateLimited`
+- `TransientError`
+- `PermanentFailure`
+
+### 2) Redesign `IntegrationHandlerResult`
+Update the result model so it is immutable from the outside and conveys:
+
+- `Success` (true/false)
+- `Message` (the processed integration message)
+- `Category` (nullable; only set for failures)
+- `FailureReason` (nullable; only set for failures)
+- `DelayUntilDate` (nullable; used to delay retries)
+- `Retryable` computed from `Category` (no longer set manually)
+
+Provide factory methods:
+- a success factory that sets `Success=true` and leaves failure fields unset
+- a failure factory that sets `Success=false`, assigns `Category`, `FailureReason`, and optional `DelayUntilDate`
+
+Retryability rules must be category-driven:
+- retryable: `RateLimited`, `TransientError`, `ServiceUnavailable`
+- not retryable: `AuthenticationFailed`, `ConfigurationError`, `PermanentFailure`
+- success results are not retryable
+
+### 3) Centralize HTTP status classification in the integration handler base
+For handlers built on the shared base class, add a single classification function that maps `HttpStatusCode` to failure categories and is used whenever an HTTP response is not successful.
+
+Required classification behavior:
+- `401`, `403` → `AuthenticationFailed`
+- `404`, `410`, redirects (`301`, `307`, `308`) → `ConfigurationError`
+- `429` → `RateLimited`
+- `408`, `500`, `502`, `504` → `TransientError`
+- `503` → `ServiceUnavailable`
+- `501` → `PermanentFailure`
+- Any other 3xx or 4xx → `ConfigurationError`
+- Any other 5xx (and unknown/out-of-range codes) → `ServiceUnavailable`
+
+When returning a failed result from an HTTP response:
+- `FailureReason` should use `ReasonPhrase` when available, otherwise fall back to a string that includes the numeric status code.
+- If the failure is in a retryable category and the response includes a `Retry-After` header, set `DelayUntilDate` accordingly:
+  - support both “seconds” form and RFC1123 date form
+  - use the provided `TimeProvider` for “seconds” calculations
+
+### 4) Update specific handlers to emit categorized failures
+Bring non-HTTP handlers in line with the new result structure:
+
+**Slack handler**
+- Convert Slack error codes into the failure categories above (e.g., auth/token issues → `AuthenticationFailed`, missing/archived channel → `ConfigurationError`, rate limit errors → `RateLimited`, service-down errors → `ServiceUnavailable`).
+- Unrecognized Slack errors should be treated as retryable transient failures (to avoid prematurely dead-lettering new Slack error types).
+- A null Slack response should be treated as a retryable transient failure.
+
+**Teams handler**
+- When Teams calls fail, categorize failures as follows:
+  - `HttpOperationException`: classify via the shared HTTP status classifier
+  - `ArgumentException`, `UriFormatException`: `ConfigurationError`
+  - `JsonException`: `PermanentFailure`
+  - any other `Exception`: `TransientError` (retryable)
+
+### 5) Improve listener logging for dead-letter/non-recoverable outcomes
+When a message is sent to a dead-letter path (non-retryable failure or retries exhausted), update warning logs to include identifying fields (message id, integration type, organization id) and the new failure details (category + reason). The warning message prefixes must clearly distinguish:
+- non-retryable failures
+- max-retries-exceeded failures
+- (for Azure Service Bus) the combined “non-recoverable or max retries exceeded” case
+
+### 6) Keep “success” results clean
+On successful results, failure-related fields should be unset (not empty strings), and callers should not need to populate any retry fields manually.
+
+Implement these changes so the updated handlers, shared base logic, and listeners interoperate consistently with the new result model and categorization.

@@ -1,0 +1,40 @@
+Refactor the group coordinator’s deletion handling to operate at **topic** granularity instead of **partition** granularity.
+
+Kafka topic deletion removes all partitions, so the coordinator should no longer track or receive deletions as individual `TopicPartition` entries. Instead, deletion handling must be driven by **deleted topic identities** (topic ID + topic name), and offset cleanup must be safe in the presence of **topic recreation with the same name**.
+
+### Required behavior and API changes
+
+1. **Rename the shard-level deletion hook**
+   - Replace `GroupCoordinatorShard.onPartitionsDeleted(...)` with `onTopicsDeleted(...)`.
+   - The new method must accept a collection of deleted topics represented by **topic ID + topic name** (not `TopicPartition`).
+
+2. **Represent a deleted topic explicitly**
+   - Introduce a small value type in `GroupCoordinatorShard` (e.g., a record) that carries:
+     - the deleted topic’s `Uuid` (topic ID)
+     - the deleted topic’s `String` name  
+   - This representation is used during offset cleanup to avoid races with topic recreation.
+
+3. **Update offset cleanup logic**
+   - Replace `OffsetMetadataManager.onPartitionsDeleted(...)` with `onTopicsDeleted(...)` and update callers accordingly.
+   - When cleaning committed offsets, delete offsets only for:
+     - entries whose stored topic ID matches the deleted topic’s ID, **or**
+     - entries whose stored topic ID is `Uuid.ZERO_UUID` (legacy/older records without topic IDs)
+   - Offsets for a topic name must **not** be deleted if their stored topic ID corresponds to a different incarnation (i.e., same name but different ID).
+
+4. **Update metadata-delta handling in the service**
+   - In `GroupCoordinatorService`, topic deletions coming from `TopicsDelta.deletedTopicIds()` must schedule a write operation that invokes the new shard method.
+   - Build the deleted-topic list using the topic ID and the topic name available from the metadata image.
+   - The scheduled write operation name used for offset cleanup should reflect the new behavior (tests expect the updated name).
+
+5. **Share group cleanup remains topic-id based**
+   - Share-group state cleanup should continue to be triggered from the same metadata delta, using the deleted topic IDs set, but must be wired consistently with the refactor above.
+
+### Outcome
+
+After the refactor:
+- Topic deletion triggers offset tombstone generation via the new topic-based hook.
+- Offset deletion is correct for:
+  - legacy offsets (ZERO_UUID) and
+  - topic-ID-aware offsets
+- Offset deletion is safe against deleting offsets belonging to a recreated topic with the same name but a different topic ID.
+- All provided tests (including older ones still present in the harness) must compile and pass with the updated method names, types, and behavior.

@@ -1,0 +1,43 @@
+Add a new **read-only “SEARCH” execution mode** to the headless executor so callers can run repository scanning/discovery without generating code changes, while still integrating with the existing job API, CLI, and job runner pipeline.
+
+### Required behavior
+
+1. **New mode selection**
+   - The executor must recognize a new mode value `SEARCH` alongside existing modes (e.g., `ASK`, `CODE`, `ARCHITECT`, `LUTZ`, `REVIEW`).
+   - Mode is supplied the same way as other modes: via the job request tags (e.g., `"tags": { "mode": "SEARCH" }`) and via the CLI `--mode SEARCH`.
+
+2. **Scan model support**
+   - Extend the job specification payload to accept an optional `scanModel` field.
+   - SEARCH mode must use a “scan model” for scanning/searching:
+     - Prefer the explicit `scanModel` provided in the job spec when present and non-blank.
+     - Otherwise fall back to the project/service default scan model.
+   - SEARCH must ignore any code model override (no code generation model should be used for SEARCH).
+
+3. **Execution semantics**
+   - SEARCH must be **read-only**: it should not write files, produce code edits, or create diffs/commits.
+   - It should execute via the existing “search agent” style workflow used for repository exploration and summarization, producing streamed output/events consistent with that kind of agent (and not code-edit events).
+
+4. **API / server wiring**
+   - Ensure `scanModel` is carried from the HTTP job creation request into the internal job representation and into the job runner so it can be used during SEARCH execution.
+   - Job creation should continue to require `plannerModel` for request validation/uniformity, even though SEARCH uses `scanModel` for the actual scanning model selection.
+
+5. **CLI support**
+   - Update the headless exec CLI to:
+     - Accept `--scan-model`.
+     - Allow `--mode SEARCH`.
+     - Include `scanModel` in the submitted job spec JSON only when provided (non-blank).
+     - Document/communicate that `--code-model` is ignored in SEARCH mode.
+
+6. **Session import correctness**
+   - When importing an uploaded session zip, store it in the location actually used by the project/session manager (not a hard-coded path), so later session loading succeeds reliably.
+
+7. **Test environment robustness**
+   - Ensure the test setup doesn’t fail due to missing directories used by LLM logging (e.g., an `llm-history` directory under `.brokk`). The code should create required directories where appropriate so tests can write history files without errors.
+
+### Documentation updates
+Update the relevant docs to include SEARCH mode and the `scanModel` option, clarifying:
+- SEARCH is read-only.
+- `plannerModel` remains required by the API.
+- SEARCH uses `scanModel` for scanning and ignores `codeModel`.
+
+The final solution should implement these behaviors in a way that fits the existing architecture (job spec parsing, mode dispatch in the job runner, and CLI job submission), while keeping other modes and integrations intact.

@@ -1,0 +1,23 @@
+Implement header-aware serialization/deserialization support in Kafka Streams state-store serdes as part of adding “store headers in state store” plumbing.
+
+### Goal
+Extend `org.apache.kafka.streams.state.StateSerdes` so callers can serialize/deserialize keys and values while supplying Kafka `Headers`, using the `Serializer`/`Deserializer` overloads that accept headers. Preserve the existing API surface for callers that don’t provide headers, but transition it toward the new capability without breaking compatibility.
+
+### Required behavior
+- Add new overloads in `StateSerdes`:
+  - `K keyFrom(byte[] rawKey, Headers headers)`
+  - `V valueFrom(byte[] rawValue, Headers headers)`
+  - `byte[] rawKey(K key, Headers headers)`
+  - `byte[] rawValue(V value, Headers headers)`
+- These methods must delegate to the underlying serde’s serializer/deserializer methods that take `(String topic, Headers headers, ...)`.
+- Keep the existing no-headers methods (`keyFrom(byte[])`, `valueFrom(byte[])`, `rawKey(K)`, `rawValue(V)`) as usable entry points, but mark them deprecated and implement them by calling the new overloads with an empty headers instance.
+  - Use a concrete empty headers implementation consistent with Kafka clients (e.g., `RecordHeaders`).
+- Ensure error handling and exception messages for serialization type mismatches remain consistent with current `StateSerdes` behavior (the `StreamsException` wrapping on `ClassCastException` must still occur with the same message format).
+
+### Additional API/documentation adjustment
+- In `org.apache.kafka.streams.state.HeadersBytesStore`, update the parameter naming in `convertToHeaderFormat` to reflect that the bytes represent the “value+timestamp” payload, without changing semantics:
+  - Still return `null` for `null` input.
+  - Still prefix the payload with a single byte representing “empty headers”.
+
+### Compatibility considerations
+The change introduces deprecations and new overloads; internal and test code will use both old and new call shapes. Ensure the old methods continue to compile and behave correctly while routing through the new header-aware implementation.

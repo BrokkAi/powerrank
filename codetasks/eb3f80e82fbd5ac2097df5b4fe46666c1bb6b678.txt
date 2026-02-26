@@ -1,0 +1,74 @@
+## Goal
+
+Extend the ISSUE-mode execution flow to support a cancellable, iterative “final verification” loop that runs **tests then lint**, retrying with fix attempts up to a configurable limit. Also adjust ISSUE build-settings resolution and defaults to match updated behavior and documentation.
+
+## Required behavior changes
+
+### 1) ISSUE-mode final verification: test/lint retry loop
+
+Introduce a new utility in `JobRunner` for the final verification phase:
+
+- Add a dedicated exception type for cancellation in ISSUE workflows (e.g., `IssueCancelledException`), treated distinctly from ordinary failures.
+- Implement a final verification loop that:
+  - Accepts:
+    - a cancellation predicate/supplier,
+    - a progress sink callback (for attempt start/result notifications),
+    - a command runner (string command → string output),
+    - a fix-task runner (string failure output → triggers a single fix attempt),
+    - the effective build details (commands),
+    - and a max-iterations budget.
+  - Validates the iteration budget and fails fast for invalid values (with a clear exception message).
+  - For each iteration:
+    - Checks for cancellation before running work.
+    - Runs **tests first** (unless the test command is blank, in which case tests are skipped).
+    - If tests fail (non-empty output), it must:
+      - record that failure as the latest failure,
+      - notify progress via the sink,
+      - invoke exactly one fix attempt for that iteration,
+      - and **skip lint for that iteration**.
+    - If tests pass (or are skipped), runs **lint** next (unless blank → skipped).
+    - If lint fails, it must similarly invoke exactly one fix attempt for that iteration.
+    - If both stages pass (or are skipped), the loop exits immediately without further iterations.
+    - Checks for cancellation at appropriate points so cancellation can stop the loop even mid-process.
+  - If the loop exhausts all iterations without success, it must throw an `IssueExecutionException` whose message includes:
+    - that the loop failed after the configured number of iterations, and
+    - details of the **last observed failing stage** (tests vs lint), including the failing command and output when available.
+
+This loop replaces the older “final gate” logic; ensure callers use the new loop.
+
+### 2) Job cancellation handling
+
+Update `JobRunner`’s job execution error handling so that:
+
+- Cancellation is detected reliably (both via a cancellation flag and via the dedicated cancellation exception).
+- A cancelled job is persisted with a **CANCELLED** status rather than FAILED.
+- If cancellation occurs after final verification, subsequent steps such as PR creation are skipped.
+
+### 3) ISSUE build settings: spec override vs project fallback
+
+In `JobRunner`, add logic to resolve build details for ISSUE mode such that:
+
+- If the job spec contains a **non-blank** build settings JSON, it is parsed and used.
+- If build settings are absent or blank, the runner falls back to **project-level build details**.
+
+Expose this resolution as a package-visible method so it can be unit tested directly.
+
+### 4) JobSpec: defaults and “blank build settings” semantics
+
+Update `JobSpec` for ISSUE mode:
+
+- Increase the default `maxIssueFixAttempts` to **20**.
+- Allow the ISSUE factory methods to accept a nullable build settings JSON.
+- If build settings JSON is null/blank/whitespace, it must be treated as “not provided” (i.e., do not store it as an empty string, and do not emit it as a tag/field such that later retrieval returns blank instead of null).
+
+### 5) Headless CLI polish (small updates)
+
+In `HeadlessExecCli`:
+
+- Replace the hardcoded job event stream timeout with a named constant and increase it to a longer window.
+- Update help text for `--max-issue-fix-attempts` to reflect its meaning for the final verification loop and the new default value.
+
+## Notes
+
+- Keep public APIs coherent: the retry-loop method should be usable both by production code (with real notifications and task execution) and by unit tests (with lightweight lambdas).
+- Ensure existing ISSUE-mode behavior (task execution and per-task verification) remains compatible, while final verification now uses the new bounded retry loop.

@@ -1,0 +1,46 @@
+Implement a precise Java “find usages” path based on Eclipse JDT and wire it into the existing usage-finding workflow.
+
+### Goals
+
+1. **Precise Java usage detection (new JDT-based analyzer)**
+   - Add a new component under `ai.brokk.analyzer.java` named `JdtUsageAnalyzer`.
+   - It must parse and analyze Java source files using Eclipse JDT with **binding resolution enabled**, so that usages are identified by resolved symbols rather than textual patterns.
+   - It must be able to search for usages of a `CodeUnit` (class/type, method/constructor, or field/variable) within a provided set of candidate `ProjectFile`s, returning `UsageHit` objects with accurate locations and a surrounding snippet.
+   - Fully-qualified naming must be robust and consistent:
+     - Types should resolve to their qualified names (handle nested types appropriately).
+     - Methods should resolve to `DeclaringTypeFqn.methodName` (constructors included).
+     - Fields/variables should resolve to `DeclaringTypeFqn.fieldName`.
+   - Method overload matching must be supported via signatures:
+     - When the target `CodeUnit` includes a signature, only usages whose resolved method binding matches that signature should be reported.
+     - Signature formatting must follow the project’s existing conventions (erasure-based types, varargs represented as arrays, etc.).
+
+2. **Batch processing + cross-file resolution**
+   - The analyzer must efficiently process multiple files (batch AST creation) and still resolve bindings even when the candidate set is only a subset of the project’s sources (i.e., resolution must work across other project files that aren’t being searched).
+   - Non-Java files may be present in candidate sets and must not break analysis.
+
+3. **Usage attribution (“enclosing” CodeUnit)**
+   - Each `UsageHit` must include an `enclosing` `CodeUnit` representing the most relevant surrounding declaration:
+     - Prefer the enclosing method when inside a method body (including within lambdas/anonymous classes).
+     - Attribute usages in field initializers/type positions to the owning field when applicable.
+     - Otherwise fall back to the enclosing type if that’s the nearest meaningful container.
+
+4. **Exclude non-usages**
+   - Do not report hits for occurrences that are declarations.
+   - Do not report hits originating from import statements.
+
+5. **Integrate into `FuzzyUsageFinder`**
+   - Update `ai.brokk.analyzer.usages.FuzzyUsageFinder` to use the JDT-based analyzer for Java when applicable, so precise results can override the existing pattern-based searching.
+   - Add a configuration escape hatch: if the environment variable `BRK_FUZZY_USAGES_ONLY` is set, the system must skip the JDT path and use the original fuzzy/pattern-based behavior.
+   - Ensure correct behavior when the active language is a multi-language configuration: Java precise analysis should only be applied to Java files.
+
+6. **Language containment**
+   - Extend the `ai.brokk.analyzer.Language` API to support a notion of containment/equivalence (e.g., a multi-language configuration should be considered to “contain” Java).
+   - The default behavior should preserve existing semantics for single languages.
+
+7. **JavaAnalyzer signature fix for varargs with modifiers**
+   - Fix Java signature extraction in `ai.brokk.analyzer.JavaAnalyzer` for varargs parameters where the AST node includes modifiers (e.g., `final Object... args`), ensuring the parameter type is correctly identified and the resulting signature matches expected formatting.
+
+### Constraints / Expectations
+
+- The provided tests include new coverage around lambdas, anonymous classes, field initializers, overloaded methods, and cross-file binding resolution. Your implementation must satisfy those behaviors via resolved-symbol analysis rather than textual matching.
+- Public APIs and existing behavior must remain compatible with current callers; the new analyzer is an additional capability and a routing change in the usage finder.

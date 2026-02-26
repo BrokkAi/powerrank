@@ -1,0 +1,90 @@
+Implement a new experimental `pkg/memory` module that provides arena-style reusable memory regions plus small utilities built on top of it. The API and semantics must match what the tests expect.
+
+### 1) Core package: `pkg/memory`
+
+#### `type Memory`
+- Represents a contiguous byte region owned by an allocator.
+- Must expose `Data() []byte` returning the underlying byte slice.
+
+#### `type Allocator`
+An arena-style allocator that manages a set of `*Memory` regions and can reuse or release them across “reuse cycles”.
+
+Required behavior:
+- The zero value must be usable.
+- `Allocate(size int) *Memory` returns a region whose byte slice can hold **at least** `size` bytes.
+  - Prefer reusing a previously-allocated region that has been marked free and has sufficient capacity.
+  - Otherwise create a new region.
+  - Returned memory must be **64-byte aligned** (see “Alignment” below).
+- `Reclaim()` marks all tracked regions as free for reuse. After reclaiming, previously returned regions are considered invalid to use (no runtime checks required).
+- `Trim()` releases unused/free regions so they can be garbage collected.
+  - Trimming must not release regions that are currently in-use.
+  - If trimming happens after reclaiming, it should release everything.
+- `Reset()` is a convenience that performs the intended “end of cycle” cleanup by calling trim and reclaim in the correct order.
+- `AllocatedBytes() int` reports total capacity (in bytes) of all currently owned non-nil regions.
+- `FreeBytes() int` reports total capacity (in bytes) of regions currently marked free.
+
+Internally you’ll need bookkeeping to support:
+- tracking which region slots are free vs used
+- tracking nil/empty slots left behind after trimming so they can be reused rather than always appending
+
+#### Alignment
+All newly allocated byte storage returned from `Allocator.Allocate` must be aligned so that the first byte’s address is a multiple of 64. The returned slice should have `len == cap == size` for the requested size (even if larger backing storage is used to achieve alignment).
+
+### 2) Internal bitmap helper in `pkg/memory` (unexported)
+Implement a lightweight bitset type (e.g. `type bitmap []uint64`) used by the allocator:
+- `Resize(elements int)` grows/shrinks storage to hold at least `elements` bits.
+- `Size() int` reports total bit capacity.
+- `Set(index int, value bool)` sets/clears a bit; must panic on out-of-range.
+- `SetRange(from, to int, value bool)` sets/clears bits in `[from,to)`; must panic on invalid ranges.
+- `IterValues(maxIndex int, value bool)` iterates indices of bits that equal `value` (true => set bits, false => unset bits), stopping at `maxIndex`.
+  - Must be compatible with Go’s `iter.Seq[int]` style iteration.
+
+### 3) Utility package: `pkg/memory/bitmap`
+Provide an exported bitmap type storing boolean values packed into bits (LSB ordering compatible with Apache Arrow):
+- `type Bitmap` with:
+  - optional association to a `*memory.Allocator` (when absent, use Go allocation)
+  - internal storage as a byte slice where `len(data) == cap(data)` is maintained to avoid repeated reslicing costs
+  - logical length tracked in bits
+- Constructors:
+  - `WithAllocator(alloc *memory.Allocator) Bitmap`
+  - `FromValues(alloc *memory.Allocator, values ...bool) Bitmap`
+- Operations:
+  - `Append`, `AppendUnsafe`
+  - `AppendCount`, `AppendCountUnsafe` (panic for negative count)
+  - `AppendValues(values ...bool)`
+  - `Set(i int, value bool)` / `Get(i int) bool`
+  - `Grow(n int)` (panic on negative; ensure amortized growth, at least doubling)
+  - `Resize(n int)` (panic on negative; grow if needed)
+  - `Len()`, `Cap()`, `Clone()`, `Bytes() []byte`
+- When allocating underlying storage:
+  - The allocated byte length must be padded up to a multiple of 64 bytes.
+  - If an allocator is used, obtain memory via it and use the allocator-backed byte slice.
+
+Use Apache Arrow’s `bitutil` helpers for bit operations.
+
+### 4) Utility package: `pkg/memory/buffer`
+Implement a typed, contiguous growable buffer backed by allocator-owned bytes.
+
+- `type Buffer[T any]` created via `Make[T](alloc *memory.Allocator) Buffer[T]`
+  - Must store elements contiguously using underlying `*memory.Memory`.
+- Required methods:
+  - `Grow(n int)` grows capacity to fit at least `n` additional elements, using allocator memory.
+    - Growth strategy must at least double capacity when growing.
+    - Underlying byte allocation size must be padded to a 64-byte boundary.
+    - When growing, existing contents must be preserved.
+  - `Resize(n int)` changes length via slicing; should panic if slicing is invalid.
+  - `Push(value T)`, `Append(values ...T)`, `AppendCount(value T, n int)`
+    - These should rely on slice bounds behavior; exceeding capacity must fail as expected.
+  - `Set(i int, value T)`, `Get(i int) T`
+  - `Len()`, `Cap()`, `Data() []T`
+  - `Serialize() []byte` returns the underlying written bytes, padded to 64 bytes, and must zero any padding bytes beyond the written length before returning. If the buffer has never allocated, return `nil`.
+- You will need unsafe casting between `[]byte` and `[]T`.
+
+### 5) Internal helpers
+Add small internal packages:
+- `pkg/memory/internal/memalign` with `Align(int) int` and `Align64(uint64) uint64` that round up to the next multiple of 64.
+- `pkg/memory/internal/unsafecast` with:
+  - `Sizeof[T any]() uintptr`
+  - `Slice[From, To any](in []From) []To` to reinterpret slice storage without copying, scaling length/capacity appropriately.
+
+The implementation must compile across the module and satisfy the provided tests for allocator behavior, bitmap behavior (both internal and exported), buffer growth/serialization, alignment, and accounting.

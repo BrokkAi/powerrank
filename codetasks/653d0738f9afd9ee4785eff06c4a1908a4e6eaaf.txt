@@ -1,0 +1,31 @@
+### Problem: eliminate private key material from `netmap.NetworkMap` and adjust related APIs
+
+The current codebase treats `types/netmap.NetworkMap` as a broadly shared, read-only snapshot of network state. However, it currently includes node private key material, which forces many callers and debug paths to defensively redact it. This exercise updates the design so that `NetworkMap` never contains private keys, and private key handling is kept only where it is actually required (e.g., WireGuard configuration).
+
+Implement the following behavioral/API changes so the provided tests pass:
+
+#### 1) `NetworkMap` must not carry private key material
+- Remove the node private key field from `types/netmap.NetworkMap`.
+- Ensure no other private key types are reachable anywhere inside `NetworkMap` (including nested fields). A reflection-based test will validate that `NetworkMap` contains no instances of private key types.
+
+#### 2) WireGuard config generation must receive the private key explicitly
+- Update the `wgengine/wgcfg/nmcfg.WGCfg` API to accept the node private key as an explicit parameter rather than reading it from the `NetworkMap`.
+- Update all call sites accordingly.
+- Where the private key is sourced from preferences/persistence, ensure it is only used if it corresponds to the node public key in the netmap; otherwise it must be treated as absent/zero.
+
+#### 3) IPN bus “no private keys” option is deprecated (and must be a no-op)
+- The `ipn.NotifyNoPrivateKeys` watch option must no longer be relied upon for security or redaction; it is now a no-op and should not affect permissions or redaction behavior.
+- Update callers that previously set this flag to reflect the new reality (they should not depend on it to safely receive notifications).
+
+#### 4) Notifications must not leak private keys via Prefs/Persist
+- Ensure that outgoing `ipn.Notify` values sent to watchers (and any extension hook paths that can observe notifications) do not include private key material embedded in preferences persistence (e.g., node private keys, old node private keys, network-lock keys, hardware attestation keys).
+- The stripping must apply consistently to all notification emission paths used by the backend.
+
+#### 5) Debug netmap endpoints should no longer perform special redaction for netmap keys
+- Any code that existed solely to redact the `NetworkMap` private key in debug/JSON paths should be removed or updated, since the netmap no longer contains that key.
+- Debug netmap responses must still support field-omission behavior as before, but without netmap-private-key redaction logic.
+
+#### 6) Local API WatchIPNBus permissions must not hinge on `NotifyNoPrivateKeys`
+- The local API endpoint that serves `/watch-ipn-bus` must no longer require write/admin privileges solely because the client didn’t request private key redaction. Access control should be based on the endpoint’s read/write permission configuration rather than this flag.
+
+The change is intentionally “ripple-y”: removing private key material from `NetworkMap` requires updating downstream configuration generation and ensuring all notification surfaces are safe by construction rather than by optional redaction flags.

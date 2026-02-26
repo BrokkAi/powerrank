@@ -1,0 +1,49 @@
+Extend the existing per-request query-limits propagation so that, in addition to the numeric `QueryLimits` overrides, callers can also attach *query context* describing the broader query/range that should be used when enforcing byte-read limits.
+
+### New capability: “query limits context”
+Introduce a new lightweight context payload (in `pkg/util/querylimits`) that can be propagated alongside the existing `QueryLimits`:
+
+- A struct (e.g. `Context`) containing:
+  - the full query expression string
+  - a `from` time
+  - a `to` time
+- It must be serializable/deserializable as JSON.
+- It must be propagated via:
+  - HTTP headers (a new header key distinct from the existing `X-Loki-Query-Limits`)
+  - gRPC metadata (a new metadata key distinct from the existing query limits key)
+  - in-process `context.Context` (separate storage key from the existing `QueryLimits` value)
+
+### API adjustments for existing request limits
+The existing “limits in context” helpers should be clarified to distinguish “limits” from “limits context” (e.g. rename extract/inject helpers so it’s unambiguous which one returns `*QueryLimits` vs the new `*Context`). Update all call sites accordingly.
+
+### HTTP middleware
+Update the querylimits HTTP middleware to:
+- continue extracting/injecting the existing `QueryLimits` header
+- additionally extract/inject the new “query limits context” header into the request context
+- treat malformed “query limits context” headers as non-fatal (log/warn and proceed without it)
+
+### gRPC interceptors
+Update querylimits gRPC propagation to:
+- inject both payloads (when present) into outgoing metadata
+- extract both payloads (when present) from incoming metadata and place them into the server context
+- keep behavior correct when either/both are absent
+
+### Query request marshalling/unmarshalling
+In the queryrange request wrapping/unwrapping code, ensure both payloads are carried through the internal request metadata map:
+- When wrapping: encode and add both the `QueryLimits` and the new “query limits context”, each under its own metadata key.
+- When unwrapping: decode both (if present) and inject them into the returned `context.Context`.
+
+### HTTP codec propagation (queryrange)
+When encoding queryrange HTTP requests, ensure both payloads are added to the outgoing HTTP headers (each under its own header key).
+
+### Limit enforcement change: max query bytes read
+Update the query-size limiting logic (`pkg/querier/queryrange/limits.go`) so that when enforcing “max query bytes read” it can use the propagated *query limits context*:
+
+- Compute bytes-read for the actual request query over the request time range.
+- If a query limits context is present *and* it includes a non-empty expression and a non-zero time range, compute bytes-read for that context query/range as well.
+- Use the larger of the two byte estimates as the effective “bytes read” value for enforcement.
+
+The change must integrate with existing stats lookups and syntax parsing behavior, and must keep all existing query-size limiter behavior intact when no context is provided.
+
+### Miscellaneous
+There is also a small build/Makefile cleanup included in the change set; apply it as required by the provided file list.

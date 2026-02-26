@@ -1,0 +1,55 @@
+Implement support for a new “preview invoice” surface in the Billing API and add Premium→Organization upgrade proration previewing, while updating the existing upgrade flow to be consistent with Stripe’s proration/tax behavior and to use the provided billing address.
+
+### 1) Replace the legacy tax preview controller with a preview-invoice controller
+Create a new controller at `src/Api/Billing/Controllers/PreviewInvoiceController.cs` that exposes the same organization/premium tax preview operations previously served under `billing/tax`, but now under `billing/preview-invoice`, using request models in a new `PreviewInvoice` request namespace.
+
+The controller must:
+- Remain application-authorized.
+- Support organization purchase/plan-change/update tax previews (organization routes include the organization injection behavior).
+- Support premium subscription purchase tax preview.
+- Add a new Premium upgrade proration preview endpoint that injects the current user and returns a proration summary (prorated amount, credit, tax, total, and a “prorated months” count).
+
+Remove the old `TaxController` and migrate the corresponding request types from `src/Api/Billing/Models/Requests/Tax/*` to `src/Api/Billing/Models/Requests/PreviewInvoice/*` with equivalent domain mapping.
+
+### 2) Update Premium→Organization upgrade request contract and wiring
+Update `src/Api/Billing/Models/Requests/Premium/UpgradePremiumToOrganizationRequest.cs` and its usage (including `AccountBillingVNextController`) to:
+- Accept a `TargetProductTierType` (string-enum) rather than the previous tier/cadence combination.
+- Require a minimal billing address object as part of the request.
+- Map the allowed target tiers to the correct annual organization `PlanType` values, and reject unsupported tiers with a clear exception message.
+- Include the billing address in the domain tuple returned by `ToDomain()`.
+
+### 3) Add a Premium upgrade proration preview command (Stripe invoice preview)
+Introduce a new Core command `IPreviewPremiumUpgradeProrationCommand` / `PreviewPremiumUpgradeProrationCommand` under `src/Core/Billing/Premium/Commands/`, registered in DI (`ServiceCollectionExtensions`).
+
+This command must:
+- Validate the user has an active Premium subscription (including a non-empty gateway subscription id).
+- Look up the user’s current Premium subscription items in Stripe and identify the “password manager” item via pricing metadata (and fail with an appropriate bad request if it can’t be found).
+- Construct a Stripe invoice preview for upgrading the subscription’s password manager item to the target organization plan while:
+  - Removing any Premium storage add-on item if present.
+  - For seat-based vs non-seat-based organization plans, use the correct Stripe price identifier.
+  - Using a single seat for the upgrade preview.
+  - Using a proration behavior that produces an invoiceable preview suitable for showing “what you’d be charged now”.
+  - Providing the billing address to Stripe so automatic tax can be computed in the preview.
+- Parse the resulting Stripe invoice preview into a new model `PremiumUpgradeProration` (create this in `src/Core/Billing/Premium/Models/`), including:
+  - New plan prorated amount (the upgrade line(s))
+  - Credit (proration credit line(s))
+  - Tax and total
+  - A “prorated months” value derived from the remaining time in the current period (using the invoice preview timing rather than wall-clock time so it behaves correctly under Stripe test clocks)
+
+### 4) Align the actual upgrade flow with the preview behavior
+Update `src/Core/Billing/Premium/Commands/UpgradePremiumToOrganizationCommand.cs` to accept a billing address parameter and use it for Stripe tax calculation. The upgrade must:
+- Stop deleting and recreating the password manager subscription item; instead, update/replace it in-place by referencing its existing subscription item id when changing the price/quantity.
+- Continue to delete the Premium storage item if it exists.
+- Use the proration behavior consistent with the preview flow and ensure the billing cycle anchor behavior matches expectations for an upgrade.
+- Enable Stripe automatic tax for the subscription update.
+- Update the Stripe customer’s address using the provided billing address before performing the subscription update.
+- Preserve the existing behavior around organization creation, ownership, and metadata, but ensure types/seat values match the updated request/command contracts.
+
+### 5) Request models for proration preview
+Add `src/Api/Billing/Models/Requests/PreviewInvoice/PreviewPremiumUpgradeProrationRequest.cs` which:
+- Requires `TargetProductTierType` and a minimal billing address.
+- Maps to `(PlanType, BillingAddress)` with the same tier validation/mapping rules used by the upgrade request.
+
+The proration preview endpoint should return the key proration fields from the Core model in its response payload.
+
+All provided tests (including those updated and newly added around request mapping, proration preview parsing, Stripe option construction, and upgraded Stripe update semantics) must pass.

@@ -1,0 +1,47 @@
+Extend the Kubernetes operator’s authentication to support **Workload Identity Federation (WIF)** in addition to the existing **static OAuth client secret** flow.
+
+### Required behavior (operator runtime)
+
+Update the operator startup/auth wiring so it can authenticate to the Tailscale API in **one of two modes**, selected by environment variables:
+
+1. **Static client credentials (existing behavior)**
+   - Uses `CLIENT_ID_FILE` and `CLIENT_SECRET_FILE` (paths to files containing the OAuth client ID/secret).
+   - Exchanges credentials for an access token using the control plane’s OAuth token endpoint at:
+     - `LOGIN_SERVER + /api/v2/oauth/token` (or the default control URL if no login server is configured).
+
+2. **Workload identity federation (new behavior)**
+   - Enabled when `CLIENT_ID` is set (direct value, not a file path).
+   - Uses a Kubernetes-provided OIDC service account token (JWT) read from a fixed on-disk location in the operator container.
+   - Obtains an access token using the control plane token-exchange endpoint at:
+     - `LOGIN_SERVER + /api/v2/oauth/token-exchange` (or the default control URL if no login server is configured).
+   - The JWT used for exchange must be supplied as an OAuth parameter (not as the client secret).
+
+In WIF mode, the operator must tolerate the fact that the on-disk JWT can rotate/refresh: if a token request needs a new JWT, the implementation must re-read the JWT file rather than assuming it is constant for the lifetime of the process.
+
+If neither authentication mode is correctly configured, the operator should fail fast during startup with a clear error.
+
+### Required behavior (HTTP client/token handling)
+
+The Tailscale API client created by the operator must:
+- Use the correct base URL when a custom login server is configured.
+- Attach `Authorization: Bearer …` to API requests via an OAuth2-capable HTTP client.
+- Correctly refresh access tokens, and in WIF mode be able to recover when the underlying JWT changes.
+
+### Required behavior (Helm chart/config surface)
+
+Update the Helm chart values and templates so the deployment can be configured for either mode:
+
+- Static secret mode:
+  - Supports providing `oauth.clientId` and `oauth.clientSecret` such that a Kubernetes Secret can be created and mounted.
+  - The operator container must be configured to read credentials from mounted files.
+
+- WIF mode:
+  - Supports providing `oauth.clientId` and `oauth.audience` (no client secret).
+  - The pod spec must project a service account token with the configured audience into the container at the expected location for the operator to read.
+  - The operator container must be configured to use `CLIENT_ID` (and not require the credential files).
+
+The chart should avoid creating or mounting the OAuth Secret unless a client secret is actually provided.
+
+### Deliverable
+
+Implement these changes so that the provided unit tests (including the newly added ones) pass, and the operator can authenticate successfully in both modes as described above.

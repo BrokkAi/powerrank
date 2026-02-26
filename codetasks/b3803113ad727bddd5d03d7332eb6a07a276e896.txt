@@ -1,0 +1,23 @@
+Implement boolean logical operators in the engine’s expression/function layer and align operator definitions across internal types and the expression protobuf.
+
+### Functional requirements
+
+1. **Binary logical ops on boolean arrays**
+   - The executor’s binary function registry must support these operations when the input Arrow type is `Boolean`:
+     - `types.BinaryOpAnd` (logical AND)
+     - `types.BinaryOpOr` (logical OR)
+     - `types.BinaryOpXor` (logical XOR)
+   - Registry lookup for these signatures must succeed (i.e., they are considered “registered” operations).
+   - Evaluation must operate element-wise over two boolean arrays and produce a boolean array result.
+
+2. **Unary NOT on boolean arrays**
+   - The executor’s unary function registry must support `types.UnaryOpNot` for Arrow `Boolean`.
+   - Evaluation must invert each non-null boolean element.
+   - **Null handling:** nulls in the input must remain null in the output (null propagation), not be converted to a boolean value.
+
+3. **Operator/proto consistency**
+   - The internal operator set should not treat NOT as a binary operator. Ensure the internal `types` operator definitions reflect that (i.e., NOT is unary-only).
+   - Update the expression protobuf enum/mappings so binary operators include AND/OR/XOR but do not include a binary NOT entry. Any marshal/unmarshal mappings between protobuf `BinaryOp` and internal `types.BinaryOp` must match the updated enum.
+
+### Notes
+- The solution must compile and integrate with the existing Arrow-based array execution model and the registries already used by other comparison/matching operators.

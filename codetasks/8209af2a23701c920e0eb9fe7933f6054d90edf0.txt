@@ -1,0 +1,45 @@
+Implement a thread-safe partition-leader cache for the Admin client’s “partition leader” lookup flow and update the lookup/driver interactions to use it safely under concurrent access.
+
+### Context
+Several Admin operations (e.g., `listOffsets`, `deleteRecords`, `describeProducers`, abort-transaction flows) use `PartitionLeaderStrategy` to map `TopicPartition` keys to a broker id. This mapping is cached inside `KafkaAdminClient` to avoid repeated metadata lookups. The existing approach relies on a mutable `Map<TopicPartition, Integer>` that is queried and mutated from different stages of the request/response pipeline, which can lead to races when entries are invalidated while another request is reading the cache.
+
+### Requirements
+
+#### 1) Introduce a dedicated cache type
+Add a new class in `org.apache.kafka.clients.admin.internals` named `PartitionLeaderCache` that encapsulates the partition→brokerId mappings and provides a small API that supports bulk operations:
+
+- Read cached entries for a collection of `TopicPartition` keys in a single call (return only entries that are present).
+- Bulk insert/update from a `Map<TopicPartition, Integer>`.
+- Bulk removal for a collection of keys.
+
+The cache must be safe for concurrent use by multiple requests (reads, writes, invalidations).
+
+#### 2) Use the new cache throughout the Admin internals
+Replace the raw `Map<TopicPartition, Integer>` usage with `PartitionLeaderCache` in the relevant classes, including:
+
+- `KafkaAdminClient` (the field storing the cache instance)
+- `PartitionLeaderStrategy.PartitionLeaderFuture` and any handler `newFuture(...)` factory methods that currently accept/pass the cache
+- Any tests that directly construct a future with the cache type
+
+The public behavior of the Admin APIs must remain consistent; only the internal caching mechanism and its safety/atomicity should change.
+
+#### 3) Make cached-vs-uncached handling a single atomic decision
+Update the `AdminApiFuture` / `AdminApiDriver` interaction so that the driver can determine, in one step, which keys are already mapped to a broker and which still require lookup, without requiring separate “uncached keys” and “cached mapping” calls that can observe different cache states.
+
+Concretely:
+- `AdminApiFuture` should expose a cached mapping for all lookup keys where “not cached” is represented explicitly (rather than omitted).
+- `PartitionLeaderStrategy.PartitionLeaderFuture` should implement that mapping based on the new cache API.
+- `AdminApiDriver` should treat “unknown/unmapped broker id” entries as requiring lookup/unmapping rather than immediately scheduling them against a broker.
+
+#### 4) Ensure cache invalidation is safe and atomic for failures
+When lookup/fulfillment fails for a set of keys, the corresponding cache entries must be invalidated in a way that avoids concurrent modification issues (including cases where another in-flight request is simultaneously reading cached entries).
+
+This includes updating `PartitionLeaderStrategy.PartitionLeaderFuture.completeExceptionally(...)` so cache invalidation does not rely on per-key operations interleaved with other threads.
+
+### What will be validated
+The provided unit/integration tests (including a concurrency-focused integration test around concurrent `listOffsets` calls and cache invalidation) will verify that:
+
+- Cached leader mappings are still used correctly to route requests.
+- Uncached keys still trigger metadata lookup correctly.
+- Cache entries are removed appropriately on errors.
+- Concurrent reads and invalidations do not cause incorrect routing, inconsistent internal state, or runtime failures.

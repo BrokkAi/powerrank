@@ -1,0 +1,53 @@
+Implement the access-limit and lifecycle enforcement for authenticated “Send” access, and correct how `AccessCount` is incremented for different send types.
+
+### Background / Goal
+Users must not be able to continue accessing a Send once it becomes inaccessible due to any of the following conditions:
+
+- the Send is disabled
+- the Send’s `MaxAccessCount` has been reached
+- the Send is expired (`ExpirationDate` in the past)
+- the Send is past its deletion time (`DeletionDate` in the past)
+
+Additionally, `AccessCount` must be incremented differently depending on Send type:
+
+- **Text Sends:** increment `AccessCount` on each authenticated access to the Send content/metadata endpoint.
+- **File Sends:** do **not** increment `AccessCount` when merely accessing the Send content/metadata endpoint; increment only when an authenticated file download URL is requested (i.e., when the file is actually being downloaded).
+
+### Required behavior changes
+
+#### 1) Authenticated Send access endpoint
+In `src/Api/Tools/Controllers/SendsController.cs`, the authenticated access action (the one that returns `SendAccessResponseModel`) must:
+
+- refuse access (return “not found”-style behavior via the project’s exception) when the Send is not accessible per the rules above
+- only increment/persist/push-update `AccessCount` for **Text** Sends (not File Sends) as described
+
+#### 2) Authenticated file download data endpoint
+In `src/Api/Tools/Controllers/SendsController.cs`, the authenticated endpoint that returns the download URL data for a file must:
+
+- enforce the same “Send is accessible” rules before granting a download URL
+- treat access denial as “not found”
+- ensure `AccessCount` increment + persistence + push notification occurs as part of granting a file download (and does not occur when access is denied)
+- reject attempts to request a download URL for a non-file Send with a “bad request”-style error
+
+#### 3) Centralize non-anonymous file-download access logic
+In `src/Core/Tools/SendFeatures/Commands/Interfaces/INonAnonymousSendCommand.cs` and `src/Core/Tools/SendFeatures/Commands/NonAnonymousSendCommand.cs`:
+
+- add/extend a command API that can be used by the authenticated controller to obtain a file download URL **along with** an indication of whether access was granted or denied (using the existing `SendAccessResult` concept)
+- implement the access checks listed above inside this command for file downloads
+- when access is granted for a file download:
+  - increment `AccessCount`
+  - persist the Send update
+  - emit the sync/push update
+  - return the download URL
+- when access is denied:
+  - do not mutate/persist/push
+  - return a denied result
+
+You may introduce a shared helper on the command side to evaluate whether a `Send` can currently be accessed, and use it consistently for both text access gating and file download gating.
+
+#### 4) Clean up unused dependency
+If any constructor parameters/services are no longer needed after moving logic into the command, remove them and update wiring accordingly so compilation succeeds.
+
+### Key constraints
+- All existing behavior not related to the above must remain intact.
+- Both old and newly provided tests must pass, including controller-level behaviors and command-level behaviors around access denial, error types, and `AccessCount` mutation.

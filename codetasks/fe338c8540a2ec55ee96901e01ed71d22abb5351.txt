@@ -1,0 +1,87 @@
+Implement support for “compressed history with preserved logs” end-to-end, and add a UI toggle that lets users switch between the full message log and the AI-facing summary.
+
+### Backend (Java): TaskEntry semantics, compression, and serialization
+
+1. **TaskEntry must allow both log and summary**
+   - Update `ai.brokk.TaskEntry` so that `log` and `summary` are no longer mutually exclusive.
+   - Enforce the invariant that **at least one** of `log` or `summary` is present (not necessarily exactly one).
+   - Add/adjust helper methods:
+     - `hasLog()` to indicate whether a log is available.
+     - `isCompressed()` to indicate whether a summary exists and should be used for AI context.
+     - A convenience method to attach/replace a summary while preserving other fields (e.g., `withSummary(...)`).
+   - Ensure `toString()` reflects **what the AI should see**: when a summary is present, produce a representation based on the summary (not the full message log).
+
+2. **History compression must preserve the original log**
+   - Update `ai.brokk.ContextManager.compressHistory(TaskEntry)` to:
+     - Skip work if the entry already has a summary.
+     - Refuse to compress entries that have no log.
+     - When compression succeeds, return a TaskEntry that retains the original log and attaches the generated summary (instead of discarding the log).
+   - When compressing a list of history entries, treat an entry as “changed” when it gains a summary it previously lacked (not by equality alone).
+
+3. **DTO/fragment mapping must round-trip mixed states**
+   - Update `ai.brokk.context.FragmentDtos` validation for `TaskEntryDto` and `TaskEntryRefDto` so that they accept:
+     - log-only
+     - summary-only (legacy compressed)
+     - log+summary (new compressed-with-log)
+     - but reject “neither”
+   - Update `ai.brokk.context.DtoMapper` to read and write log and summary **independently**, allowing both to be present simultaneously.
+   - Ensure history ZIP serialization/deserialization supports contexts containing a mix of task entry states.
+
+4. **Webview event model: history tasks may include both summary and messages**
+   - Update `ai.brokk.gui.mop.webview.BrokkEvent.HistoryTask` documentation/behavior to allow sending `summary`, `messages`, or both; keep the invariant that at least one is present.
+   - Update `ai.brokk.gui.mop.webview.MOPBridge.sendHistoryTask(TaskEntry)` so that:
+     - It includes message content when a log exists.
+     - It includes a summary when one exists.
+     - The `compressed` flag reflects whether the summary exists (i.e., whether the AI uses a summary).
+
+5. **Add a “live-summary” event for the current task**
+   - Introduce a new `BrokkEvent` type (e.g., `LiveSummary`) carrying `(taskSequence, compressed, summary)` plus epoch/type.
+   - Add a bridge/host API to send this event to the frontend.
+   - In `ai.brokk.gui.mop.MarkdownOutputPanel.setMainThenHistoryAsync(TaskEntry, List<TaskEntry>)`:
+     - Prefer rendering the main panel from the full log when available, even if the entry is compressed.
+     - Ensure any live-summary event is dispatched **after** the main content is flushed and history is applied (so it is not cleared by subsequent history resets).
+
+### Frontend (Svelte/TS): summary parsing, stores, and toggle UI
+
+1. **Represent history threads with optional summaries**
+   - Extend the frontend `HistoryTask` model (in `frontend-mop/src/types.ts`) to include an optional `summary` field alongside `compressed` and `entries`.
+   - Update history-event handling so `history-task` events can contain:
+     - messages only
+     - summary only
+     - both summary and messages
+   - Default rendering should prefer full messages when present, even if a summary is available.
+
+2. **Introduce a summary store with parsing support**
+   - Add a store (e.g., `frontend-mop/src/stores/summaryStore.ts`) keyed by `threadId` to hold:
+     - summary text
+     - parse sequence id
+     - parsed HAST tree for rendering
+     - compressed flag
+   - Ensure summary parsing is performed via the existing worker pipeline and parse router.
+   - Ensure summary parse registrations are cleaned up:
+     - on history reset
+     - when deleting a history thread
+     - when clearing/deleting the live thread
+
+3. **Add a shared sequence allocator**
+   - Provide a shared sequence utility (e.g., `frontend-mop/src/shared/seq.ts`) that prevents collisions between:
+     - history message parse sequences
+     - summary parse sequences
+   - Update code that previously hardcoded history seq offsets to use this shared utility (including worker logic that distinguishes live vs history parses).
+
+4. **Handle “live-summary” events**
+   - Extend the frontend event union and dispatcher (`frontend-mop/src/index.ts`) to process a `live-summary` event.
+   - The live summary must be associated with the **current live thread**, even if no bubbles exist yet. Provide a way to read the current live thread id from the live bubbles store.
+   - Store and parse the live summary into the summary store so it can be rendered in the live thread UI.
+
+5. **Thread UI: toggle between “Full messages” and “What AI sees”**
+   - Update the thread rendering component(s) (centered around `frontend-mop/src/components/ThreadBlock.svelte`) so that:
+     - When a thread has both messages and a summary, the UI exposes a segmented control toggle with two modes:
+       - full message view
+       - summary view (“what the AI sees”)
+     - When a thread is summary-only (legacy), it renders the summary (no message view available).
+     - Copy behavior reflects the active view (copy full messages or summary).
+     - Collapsed preview should display the appropriate first-line preview for the active view (summary preview in summary mode; first message preview otherwise).
+   - Ensure the new controls and thread meta rendering integrate cleanly with delete/collapse behavior and existing styling.
+
+The result should allow history compression to reduce AI context via summaries while retaining full logs for UI display, support mixed/legacy data during serialization, and provide both history and live threads with an interactive summary/messages view mode.

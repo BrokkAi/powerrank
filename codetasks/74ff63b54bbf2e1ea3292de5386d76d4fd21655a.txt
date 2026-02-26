@@ -1,0 +1,46 @@
+### Goal
+
+Extend the context-fragment system so a fragment can declare *additional, related* fragments that should be added alongside it (for example, direct ancestor class skeletons), without mixing that extra material into the fragment’s primary text output. Context assembly must recursively include these “supporting” fragments while avoiding duplicates and infinite expansion.
+
+### Required behavior
+
+#### 1) `ContextFragment` API extension
+Add a new polymorphic hook on `ContextFragment`:
+
+- A method (defaulting to empty) that returns a set of “supporting” fragments that should accompany the fragment when it is added to a `Context`.
+- This mechanism must work for normal fragments as well as the lightweight fragments used in tests (i.e., no reliance on concrete fragment subclasses via `instanceof` in core logic).
+
+#### 2) Recursive context expansion in `Context.addFragments(...)`
+When adding fragments to a `Context`, the input collection must be expanded to include all supporting fragments, recursively:
+
+- Expansion must be cycle-safe (a fragment may indirectly support itself through a chain).
+- Expansion must be redundancy-safe: if two fragments refer to the same underlying “source” (as defined by `ContextFragment.hasSameSource(...)`), only one should be retained.
+- After expansion, existing `Context` behaviors around fragment replacement/deduplication (e.g., interactions between PATH vs SKELETON fragments for the same file) must continue to operate correctly on the expanded set.
+
+#### 3) Ancestor skeletons should be separate fragments, not embedded text
+Update fragment types that currently (or conceptually) need class-ancestor information so that:
+
+- `SummaryFragment` text for `SummaryType.CODEUNIT_SKELETON` focuses on the requested target only, and does **not** embed ancestor skeletons in the same rendered output.
+- Instead, ancestor skeletons are provided via `supportingFragments()` as separate `SummaryFragment` instances of `CODEUNIT_SKELETON`, one per *direct* ancestor.
+- `CodeFragment` should expose direct ancestor skeletons via `supportingFragments()` **only when the code unit is a class** (methods/functions should not pull class ancestors).
+- `ProjectPathFragment` should expose direct ancestor skeletons for class declarations found in that file via `supportingFragments()`.
+
+Ancestor resolution must:
+- Use the analyzer to discover direct ancestors.
+- Exclude anonymous units.
+- Avoid producing duplicates when multiple paths lead to the same ancestor (e.g., diamond inheritance).
+
+#### 4) Test infrastructure enhancements (needed for unit tests)
+The testing utilities must support the new behavior:
+
+- `TestAnalyzer` must be able to:
+  - Return declarations for a file.
+  - Provide direct ancestors for a code unit.
+  - Provide skeleton text for a code unit.
+  - Provide source text for a code unit via the analyzer capability mechanism (i.e., through `as(SourceCodeProvider.class)`).
+- `TestAnalyzerWrapper` / `TestContextManager` must support analyzer access in a way compatible with fragments calling “non-blocking” analyzer retrieval and with analyzer updates (tests may update files and expect the wrapper to return the updated analyzer).
+
+### Notes / constraints
+
+- The solution should integrate with the existing deduplication model (`hasSameSource`, file-based replacement rules, etc.) rather than replacing it with a new identity scheme.
+- Supporting fragments are intended to be additive context; they must not alter the core meaning of the primary fragment’s text rendering, only expand what ends up inside the `Context`.

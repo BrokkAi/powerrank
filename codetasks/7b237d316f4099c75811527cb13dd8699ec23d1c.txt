@@ -1,0 +1,31 @@
+## Task: Allow `--add-noqa` to accept an optional “reason” string
+
+Extend Ruff’s `check` CLI so that `--add-noqa` can optionally take a user-provided reason, and ensure that reason is appended to any newly inserted `# noqa` directives.
+
+### CLI behavior
+
+- The `--add-noqa` flag must continue to work when provided with no value.
+- It must additionally support an optional value, specified using an equals sign (e.g., `--add-noqa=...`), which represents a free-form reason string.
+- The reason must be treated as *optional*: if the user provides `--add-noqa` with no value (or an explicitly empty value), Ruff should behave as it does today and not append any reason text.
+- If a reason is provided, it must be rejected if it contains newline characters (`\n` or `\r`) and produce a CLI error.
+
+### Output formatting requirements
+
+When Ruff inserts `noqa` comments via `--add-noqa`, and a reason was provided:
+
+- Append the reason to the end of the generated `# noqa` comment on the same line.
+- The reason should appear after any generated rule codes, separated by a single space.
+- This should apply to all relevant insertions (including multiple insertions in a file).
+
+### Plumbing the reason through the codebase
+
+The reason originates in CLI argument parsing (in `crates/ruff/src/args.rs` / command wiring) and must be propagated through the `--add-noqa` execution path until it reaches the code responsible for constructing the `# noqa` edit text (in `crates/ruff_linter/src/noqa.rs`). Ensure the reason is available where the final comment string is rendered.
+
+### Documentation update
+
+Update the CLI documentation snippet in `docs/configuration.md` so it reflects that `--add-noqa` accepts an optional value (with a `REASON` name) and that the reason is appended after the codes.
+
+### Notes
+
+- The `--add-noqa` option is currently represented as a boolean in the argument structures; it will need to represent the presence/absence of a reason as well as “enabled without reason”.
+- The new behavior must integrate with Ruff’s existing conflict rules and command flow for `--add-noqa`.

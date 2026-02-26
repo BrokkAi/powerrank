@@ -1,0 +1,34 @@
+Implement a stabilization of the rename feature across the IDE and LSP server so that rename works reliably in all supported document types (including notebook-backed virtual documents), without being gated behind an experimental toggle or dynamic capability registration.
+
+### Requirements
+
+#### 1) Rename must work for virtual/system-backed documents
+In `crates/ty_ide/src/rename.rs`, the project-membership check used by rename should treat “system virtual path” files as eligible even if they are not part of `db.project().files(db)`. This is necessary for rename to operate on notebook cell documents and similar virtual resources.
+
+#### 2) Remove rename dynamic registration and experimental gating
+In the server:
+
+- Eliminate any client-capability flagging and logic related to “dynamic registration” for rename in `crates/ty_server/src/capabilities.rs`.
+- The server’s advertised `ServerCapabilities` should always include a `rename_provider` (with prepare support) rather than conditionally omitting it based on client support or settings.
+- In `crates/ty_server/src/server/api/requests/prepare_rename.rs`, `prepareRename` must no longer depend on a global “rename enabled” setting; it should only be disabled when language services are disabled for the workspace/snapshot.
+
+#### 3) Simplify settings/options related to experimental rename
+Remove the configuration surface area for enabling/disabling rename via experimental settings:
+
+- `ClientOptions` should no longer expose a `with_experimental_rename(...)` builder-style helper.
+- The “experimental” settings structures in `crates/ty_server/src/session/options.rs` and `crates/ty_server/src/session/settings.rs` should be updated so they no longer carry a rename boolean or an `is_rename_enabled()` accessor.
+- Any remaining code that references rename enablement through global settings should be updated accordingly (including code paths that previously used it only to decide registration behavior).
+
+#### 4) Capability registration flow must no longer manage rename
+In `crates/ty_server/src/session.rs`, remove the parts of the dynamic registration/unregistration mechanism that specifically register or unregister `textDocument/rename`. Rename should not be dynamically managed via `RegisterCapability` / `UnregisterCapability` anymore.
+
+#### 5) Test harness support for end-to-end rename
+The e2e test infrastructure in `crates/ty_server/tests/e2e/main.rs` expects a convenience API for performing rename that:
+- Calls `textDocument/prepareRename` and only proceeds with `textDocument/rename` if prepare succeeds.
+- Returns the resulting `WorkspaceEdit` (or signals failure if prepare returned `None`).
+
+Notebook and regular text-document rename scenarios must be supported through this API, including URIs that represent notebook cells.
+
+---
+
+Focus on aligning the server’s advertised capabilities, request handling, and settings model with “rename is always available when language services are enabled”, and ensure the IDE-side rename logic accepts virtual/system documents.

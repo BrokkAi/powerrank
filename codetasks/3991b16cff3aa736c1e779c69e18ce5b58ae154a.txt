@@ -1,0 +1,44 @@
+You’re working on a code-intelligence tool that supports Git repositories, including Git *worktrees*. A worktree has its own checkout directory, but it shares the same underlying repository and should share certain Brokk state stored under the repository’s “master” `.brokk/` directory (not a per-worktree copy).
+
+Several issues exist in the current implementation that cause dependency discovery and analysis to fail when a project is opened from a worktree, and there is also a path-matching bug in file selection.
+
+Implement fixes so that dependency resolution, file selection, and analysis behave correctly for both a main checkout and worktree checkouts.
+
+### Required behavior
+
+1. **Shared configuration root for worktrees**
+   - Each project has:
+     - a *project root* (the directory being analyzed), and
+     - a *master root for config/sessions* (where `.brokk/` state lives).
+   - For a normal checkout these are the same.
+   - For a Git worktree, the *master root for config/sessions* must resolve to the repository’s top-level directory (the non-worktree “main” root), so that `.brokk/` (especially `.brokk/dependencies`) is shared across the main project and all worktrees.
+   - Ensure `WorktreeProject` uses the same “master root for config” as its parent main project.
+
+2. **Worktree dependency discovery must use the shared `.brokk/dependencies`**
+   - On-disk dependency roots are discovered from `.brokk/dependencies/<depName>/`.
+   - When operating inside a worktree project, dependency discovery must still find dependencies located in the shared master config directory, not from a worktree-local `.brokk/dependencies`.
+   - This must be true both for listing available dependencies and for resolving “live” dependencies used by analyzers.
+
+3. **Dependency name parsing must be robust**
+   - Live dependencies are persisted as a comma-separated list of dependency names.
+   - Resolving those names into dependency roots must correctly match the dependency directory name (`<depName>`), without relying on hard-coded path segment indexes that can break depending on how the relative paths are formed.
+
+4. **AnalyzerUtil file selection must not depend on `Path` instance identity**
+   - `AnalyzerUtil.selectFileFragment(...)` converts user input into a `ProjectFile` and then checks whether that file belongs to the project.
+   - The current logic can fail when two `Path` objects represent the same location but are distinct objects / derived from distinct roots.
+   - Fix selection so that membership is determined by *relative path equality within the project*, and selection returns the project’s canonical `ProjectFile` for that relative path when it exists.
+
+5. **Project file lookup support**
+   - Provide a project-level way to look up a file by its relative path (used by selection and should work with caching).
+   - This should integrate cleanly with existing project file caching / invalidation logic, and the existing invalidation behavior must still clear any relevant caches.
+
+6. **Analyzer integration for worktree dependencies**
+   - When a dependency is made live in a worktree project, analyzers created for the worktree must be able to:
+     - discover declarations from dependency source files located under the master project’s `.brokk/dependencies`,
+     - retrieve source text for those declarations, and
+     - report `ProjectFile` roots/absolute paths consistent with the physical location of the dependency files (i.e., dependency `ProjectFile` instances should be rooted at the master project root, not the worktree root).
+
+### Scope notes
+
+- You may add or adjust APIs in the project abstraction (`IProject` / `AbstractProject`) as needed to support correct lookup and caching.
+- The solution should preserve expected behavior for non-worktree projects while fixing worktree-specific issues.

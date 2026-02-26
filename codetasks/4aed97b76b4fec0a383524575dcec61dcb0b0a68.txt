@@ -1,0 +1,38 @@
+Implement a feature-flagged rollout for a refactored policy-saving flow.
+
+### Background
+A new policy save path (`IVNextSavePolicyCommand`) is being introduced alongside the existing legacy save path (`ISavePolicyCommand`). The system must choose which path to use at runtime based on a new feature flag.
+
+### Requirements
+
+1. **Feature flag key**
+   - Add a new constant to `FeatureFlagKeys` in `src/Core/Constants.cs` named `PolicyValidatorsRefactor`, mapped to the expected flag string for this rollout.
+
+2. **Public API request model enhancements**
+   - In `src/Api/AdminConsole/Public/Models/Request/PolicyUpdateRequestModel.cs`:
+     - Add a nullable `Metadata` property (dictionary-based) to support optional metadata coming from callers.
+     - Add a method that converts the request into the newer “save policy” request type (the model used by `IVNextSavePolicyCommand`), including:
+       - validated/serialized policy data
+       - validated/deserialized metadata (when present)
+       - an appropriate “performed by” identity for public API actions
+
+3. **Controller wiring (admin + public)**
+   - Update both Policies controllers to support choosing between the new and legacy save implementations depending on whether `PolicyValidatorsRefactor` is enabled:
+     - `src/Api/AdminConsole/Controllers/PoliciesController.cs` (the vNext endpoint handler)
+     - `src/Api/AdminConsole/Public/Controllers/PoliciesController.cs` (the public endpoint handler)
+   - Each controller must accept the required feature flag service and the new command via DI and route the save request to the correct implementation based on the flag.
+
+4. **Domain/service wiring for internal policy saves**
+   - Update internal code paths that programmatically enable policies so they also respect the feature flag and use the new command when enabled:
+     - `src/Core/AdminConsole/OrganizationFeatures/OrganizationDomains/VerifyOrganizationDomainCommand.cs`
+     - `src/Core/Auth/Services/Implementations/SsoConfigService.cs`
+   - Ensure these code paths provide a suitable “performed by” identity when using the new save model.
+
+5. **Save model constructor simplification**
+   - In `src/Core/AdminConsole/OrganizationFeatures/Policies/Models/SavePolicyModel.cs`, adjust construction ergonomics so callers no longer need to explicitly pass an “empty metadata” instance for common cases.
+   - Update usages across the codebase (including in tests) to align with the new construction pattern and null-safety expectations.
+
+### Notes
+- The legacy save path must remain available when the feature flag is disabled.
+- Metadata must be optional and safely handled when omitted.
+- All existing and newly added unit tests must pass.

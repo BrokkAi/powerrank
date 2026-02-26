@@ -1,0 +1,23 @@
+Update the tool-call JSON parsing in `io.github.jbellis.brokk.Llm` to be more tolerant of “probably JSON” model outputs that include extra non-JSON text.
+
+### Required behavior
+
+The method responsible for turning an LLM response into tool execution requests currently assumes the response is valid JSON (or is JSON wrapped in a specific formatting). Enhance it so that:
+
+1. **Direct JSON parsing is attempted first** on the full response text.
+2. If that fails, the implementation must **recover JSON embedded in surrounding text** by extracting a JSON object from the response content (e.g., when the model prefixes or suffixes explanatory text, or wraps the JSON in Markdown fences). The recovered substring should then be parsed as JSON.
+3. If no JSON object can be recovered, or if the recovered substring still cannot be parsed, the method must **fail with an appropriate exception** indicating invalid JSON.
+
+### Tool-call handling
+
+When parsing succeeds, the JSON may describe tool calls. Ensure that:
+
+- Tool calls are converted into tool execution requests as before.
+- A tool call named **`think`** is treated specially:
+  - It is **not** included in the returned tool execution request list.
+  - Its textual reasoning argument (from a `reasoning` field inside `arguments`) is collected and surfaced as the response’s reasoning content.
+  - If multiple `think` calls appear, their reasoning text should be merged in a predictable way.
+
+### API / testability adjustment
+
+The JSON-parsing method should be accessible for unit testing without changing its semantics in production usage (e.g., by relaxing visibility and/or annotating accordingly).

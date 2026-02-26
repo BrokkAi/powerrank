@@ -1,0 +1,38 @@
+Implement allocation/latency optimizations in the OTLP → Prometheus Remote Write translator by introducing request-scoped caching for label name sanitization and by precomputing labelsets that are constant across OTLP `ResourceMetrics` and `ScopeMetrics` boundaries.
+
+### Background / goal
+The converter in `storage/remote/otlptranslator/prometheusremotewrite` currently recomputes and re-allocates a large amount of label-related data for every datapoint (sanitizing the same label names repeatedly, rebuilding resource labels repeatedly, etc.). Refactor the conversion path so that repeated work is done once and reused.
+
+### Functional requirements
+1. **Per-request label name sanitization cache**
+   - Add a cache used during a single conversion request to reuse the sanitized form of label names (e.g. commonly repeated names like `__name__`, `job`, `instance`, and frequent attribute keys).
+   - Sanitization must still be performed with the existing label naming rules (UTF-8 option, underscore sanitization settings, preservation of multiple underscores).
+   - The cache must be used by all label-name-building paths (datapoint attributes, “extras”, promoted attributes, and scope attribute label names).
+
+2. **Resource-level label caching (once per `ResourceMetrics`)**
+   - Precompute labels that are constant for all datapoints in the same `ResourceMetrics`:
+     - `job` derived from `service.name` and `service.namespace` (namespace/name when both exist).
+     - `instance` derived from `service.instance.id`.
+     - Any labels derived from `Settings.PromoteResourceAttributes`.
+     - External labels from `Settings.ExternalLabels` (these are already sanitized).
+   - These cached labels must be merged into every datapoint’s final labelset using the same overwrite/precedence semantics as before (metric/datapoint attributes must be able to override where applicable; external labels must not overwrite existing labels).
+
+3. **Scope-level label caching (once per `ScopeMetrics`)**
+   - When `Settings.PromoteScopeMetadata` is enabled and the scope name is non-empty, precompute the scope metadata labels once per `ScopeMetrics`:
+     - `otel_scope_name`, `otel_scope_version`, `otel_scope_schema_url`
+     - Scope attributes as labels using the `otel_scope_` prefix (with sanitization).
+   - These cached scope labels must be merged into every datapoint for metrics under that scope.
+
+4. **Reuse the label namer configuration**
+   - Avoid constructing a new label namer for each datapoint; configure it once per relevant boundary and reuse it together with the sanitization cache.
+
+5. **Correctness constraints**
+   - `target_info` is a resource-level metric and **must not include scope labels**, even when scope metadata promotion is enabled for other metrics in the same request.
+   - The converter must continue to honor ignore-lists for attributes (used by `target_info` generation) and the existing handling of “extras” labels.
+   - Any helper functions involved in promoting resource attributes should be adapted so they can use the new label-name-building mechanism without duplicating sanitization work.
+
+### Dependency / semantic conventions update
+Replace usage of the OpenTelemetry Collector semantic convention package for service attribute keys with the OpenTelemetry Go semantic conventions package. All lookups for `service.name`, `service.namespace`, and `service.instance.id` must use the updated key definitions accordingly.
+
+### Expected refactor scope
+You will need to adjust the flow in the main conversion entry point (`FromMetrics`) so resource/scope context is established before datapoints are processed, and update datapoint conversion helpers (e.g. gauge/sum/histogram/summary paths and histogram helpers) so they no longer recompute resource/scope labels per datapoint but instead consume the cached context.

@@ -1,0 +1,21 @@
+### Problem
+
+Ruff’s `flake8-bugbear` rules `B009` and `B010` flag calls like `getattr(obj, "name")` / `setattr(obj, "name", value)` when the attribute name is a constant string that could be replaced with attribute syntax (`obj.name` / `obj.name = value`). Ruff also provides an automatic fix that performs this rewrite.
+
+A bug was reported where the suggested rewrite can silently change runtime behavior for certain Unicode attribute names. In Python, identifiers used in attribute access syntax are normalized using Unicode **NFKC** (Normalization Form KC), but the string argument passed to `getattr`/`setattr` is **not** normalized. Therefore, rewriting a constant string attribute name that is not already NFKC-normalized may cause the rewritten code to access or set a *different* attribute than the original code.
+
+Your task is to update the auto-fix behavior for these rules so that:
+
+- The diagnostic still reports `B009` / `B010` as before when a constant attribute name is used.
+- The auto-fix is **marked unsafe** when the attribute name is not NFKC-normalized (i.e., rewriting could change behavior due to Python’s identifier normalization rules).
+- For attribute names that are already NFKC-normalized, the fix remains safe.
+
+This must apply to both:
+- `B009` (“Replace `getattr` with attribute access”)
+- `B010` (“Replace `setattr` with assignment”)
+
+A regression case involves the Unicode “long s” (`"ſ"`), which normalizes to `"s"` under NFKC; the fix must be considered unsafe for such names.
+
+### Relevant context
+
+The implementation lives under Ruff’s flake8-bugbear rule code for rewriting `getattr`/`setattr` with constant attribute names. Update the fix-safety classification based on whether the constant attribute string equals its NFKC-normalized form.

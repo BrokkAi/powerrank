@@ -1,0 +1,40 @@
+Implement Text-to-Speech (TTS) support in the `openai_conversation` Home Assistant integration, alongside the existing Conversation and AI Task functionality.
+
+### Functional requirements
+
+1. **New TTS platform**
+   - Register the integration to also load the Home Assistant **TTS platform** in addition to the existing platforms.
+   - Add a new TTS entity type that:
+     - Is a `TextToSpeechEntity` backed by the integration’s OpenAI client (`entry.runtime_data`).
+     - Is created per config **subentry** of type `"tts"`.
+     - Exposes supported options for selecting a **voice** and **preferred audio format**.
+     - Produces audio by calling OpenAI’s TTS endpoint using a *streaming* response and returning `(format, bytes)`.
+
+2. **TTS subentry configuration**
+   - Introduce a new config subentry type `"tts"` with:
+     - A human-friendly default title (e.g., “OpenAI TTS”).
+     - Stored data including at least:
+       - A **model** identifier used for TTS (default should be a TTS-capable model).
+       - A **prompt/instructions** field used to influence speaking style.
+       - A **speed** setting (numeric; configurable; with a sensible recommended default).
+   - Add a dedicated subentry config flow handler for `"tts"` that supports:
+     - Creating a new TTS subentry (including a configurable name/title).
+     - Reconfiguring an existing TTS subentry (updating its stored data).
+     - Aborting when the parent config entry is not loaded.
+
+3. **Migration**
+   - Bump the config flow minor version appropriately and implement migration so existing config entries are upgraded by automatically adding a `"tts"` subentry with recommended defaults when migrating from the previous minor version.
+
+4. **Constants and localization**
+   - Add any new constants needed for the TTS subentry fields (e.g., keys for speed, defaults/recommended values, default subentry title).
+   - Extend `strings.json` with UI text for the new `"tts"` subentry flow (step labels/descriptions and abort reasons).
+
+5. **TTS behavior details**
+   - The TTS entity must:
+     - Provide a stable list of supported voices (with user-facing names and voice IDs).
+     - Support multiple output formats and handle common aliases (e.g., mapping “ogg” to a supported format and “raw” to PCM).
+     - Apply subentry defaults plus per-call service options, with per-call options taking precedence.
+     - Use the configured prompt/instructions and speed when generating speech.
+     - Convert OpenAI client errors into `HomeAssistantError` so failures propagate correctly through Home Assistant’s TTS pipeline.
+
+The implementation should integrate cleanly with Home Assistant’s config-entry + subentry model so that entities are correctly associated with the parent config entry and the specific subentry that created them.

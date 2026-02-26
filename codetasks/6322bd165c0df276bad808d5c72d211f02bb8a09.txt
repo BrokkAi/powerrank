@@ -1,0 +1,24 @@
+Extend Kafka’s “describe features” functionality so callers can target a specific node rather than always using an arbitrary broker/controller.
+
+### Requirements
+
+1. **Admin client API enhancement**
+   - Add an optional *node id* setting to `org.apache.kafka.clients.admin.DescribeFeaturesOptions`.
+   - The option must be settable fluently (e.g., `options.nodeId(…)`) and retrievable (e.g., `options.nodeId()`).
+   - When the node id is **not** set, `Admin#describeFeatures(...)` should behave as it does today (routing to an arbitrary eligible node).
+   - When the node id **is** set, `Admin#describeFeatures(...)` must direct the request to that specific node. If the request ends up being served by a different node than requested, the call must fail.
+
+2. **Admin client behavior**
+   - Update the `describeFeatures` implementation in the Kafka admin client so it honors the new node-id option.
+   - The request must be routable to both broker and controller contexts depending on how the admin client was created (tests cover sending to controllers via controller bootstrap as well as to brokers via broker bootstrap).
+   - If a caller targets a node of the “wrong type” for the admin client’s bootstrap context (e.g., trying to reach a controller through a broker-only client, or vice versa), the operation should error.
+
+3. **Command-line tool support**
+   - Enhance `org.apache.kafka.tools.FeatureCommand` so `kafka-features.sh describe` accepts an optional `--node-id` argument.
+   - If `--node-id` is provided, it must be applied to the underlying `describeFeatures` request.
+   - Reject invalid node ids: negative values must throw an `IllegalArgumentException` with a clear message.
+
+4. **Documentation update**
+   - Add an upgrade note in `docs/upgrade.html` describing the new optional `--node-id` flag for the feature describe command and what it does at a high level.
+
+Your implementation must satisfy the updated unit and integration tests, including scenarios where different nodes expose different supported feature/version ranges (e.g., due to per-node “unstable” feature/version settings) and scenarios where requests are intentionally sent to an incompatible node type.

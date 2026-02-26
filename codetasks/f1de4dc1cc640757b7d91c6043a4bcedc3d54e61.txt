@@ -1,0 +1,41 @@
+### Goal
+
+Update the **Fressnapf Tracker** integration to handle devices whose tracker endpoint returns malformed/invalid data. These “broken” trackers must be ignored during setup so they don’t prevent the integration from loading, while still surfacing a clear warning to the user via Home Assistant’s issue registry.
+
+### Required behavior
+
+#### 1) Validate each device’s tracker data during config entry setup
+When setting up a config entry, the integration currently enumerates the user’s devices and creates a `DataUpdateCoordinator` per device.
+
+Change this flow so that, **before** creating a coordinator for a device, the integration performs a one-time fetch of that device’s tracker data (using the device’s serial number and token). Based on the result:
+
+- If the tracker response is **valid**, proceed with that device and use the fetched tracker object as the coordinator’s initial state.
+- If the tracker response indicates an **invalid/malformed tracker**, the device must be **skipped** (no coordinator created for it, thus no entities), and setup should continue for other devices.
+- If the tracker request fails with a **generic API error**, setup should not fail permanently; it should signal that the entry is **not ready** so Home Assistant will retry later.
+
+Authentication failures during initial authentication/device listing should continue to behave as they already do (i.e., reauth path via config entry auth failure).
+
+#### 2) Create a persistent issue for invalid trackers
+When a device is skipped due to an invalid/malformed tracker response:
+
+- Log a warning mentioning the device serial number.
+- Create a Home Assistant issue (Issue Registry) that:
+  - Has **WARNING** severity
+  - Is **not fixable**
+  - Uses a stable, deterministic issue id derived from the tracker serial number (so it won’t duplicate on repeated setups)
+  - Uses a translation key and placeholder so the UI can render a localized message that includes the tracker id/serial number
+  - Includes a “learn more” URL pointing to the integration documentation page
+
+If the issue already exists, it must not create duplicates.
+
+#### 3) Coordinator must accept and expose initial tracker data
+The coordinator responsible for polling tracker state must support being constructed with an already-fetched tracker object and must expose it immediately as its current `data` (so entities can be created without requiring an extra initial fetch).
+
+This change is specifically needed so that setup can validate and seed data once and avoid relying on an additional “first refresh” for initial entity creation.
+
+#### 4) Add integration strings for the new issue
+Add appropriate entries to the integration’s `strings.json` so the new issue has a title and description. The description must reference a `{tracker_id}` placeholder (serial number).
+
+### Constraints
+
+- The solution must work with the updated tests for invalid tracker filtering and issue creation, while also preserving existing behaviors for lights, switches, device tracker entities, and config flow reauth paths.

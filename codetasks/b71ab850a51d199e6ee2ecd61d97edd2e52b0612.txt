@@ -1,0 +1,24 @@
+Update the Tree-sitter–based analyzers so that Java/Scala package declarations are modeled as *module definitions* and behave consistently across declarations, FQNs, and rendered signatures.
+
+### Package declarations must become modules
+* The Java Tree-sitter query capture for `package_declaration` should be treated as a definition capture (rename/align capture naming as needed) and mapped to `CodeUnitType.MODULE` rather than being handled as a special-case “package declaration”.
+* A package module’s `CodeUnit` must be constructed so that:
+  * its fully-qualified name is the full package path (e.g., `com.example.foo`)
+  * its `packageName`/parent and `shortName` reflect the parent package and leaf segment (e.g., parent `com.example`, leaf `foo`)
+
+### Correct package name extraction (no annotation leakage)
+When extracting a package name from a source file, ensure that package-level annotations do not become part of the computed package/module name (and therefore do not pollute FQN lookups). This includes `package-info.java` where annotations commonly precede the `package` statement.
+
+### Module ↔ top-level class linkage
+For a given file, if a non-default package/module is present, the module `CodeUnit` must be associated with the file’s top-level class-like `CodeUnit`s that belong to that exact package. This relationship is required even when the module has no children in that file (the relationship should be recorded as “known, possibly empty”, not omitted).
+
+### Scala-style package identifiers
+Extend package name extraction to handle grammars where a package declaration may be composed of multiple identifier parts that should be joined with dots (Scala-style forms), rather than assuming a single `scoped_identifier`-like node.
+
+### `package-info.java` behavior
+`package-info.java` should define the package module (with a clean FQN equal to the package name) while still allowing other files in the same package to resolve against that module and its children correctly.
+
+### Module signature semicolons
+Fix module-signature rendering in the shared analyzer so that languages requiring semicolons include them in module signatures (when missing), while languages that do not require semicolons (e.g., Scala) do not gain trailing semicolons. This should be controlled via a language-specific override (e.g., in the Scala analyzer) rather than ad-hoc checks.
+
+The changes should integrate cleanly with the existing capture/name infrastructure (e.g., `CaptureNames`), language node-type constants, and the existing declaration/skeleton generation pipeline.

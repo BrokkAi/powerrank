@@ -1,0 +1,58 @@
+Add first-class Scala support to the existing Tree-sitter–based analysis framework.
+
+### Goal
+Extend the analyzer framework so Scala source files (`.scala`) are recognized as a build language and can be analyzed similarly to existing JVM languages. The implementation must support both Scala 2 and Scala 3 surface syntax for the features below.
+
+### Required features
+
+#### 1) New Scala language integration
+Introduce a new `Language` implementation for Scala and register it in the language registry so projects containing Scala sources are detected and analyzed using a Tree-sitter–based analyzer.
+
+Scala must:
+- Provide summaries and source code extraction.
+- Advertise support for interprocedural analysis (capability flag only; no dependency importing required).
+
+#### 2) Scala Tree-sitter analyzer
+Implement a Scala analyzer backed by the Tree-sitter Scala grammar. It must:
+- Load a Scala-specific Tree-sitter query resource (SCM) defining captures for packages, imports, and definitions.
+- Produce `CodeUnit`s for:
+  - Class-like constructs: `class`, `object`, `trait`, `enum`
+  - Function-like constructs: `def` methods and constructors
+  - Field-like constructs: `val`, `var`, and simple enum cases
+- Correctly compute each `CodeUnit`’s:
+  - `packageName`
+  - `shortName` (relative name including any nesting chain)
+  - `fqName` (package + shortName)
+
+Constructor naming rules must align with common JVM conventions used elsewhere in the project:
+- A primary constructor captured from the class definition should be represented as a function-like unit whose name reflects the owning class (e.g., `ClassName.ClassName`).
+- A secondary constructor declared as `def this(...)` should resolve to the owning class name rather than literal `this`.
+
+Lambda-level parsing is explicitly out of scope.
+
+#### 3) Package name extraction reuse for JVM languages
+Refactor package-name detection so Scala and Java can share logic. The shared helper must:
+- Walk the root node’s children and treat the package clause/declaration as optional.
+- Stop searching once a class-like declaration is encountered.
+- Build the dot-separated package string from the package node’s named children text slices.
+- Be usable by Java and Scala despite differing node type names and text-slicing strategy.
+
+#### 4) Import statement extraction for Scala
+Scala analyzer must expose import statements from a file (using the existing import-extraction mechanism in the Tree-sitter analyzer base). The Scala Tree-sitter query must capture Scala import declarations so they can be returned as textual statements.
+
+#### 5) Skeleton and source rendering compatibility
+Scala must work with the existing skeleton/source extraction APIs:
+- Class headers and closers should render consistently for Scala (use a brace-based form even for Scala 3 significant indentation constructs).
+- Function skeleton rendering must include full parameter lists as they appear in the source (including multiple parameter groups such as implicits), plus type parameters and return types when present.
+- Field skeletons must render with placeholder bodies consistent with the framework conventions.
+
+### Additional framework adjustments
+While implementing Scala support, ensure any required small framework changes are made, including:
+- Correct handling of joining package names and class chains into parent FQNs without producing spurious dots for empty components.
+- Any minor renaming/semantics corrections needed for `CodeUnit` construction so JVM and Scala naming behave consistently.
+
+### Constraints / exclusions
+- Do not implement dependency importing for Scala.
+- Do not implement lambda-level parsing beyond what is necessary to ignore it safely.
+
+The provided tests cover Scala code unit detection, import extraction, skeleton extraction, and source extraction, and they must pass along with all existing tests.

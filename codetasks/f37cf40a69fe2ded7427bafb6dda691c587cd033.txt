@@ -1,0 +1,50 @@
+### Problem: Fix Python Fully-Qualified Names (FQNs) to include module names and handle `__init__.py` semantics
+
+The analyzer framework builds `CodeUnit` objects (classes, functions, fields, etc.) from Tree-sitter captures and uses their fully-qualified names for lookup, parent/child attachment, import resolution, and source retrieval. Python currently produces inconsistent or incorrect FQNs in several situations, especially for packaged modules and nested scopes.
+
+Your task is to update the Python analysis so that:
+
+#### 1) Python FQNs include the module name as part of the qualified path
+For a Python file located in a package (e.g., `tests/units/utils/test_utils.py`), top-level declarations must be qualified using the full dotted path including the module (`tests.units.utils.test_utils`), not just the directory package (`tests.units.utils`). This applies to:
+- top-level classes
+- top-level functions
+- top-level fields/variables
+
+This change must also prevent collisions between identically named declarations in different modules within the same package (e.g., `pkg/a.py` vs `pkg/b.py`).
+
+#### 2) `__init__.py` must follow Python import semantics for naming
+Symbols defined in `mypkg/__init__.py` should be addressable as if they belong to the package itself (e.g., `mypkg.ClassName`, `mypkg.function_name`, `mypkg.CONSTANT`) rather than requiring an explicit `__init__` module segment.
+
+The same rule must extend to nested package initializers (e.g., `mypkg/subpkg/__init__.py` should yield `mypkg.subpkg.ClassName`).
+
+#### 3) Nested scope naming must correctly distinguish class nesting vs function-local definitions
+Python contains definitions that can be nested inside:
+- classes (nested classes, methods, class attributes)
+- functions (nested functions, function-local classes)
+- combinations (classes nested inside functions, methods inside function-local classes, deeply nested structures)
+
+The naming convention expected by the framework is:
+- use `$` to separate *class nesting boundaries* (e.g., `Outer$Inner`)
+- use `.` to separate *member access* for methods/fields (e.g., `Outer.method`, `Outer.field`)
+- function-local classes must incorporate the function scope appropriately while still using `$` for class boundaries (e.g., `func$LocalClass`), and methods/fields under those classes must keep `.` for member access (e.g., `func$LocalClass.method`)
+
+The analyzer must also correctly attach children to their parents using whatever parent-FQN lookup mechanism exists, even for function-local classes and non-standard naming styles.
+
+#### 4) Scope classification must be based on syntax, not naming heuristics
+Python naming conventions (PascalCase for classes, lowercase for functions) are not reliable. The analyzer must not depend on “starts with lowercase” style heuristics to decide whether an enclosing scope is a function or class for FQN construction or parent lookup. It must use structural information from the parsed syntax tree.
+
+#### 5) Framework integration: updated analyzer interface expectations
+The base Tree-sitter analyzer has evolved to provide richer context when creating code units (including typed scope information and refined skeleton types). Python must implement the expected creation logic using this richer context and ensure parent/child relationships and import resolution continue to work with the revised FQN scheme.
+
+#### 6) `CodeUnit.field(...)` must not enforce a single short-name format across languages
+Python module-level fields may not include a container prefix in their short name. The common code must allow analyzers to represent fields in language-appropriate formats without throwing validation errors.
+
+---
+
+### What success looks like
+After your changes:
+- A packaged Python declaration’s FQN always includes the module filename (except where `__init__.py` collapses into the package name).
+- Two modules in the same package defining the same class name produce distinct FQNs.
+- Parent/child relationships are correct for nested classes, methods, function-local classes, and nested functions.
+- Import resolution (including wildcard imports and “last wins” shadowing behavior) works with the new FQN scheme.
+- Python naming is correct even for intentionally “non-standard” identifiers (uppercase functions, lowercase classes, underscore/dunder names, etc.).

@@ -1,0 +1,44 @@
+Update the Energy integration to replace the legacy “grid” configuration shape (which used separate `flow_from`, `flow_to`, and `power` lists) with a unified “grid connection” object, similar to how batteries are represented.
+
+### New unified grid source model
+A grid energy source must now be represented as a single dict (TypedDict in `homeassistant/components/energy/data.py`) that can contain any combination of:
+- **Import energy statistic** (`stat_energy_from`, may be `None`)
+- **Export energy statistic** (`stat_energy_to`, may be `None`)
+- **Optional power statistic and/or power transform configuration** (`stat_rate` and `power_config`)
+- **Import cost tracking** (`stat_cost`) and import price (either `entity_energy_price` or `number_energy_price`)
+- **Export compensation tracking** (`stat_compensation`) and export price (either `entity_energy_price_export` or `number_energy_price_export`)
+- `cost_adjustment_day` (required)
+
+Validation must enforce:
+- For import price: you cannot define both `entity_energy_price` and `number_energy_price`.
+- For export price: you cannot define both `entity_energy_price_export` and `number_energy_price_export`.
+- A grid connection must configure at least one of: import stat, export stat, or power (`stat_rate` / `power_config`).
+- Multiple grid sources are now allowed, but grid-related statistics must be unique across all grid sources (import stats unique among themselves, export stats unique among themselves, power stats unique among themselves).
+
+### Storage migration
+Bump the stored preferences minor version and add migration support in the energy preferences store so that existing saved preferences using the legacy grid format are converted into one or more unified grid source objects:
+- Legacy `flow_from[i]`, `flow_to[i]`, and `power[i]` should be paired by index into a single grid connection at index `i`.
+- If the lists have different lengths, create as many grid connections as needed to cover the longest list, leaving missing parts unset/`None`.
+- Preserve `cost_adjustment_day` and all configured pricing/cost/compensation fields.
+- After migration, the stored `energy_sources` list must contain only the unified grid objects (no legacy keys like `flow_from` / `flow_to` / `power`).
+
+### Power sensor handling
+Grid power handling should match the unified approach used for batteries:
+- If `power_config` is present and requires a generated transform entity, the code must derive/set `stat_rate` accordingly.
+- If `power_config` already provides a direct `stat_rate`, use it as-is.
+- If no `power_config` is present, an explicitly configured `stat_rate` must remain unchanged.
+
+### Sensor creation updates
+Adjust `homeassistant/components/energy/sensor.py` so that:
+- Cost/compensation “fallback” sensors can be created from unified grid objects (not from nested flow entries).
+- Export compensation uses the export pricing fields (`entity_energy_price_export` / `number_energy_price_export`), even though the generic cost sensor logic expects the import-style keys.
+- Configurations where the relevant energy statistic is missing (`None`) must be ignored (e.g., export-only or power-only grid connections should not try to create an import-cost sensor).
+
+### Validation updates
+Update `homeassistant/components/energy/validate.py` to validate unified grid sources:
+- Import/export energy stats (if present) must be checked against expected energy metadata.
+- `stat_cost` / `stat_compensation` validation must follow the unified keys.
+- Price entity validation must use the correct field for import vs export.
+- Power stat validation must work with a single `stat_rate` on the grid source (not a list).
+
+The goal is to implement the unified grid format end-to-end (schema, migration, sensor creation, and validation) while keeping compatibility via migration so that existing stored preferences and updated websocket preference payloads continue to work.

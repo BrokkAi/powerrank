@@ -1,0 +1,52 @@
+Implement infrastructure to store and retrieve Kafka Streams state values together with their event-time timestamp and Kafka record headers (KIP-1271 building block).
+
+### 1) New public value wrapper
+Add a new immutable, generic class `org.apache.kafka.streams.state.ValueTimestampHeaders<V>` that:
+
+- Represents a triple: `value` (type `V`), `timestamp` (`long`), and `headers` (`org.apache.kafka.common.header.Headers`).
+- Treats `null` headers as “empty headers” (use a concrete empty `Headers` implementation, not `null`).
+- Exposes:
+  - Accessors `value()`, `timestamp()`, `headers()`.
+  - Static factory `make(value, timestamp, headers)` that returns `null` when `value` is `null`.
+  - Static factory `makeAllowNullable(value, timestamp, headers)` that returns an instance even when `value` is `null`.
+  - Static helper `getValueOrNull(ValueTimestampHeaders<V>)` returning the wrapped value when the wrapper is non-null, otherwise `null`.
+- Implements `equals`, `hashCode`, and `toString` consistently over all three fields.
+
+### 2) Header serde adjustments
+Update the existing internal header serde utilities in `org.apache.kafka.streams.state.internals`:
+
+- `HeadersSerializer` must throw `org.apache.kafka.common.errors.SerializationException` (not a generic runtime exception) when it fails to serialize.
+- `HeadersDeserializer` must provide a static convenience method `deserialize(byte[] data)` that can be used without explicitly instantiating the class, and it must correctly deserialize headers including:
+  - empty headers
+  - headers with `null` values
+  - multiple headers with the same key (duplicates must be preserved in order)
+
+### 3) Value+timestamp+headers serde (internal)
+Introduce an internal serde for the new wrapper type under `org.apache.kafka.streams.state.internals`:
+
+- `ValueTimestampHeadersSerializer<V>`: a serializer that wraps an underlying value `Serializer<V>` and produces a binary format containing:
+  1) a varint-encoded byte length of the serialized headers section
+  2) the serialized headers bytes
+  3) an 8-byte timestamp
+  4) the serialized value bytes
+- `ValueTimestampHeadersDeserializer<V>`: the inverse deserializer reading the same format and producing a `ValueTimestampHeaders<V>` instance.
+- `ValueTimestampHeadersSerde<V>`: a `Serde<ValueTimestampHeaders<V>>` that wires the above serializer/deserializer around a provided `Serde<V>`.
+
+Behavioral requirements for the serializer/deserializer:
+
+- Serializing `null` wrapper returns `null`.
+- If the wrapped value is `null`, serialization returns `null` (even if timestamp/headers exist).
+- If the underlying value serializer returns `null` for a non-null input value, propagate that as `null` output.
+- Deserialization of `null` bytes returns `null`.
+- Deserialization must validate the byte layout and throw `SerializationException` for malformed/too-short data (e.g., claims a headers section larger than remaining bytes, or missing the timestamp).
+- Provide static extraction helpers on the deserializer to read *only* one component from the raw bytes:
+  - `value(byte[] raw, Deserializer<T> valueDeserializer)`
+  - `timestamp(byte[] raw)`
+  - `headers(byte[] raw)`
+  These helpers should follow the same framing rules as full deserialization.
+
+Integration requirements:
+
+- The serializer/deserializer should participate in Streams’ “wrapping nullable” infrastructure (i.e., support the existing `WrappingNullableSerializer` / `WrappingNullableDeserializer` patterns and their `setIfUnset` behavior for nested nullable serdes).
+
+The provided unit tests exercise all of the above (wrapper semantics, headers round-trip including duplicates, serialization format validation, and component extraction).

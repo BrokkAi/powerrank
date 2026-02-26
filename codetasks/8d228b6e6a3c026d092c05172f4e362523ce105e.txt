@@ -1,0 +1,48 @@
+Implement support for Tessie “battery health” data in the Home Assistant `tessie` integration, exposing a new set of diagnostic sensors per vehicle and wiring them into setup, coordination, and diagnostics.
+
+### Functional requirements
+
+1. **Fetch battery health data from Tessie API**
+   - Use the `tessie_api.get_battery` endpoint to retrieve battery-related metrics for each vehicle (keyed by VIN).
+   - Only create battery health support for vehicles that have a usable `last_state` (consistent with how vehicle entities are currently filtered).
+
+2. **New per-vehicle update coordinator**
+   - Add a dedicated `DataUpdateCoordinator` for battery health data (separate from the existing vehicle state coordinator).
+   - It must refresh on the same interval as the rest of the Tessie vehicle polling.
+   - Error handling expectations:
+     - HTTP 401 responses must be treated as authentication failures (triggering the integration’s auth-failed behavior).
+     - Other HTTP errors during coordinator refresh must mark the refresh as failed (so entities become unavailable rather than crashing).
+
+3. **Integrate battery data into runtime vehicle model**
+   - Extend the vehicle runtime data structure to hold a reference to the battery coordinator.
+   - Ensure the vehicle object created during config entry setup contains both the existing state coordinator and the new battery coordinator.
+
+4. **Create battery health sensor entities**
+   - Add a battery-specific entity base (similar in spirit to the existing vehicle/energy entity bases) that:
+     - Attaches entities to the same device (VIN-based device).
+     - Uses unique IDs derived from VIN + sensor key.
+     - Subscribes to the battery coordinator rather than the vehicle state coordinator.
+   - Add sensor entities for the following battery keys when present in the battery payload:
+     - `phantom_drain_percent` (%)
+     - `energy_remaining` (kWh, energy storage)
+     - `lifetime_energy_used` (kWh, total increasing)
+     - `pack_current` (A)
+     - `pack_voltage` (V)
+     - `module_temp_min` (°C)
+     - `module_temp_max` (°C)
+   - These sensors must be **diagnostic** entities and use appropriate HA device classes, units, and state classes for their measurement types.
+
+5. **Setup-time behavior and failure modes**
+   - During config entry setup, battery data must be obtained for each eligible vehicle so battery entities can be created immediately.
+   - Setup must surface errors distinctly:
+     - Authentication failures from battery retrieval should fail setup as an auth error.
+     - Non-auth HTTP failures from battery retrieval should fail setup as a config entry error.
+     - Connection-type client errors should cause the entry to be retried (not a permanent failure).
+
+6. **Diagnostics output**
+   - Include the raw battery payload in config entry diagnostics output under each vehicle (alongside the existing redacted vehicle data).
+
+7. **User-facing metadata**
+   - Add translation strings and icons for the new battery sensor keys (so entities have correct names/icons via `strings.json` and `icons.json`).
+
+The change should fit naturally into the existing Tessie integration architecture (coordinators, entity base classes, sensor descriptions, runtime data models) and maintain consistency with existing naming, availability, and error-handling patterns.

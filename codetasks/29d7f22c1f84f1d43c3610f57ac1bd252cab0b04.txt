@@ -1,0 +1,31 @@
+Extend the `ty` language server to support editor-provided project configuration via two new workspace-level settings:
+
+- `ty.configuration`: an inline configuration object whose keys/shape match the existing `ty.toml` options model.
+- `ty.configurationFile`: a path to an explicit `ty.toml` file to use for the workspace (similar to the CLI `--config-file` behavior).
+
+### Requirements
+
+1. **Workspace options and initialization**
+   - Update the LSP initialization/workspace options model (in `crates/ty_server/src/session/options.rs`) to accept the two new settings above at the workspace scope.
+   - `ty.configuration` must be deserialized into the same options type used for file-based configuration (`ty_project::metadata::Options`), but attributed to an *editor* value source.
+   - `ty.configurationFile` must be interpreted as a filesystem path. It must support environment-variable expansion and be resolved relative to the workspace root when not absolute.
+   - If either inline configuration deserialization fails or the configurationFile path expansion fails, the server must notify the client with a user-facing error message and continue initialization without applying that override.
+
+2. **Project loading with overrides**
+   - During workspace initialization (in `crates/ty_server/src/session.rs`), use the workspace root path (not just the URL) as the basis for project setup.
+   - If `ty.configurationFile` is provided, load project metadata from that file for the workspace root; otherwise perform normal project discovery.
+   - Apply `ty.configuration` as an override on top of whatever configuration file/discovery produced, such that inline editor configuration takes precedence.
+
+3. **Project metadata API update**
+   - The `ProjectMetadata::from_config_file` API (in `crates/ty_project/src/metadata.rs`) must be adjusted so that it uses an explicit project root provided by the caller (rather than relying on the system current directory) when setting the project `name` and `root`.
+   - Update all call sites accordingly (including CLI and project-database refresh paths).
+
+4. **Value-source and lint selection provenance**
+   - The options/value-source plumbing currently assumes editor-provided configuration cannot exist. Remove those assumptions:
+     - Map editor-originated rule enablement to a distinct lint provenance (add a new `Editor` variant in `ty_python_semantic::lint::LintSource`).
+     - Ensure diagnostics/provenance messages (e.g. in `ty_python_semantic/src/types/context.rs` and option diagnostics in `ty_project/src/metadata/options.rs`) can describe editor-provided configuration without panicking/unreachable branches.
+
+5. **Public API / exports**
+   - Expose any types needed by external crates/tests to construct the new workspace options (e.g. `WorkspaceOptions` and related option structs) from `ty_server`’s public API.
+
+Implement these changes so the updated end-to-end server tests around workspace configuration pass, while preserving existing behavior for CLI configuration and project discovery.

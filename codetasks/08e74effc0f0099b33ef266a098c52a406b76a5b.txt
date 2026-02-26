@@ -1,0 +1,16 @@
+Update the `cmd/cloner` code generator so it can correctly generate deep-cloning code for struct fields that are maps whose *values may themselves be maps*, at arbitrary nesting depth.
+
+Today, the generator’s map handling only covers a single map level and emits element-cloning logic directly in-line. Extend it so that when a map value requires deep cloning, the generated code can descend through any number of nested `map[K]V` layers and produce correct Go code that:
+
+- Preserves `nil` maps at any level (i.e., if an inner map value is `nil`, the corresponding cloned inner map must also be `nil`, without panicking).
+- Ensures the cloned result aliases no mutable memory with the source across all supported map/value shapes.
+- Correctly handles map values that are:
+  - pointers (including `nil` pointers),
+  - interfaces whose dynamic values are cloneable via a `Clone` method,
+  - types that themselves require cloning (e.g., structs with generated `Clone`),
+  - nested maps mixing the above.
+- Uses shallow cloning for map values that don’t require deep cloning (e.g., values that contain no pointers / don’t need recursive cloning), but still produces correct code and imports.
+
+The generator output must remain valid, gofmt-able Go, including any required imports, and must avoid name collisions in nested `for k, v := range ...` loops when maps are nested multiple levels deep.
+
+Add example code to `cmd/cloner/clonerex` exercise maps containing pointers, maps containing values with `Clone` methods, maps of interfaces, and deeply nested maps (3+ levels). Your changes should allow the generator to produce correct `Clone` methods and update the generated “type-switch” `Clone(dst, src any) bool` support for the newly included types.

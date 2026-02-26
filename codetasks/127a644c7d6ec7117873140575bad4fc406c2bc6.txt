@@ -1,0 +1,25 @@
+Implement a fix in Kafka Streams’ internal task shutdown path to ensure state stores are always closed when shutdown happens during (or immediately after) a rebalance.
+
+### Background / bug
+During a rebalance, an **active task can be “recycled” into a standby task**. In this transition, the task may end up in `TasksRegistry#pendingTasksToInit` while still holding **open state stores**. If the stream thread enters shutdown (eg, due to failure) before those pending tasks are fully initialized/handed off, the current shutdown logic can miss them, leaving stores unclosed.
+
+### Required behavior
+1. **TaskManager shutdown must close all tasks that may hold resources**, including tasks that are not currently returned as “active” or “standby” tasks because they are still pending initialization.
+   * This applies to both “active” and “standby” pending tasks.
+   * Closure semantics for standby tasks during shutdown should be consistent with the active-task closure flow (eg, commit/suspend/close behavior should align with the existing expectations for standby tasks).
+
+2. The task registry must support reliably enumerating:
+   * current active tasks
+   * current standby tasks
+   * pending-to-init tasks separated by type (active vs standby), so shutdown can act on them deterministically
+   * any additional tracking needed so that tasks closed during shutdown can be safely removed from the registry without violating existing invariants.
+
+3. `Tasks` / `TasksRegistry` APIs must be updated accordingly (new methods as needed), and their behavior must be correct under removal:
+   * Removing a task that was only tracked as “pending to be closed” must not throw or leave it referenced internally.
+   * Existing task bookkeeping (failed tasks, pending creates, etc.) must remain consistent.
+
+### Notes
+4. `KafkaStreamsWrapper#setStreamThreadStateListener` does not discard any pre-existing stream thread listener already installed on the thread. Registering an additional listener must preserve previously configured behavior.
+
+### Scope
+The harness will provide updated/added tests (including a new integration test reproducing the shutdown-during-rebalance scenario). Your implementation should satisfy those tests by fixing the shutdown/task-registry handling described above without changing the intended external behavior of Kafka Streams.

@@ -1,0 +1,86 @@
+Refactor the engine workflow/scheduler integration so that a workflow registers **all tasks and streams up-front** as a single unit, rather than incrementally registering streams and tasks over time.
+
+### Goal
+Introduce a “manifest” concept in the workflow runner API and update the scheduler and workflow to use it. The new API must support:
+
+- Registering a complete set of streams + tasks atomically (with associated event handlers).
+- Unregistering that same set later, cleaning up scheduler/runner state and canceling any still-running tasks.
+- Listening to a stream by providing a writer (instead of returning a read-side pipeline from the scheduler).
+
+### Required behavior and API changes
+
+#### 1) Workflow runner interface changes (`pkg/engine/internal/workflow/runner.go`)
+Update the `Runner` interface and associated workflow types to support manifests:
+
+- Add a `Manifest` type that contains:
+  - `Streams []*Stream`
+  - `Tasks []*Task`
+  - `StreamEventHandler`
+  - `TaskEventHandler`
+- Replace stream registration/removal APIs with:
+  - `RegisterManifest(ctx, manifest)`
+  - `UnregisterManifest(ctx, manifest)`
+- Replace the scheduler “listen” model to:
+  - `Listen(ctx, writer, stream) error`
+  - The writer must implement a new `RecordWriter` interface with `Write(ctx, arrow.RecordBatch) error`.
+- Update `Runner.Start` so it **no longer accepts a handler**; tasks must already be registered through a manifest and retain the handler provided by that manifest.
+
+#### 2) Stream pipe relocation and semantics (`pkg/engine/internal/workflow/stream_pipe.go`)
+A stream “pipe” is still required for workflow results consumption (it must implement `executor.Pipeline`), but it now lives under the `workflow` package and is used internally by the workflow to bridge runner output into a local pipeline.
+
+It must support:
+- `Read(ctx)` and `Write(ctx, batch)`
+- `Close()`
+- A way to set a terminal error that causes `Read` to return that error (once set), rather than only EOF.
+
+#### 3) Scheduler resource registration lifecycle (`pkg/engine/internal/scheduler/scheduler.go`)
+Replace per-stream registration/removal with manifest-based lifecycle:
+
+- Implement `RegisterManifest`:
+  - Validates the manifest is internally consistent (no duplicate IDs within the manifest).
+  - Validates no stream/task IDs collide with already-registered resources belonging to other manifests.
+  - Validates all task source/sink streams referenced by tasks exist within the same manifest.
+  - Validates per-stream binding rules (a stream can only have one sender task and one receiver task; local listener conflicts with task receiver).
+  - Updates scheduler internal maps **atomically** only if validation succeeds.
+  - Stores handlers from the manifest on the tracked resources (streams use `manifest.StreamEventHandler`, tasks use `manifest.TaskEventHandler`).
+
+- Implement `UnregisterManifest`:
+  - Verifies that the provided manifest corresponds to currently-registered resources.
+  - Removes tasks and streams associated with the manifest from scheduler tracking.
+  - For tasks that are not already terminal, transition them to `Cancelled`, notify their handler, and best-effort notify an assigned worker (if any) with a cancel message.
+  - Forces associated streams into `Closed` before removal and emits stream state notifications.
+
+- Update `Start(ctx, tasks...)`:
+  - Tasks passed to `Start` must be previously registered via a manifest; reject unknown tasks.
+  - Prevent starting a task more than once by enforcing that only tasks in the initial “created” state can be enqueued.
+  - Ensure that starting a task transitions it into `Pending` and triggers the registered task handler accordingly.
+
+- Update `Listen`:
+  - Signature becomes `Listen(ctx, writer, stream) error`.
+  - Binds a local listener that receives forwarded stream batches via `RecordWriter.Write`.
+  - Must reject binding if a task is already the receiver (or if a listener already exists).
+  - Must attempt any stream binding logic needed when the sender task is already assigned.
+
+- Adjust cleanup logic:
+  - Do not automatically delete tasks from internal tracking merely because they reached a terminal state in status handling; lifecycle is now manifest-driven.
+  - Ensure task cancellation still closes associated sink streams (when applicable).
+
+#### 4) Scheduler stream representation (`pkg/engine/internal/scheduler/stream.go`)
+Update the stream’s local receiver type from the old pipe to the new `workflow.RecordWriter`. Stream closing must no longer rely on closing a local pipe automatically; closing behavior should be driven by workflow logic and/or explicit state transitions.
+
+#### 5) Workflow lifecycle changes (`pkg/engine/internal/workflow/workflow.go`)
+Update workflow creation and execution to use the manifest lifecycle:
+
+- Workflow construction should prepare the manifest containing all tasks and streams (including the injected results stream) and register it with the runner.
+- Workflow should bind the results stream to an internal results pipeline using the new `Listen(ctx, writer, stream)` API.
+- Workflow must provide a `Close()` method that unregisters the manifest.
+- `Run(ctx)` should return the pipeline that reads from the workflow’s internal results pipe.
+- When a task fails, the workflow must propagate the failure as the workflow/pipeline terminal error.
+- When the results stream transitions to `Closed`, the results pipeline should close so readers eventually stop.
+
+Also update the engine entry point to ensure workflow resources are released after execution (even on errors).
+
+### What should remain true
+- Existing task/stream state notifications still occur, but handlers now come from the manifest.
+- The scheduler still supports workers, assignment, cancellation, and stream forwarding, but resource ownership and cleanup are now controlled by registering/unregistering the manifest.
+- Workflow result consumption remains via `executor.Pipeline` (read-side), while the scheduler writes to a provided `RecordWriter` (write-side).

@@ -1,0 +1,28 @@
+Update the billing cancellation workflow to be more Stripe-aware and observable.
+
+### Goal
+Enhance `SubscriptionCancellationJob` so that it:
+1. Retrieves the Stripe subscription with enough data to safely evaluate the most recent invoice’s billing context.
+2. Cancels only when the subscription is in the specific delinquent state the job is meant to handle **and** the latest invoice indicates the delinquency came from normal subscription lifecycle billing.
+3. Emits structured logs explaining when the job is skipped and what actions it performs.
+4. Continues to void any *open* invoices for the subscription, including handling Stripe pagination.
+
+### Required functional behavior
+- The job reads `subscriptionId` and `organizationId` from the Quartz job data.
+- If the organization cannot be loaded or is currently enabled, the job must skip without calling Stripe cancellation/voiding, and log that it skipped (include the job name and relevant IDs).
+- When fetching the subscription from Stripe, request expansion of the latest invoice so that `LatestInvoice.BillingReason` is reliably available.
+- Proceed with cancellation only when:
+  - the subscription is unpaid (use the Stripe SDK’s subscription status representation rather than raw string comparisons), and
+  - the latest invoice billing reason corresponds to a subscription creation or subscription cycle event.
+- When cancellation occurs:
+  - cancel the subscription in Stripe,
+  - log that the subscription was cancelled,
+  - list and void all *open* invoices for that subscription (limit 100 per request), iterating through all pages using `StartingAfter`,
+  - log each invoice void action with invoice and subscription identifiers.
+
+### Constants
+Add reusable Stripe billing-reason constants in `StripeConstants` (under the Core billing constants area) for the allowed billing reasons used by the cancellation decision logic, and update the job to use those constants instead of hard-coded string literals.
+
+### Non-functional expectations
+- Make the updated job resilient to nulls in the Stripe response (subscription and/or latest invoice fields).
+- Ensure the new logging compiles with dependency injection (the job constructor will need an injected logger).

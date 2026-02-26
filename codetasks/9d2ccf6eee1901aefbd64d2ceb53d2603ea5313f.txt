@@ -1,0 +1,66 @@
+Implement an ISSUE-mode “review-bot inline comment fix” stage in `JobRunner` that runs after the job has completed its normal task execution and reached a passing build, but before PR creation. The stage must:
+
+1. **Compute review-bot inline comments from the diff against the repository’s default branch**, and
+2. **Apply those inline comments as a serial sequence of code-fix tasks** on the current issue branch, including per-task branch update behavior and a single final verification pass at the end.
+
+### Required functional additions/changes
+
+#### 1) Inline-comment fix prompt builder
+Add a utility that converts a `PrReviewService.InlineComment` into a single fix prompt string. The prompt must include the comment’s:
+- file path
+- line number
+- severity
+- markdown body (handling null/empty safely)
+
+This prompt is used as the input to the code-fix agent for each review comment.
+
+#### 2) Deterministic orchestration helpers for “review-fix tasks”
+Introduce a small orchestration API that can be unit-tested without GitHub/LLM involvement:
+
+- A method that, given:
+  - a list of inline comments
+  - a function mapping a comment to a prompt
+  - a consumer that “runs” a task for a prompt
+  - a runnable “branch update hook” to run after each executed task
+  - a runnable “final verification pass”
+  
+  executes tasks **serially and in order**, invoking the branch update hook after each task, and invoking the final verification pass exactly once after all tasks.
+
+- A cancellation-aware variant that additionally accepts a `BooleanSupplier` cancellation signal and enforces:
+  - short-circuiting when cancellation becomes true (no remaining tasks; no final verification)
+  - **no prompt construction** for comments that will be skipped due to cancellation
+  - the per-task branch update hook still runs for any task that actually executed (even if cancellation flips during the task)
+
+#### 3) Diff short-circuit helper
+Add a helper used by ISSUE-mode review computation that:
+- obtains a diff via a supplier
+- if the diff is blank, returns an empty list and does not invoke the “review and parse” function
+- otherwise passes the diff to a callback that returns the parsed inline comments
+
+#### 4) Compute ISSUE-mode review inline comments against base branch
+Add an ISSUE-mode method that:
+- determines an appropriate base ref from the default branch (including fetching the remote default branch when possible)
+- computes a diff from base ref to `HEAD`
+- annotates the diff with line numbers
+- uses the existing review mechanism to produce a JSON response and parse it into inline comments
+- filters inline comments using the existing severity/limit policy constants
+- emits a notification event to the job event store when inline comments are generated (failure to append the event must not crash the job)
+- returns the filtered inline comments, or an empty list when the diff (or annotated diff) is blank
+
+Error handling should produce a meaningful exception when diff computation fails or when the review response cannot be parsed as valid JSON.
+
+#### 5) Wire the new stage into ISSUE-mode execution flow
+In the ISSUE-mode path in `JobRunner`, after the normal task list execution has succeeded and before PR creation:
+- compute inline comments for the current branch vs default branch
+- if no comments exist, record a “skipping review-fix stage” notification (best-effort)
+- otherwise, for each inline comment:
+  - run a fix task using the prompt builder from (1)
+  - after each task, invoke a branch update hook that performs best-effort auto-commit and push for the current issue branch (push failures should be non-fatal but should emit a best-effort notification)
+- after all review-fix tasks complete, run a single end-of-run verification/fix gate pass (tests and lint) using the existing single-fix semantics
+
+The final verification logic should remain encapsulated and reusable (i.e., not duplicated across unrelated sections).
+
+### Notes
+- Null-safety is important (e.g., comment fields and task descriptions).
+- The new orchestration helpers must be testable and deterministic via injected callbacks; the production wiring can use real implementations.
+- Existing behavior around final verification/fix gating must remain consistent, but the end-of-run gate should occur after the new review-fix stage in ISSUE mode.

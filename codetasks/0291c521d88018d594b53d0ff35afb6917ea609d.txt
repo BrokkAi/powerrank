@@ -1,0 +1,68 @@
+Implement optional persistence of **raw Goldfish query results** (the exact JSON payloads returned by each backend cell) into **object storage**, while continuing to store **sample metadata** in MySQL and exposing the persisted-object references through existing APIs/UI types.
+
+### Requirements
+
+#### 1) Persist result-storage metadata in SQL
+Extend the `goldfish.QuerySample` model to include per-cell result storage metadata:
+
+- result URI (string)
+- stored size in bytes (int64)
+- compression codec (string)
+
+Update the MySQL storage implementation so:
+
+- `StoreQuerySample` writes these new fields into the `sampled_queries` table, using `NULL` when persistence is not used.
+- `GetSampledQueries` reads the nullable columns back into `goldfish.QuerySample`.
+
+A SQL migration adds/removes these nullable columns on `sampled_queries`.
+
+#### 2) Expose metadata in the UI-facing type
+Extend the UI layer’s `SampledQuery` representation to include nullable pointers for the same result metadata fields (URI, size bytes, compression) for both cells, and populate them when converting from `goldfish.QuerySample`.
+
+#### 3) Add configuration for result persistence
+Extend Goldfish configuration to support a new “results” section/flags:
+
+- `goldfish.results.enabled` (bool)
+- `goldfish.results.mode` with supported values:
+  - `mismatch-only` (default)
+  - `all`
+- `goldfish.results.backend` (string: `gcs` or `s3`); when omitted, infer it from the SQL storage type (CloudSQL → GCS, RDS → S3)
+- `goldfish.results.prefix` (object key prefix; default `goldfish/results`)
+- `goldfish.results.compression` with supported values `gzip` (default) or `none`
+- provider bucket configuration via the shared bucket config/flags
+
+Validation rules include:
+- When results persistence is enabled, a SQL metadata backend must be configured.
+- Mode/backend/compression must be among supported values.
+- Bucket configuration must validate successfully.
+
+#### 4) Introduce an object-storage ResultStore
+Add a `ResultStore` abstraction that can:
+
+- Store a raw JSON payload with metadata describing tenant, backend name, status code, correlation id, query type, hash, and timestamp.
+- Optionally gzip-compress the payload before upload depending on configuration.
+- Return a `StoredResult` including:
+  - a URI identifying the stored object (`<backend>://<bucket>/<key>`)
+  - stored size and original size
+  - compression used
+- Close underlying resources.
+
+Object key layout must be date-partitioned (UTC) and include correlation ID and cell label, producing two objects per sampled query (cell A and cell B). Also upload a small JSON metadata sidecar for best-effort inspection.
+
+#### 5) Integrate persistence into sampling/comparison flow
+Update the Goldfish `Manager` so it can be constructed with an optional `ResultStore` and, during `ProcessQueryPair`:
+
+- Compute the comparison result as before.
+- If result persistence is configured, decide whether to persist based on the configured mode:
+  - `all`: always store both payloads
+  - `mismatch-only`: store only when the comparison status is not a match
+- Persist each cell payload independently; failures must not prevent the rest of processing.
+- Record persisted URI/size/compression back into the `goldfish.QuerySample` so it gets written to SQL and can be returned via read paths.
+- Ensure `Close()` closes both the SQL storage and the result store and returns a combined error when multiple closes fail.
+
+`ResponseData` should carry the backend name used for storage metadata.
+
+#### 6) Wire it into QueryTee proxy
+When Goldfish is enabled in the proxy, create the result store only when configured, pass it into the Goldfish manager, and ensure backend names from each upstream response are propagated into the captured response data before `ProcessQueryPair` runs.
+
+Also ensure response size is still recorded even when response-stat parsing isn’t available for a given payload.

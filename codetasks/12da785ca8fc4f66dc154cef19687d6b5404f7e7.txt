@@ -1,0 +1,44 @@
+Implement a bounded, asynchronous diff-caching mechanism for context history that eliminates eager “warm-up” behavior and supports on-demand diff computation from the UI.
+
+### Background
+The application maintains a `ContextHistory` of `Context` snapshots. A `DiffService` computes “diff entries” between a context and its immediate predecessor. Diff computation can involve awaiting fragment content with timeouts and must not block the UI thread.
+
+### Required changes
+
+#### 1) Replace the existing diff cache with a bounded cache
+Update `ai.brokk.context.DiffService` so that diff results are cached in a bounded way (eviction-based) rather than growing unbounded over time. The cache must:
+- Store an async computation result (a `CompletableFuture<List<Context.DiffEntry>>`) per diff key.
+- Deduplicate concurrent requests so multiple calls for the same key return the exact same `CompletableFuture` instance.
+- Be clearable (invalidate all cached entries).
+
+The cache key must represent the relationship “previous context → current context” (not just the current context alone). This is important because the same “current” context instance may be compared against different predecessors across different histories/snapshots.
+
+#### 2) Key diffs by specific context instances (pair identity)
+Diff caching must distinguish between specific `Context` object instances, not only logical equality or UUID identifiers. The cache key should treat `(prev, curr)` as a unique pair based on the specific objects involved (including allowing `prev` to be absent for the first history entry).
+
+#### 3) Remove eager diff warm-up and history-truncation cache management
+Eliminate the mechanism that precomputes diffs for the entire history (the “warm-up” behavior). Also remove any special cache pruning tied to history truncation; the bounded cache should make this unnecessary.
+
+#### 4) Preserve the existing API semantics and add/adjust where needed
+`DiffService` must still support:
+- `diff(Context curr)`: returns a `CompletableFuture` that completes with the diff between `curr` and its predecessor (or an empty list if there is no predecessor). The computation must run off the EDT using the project/background executor exposed by the context manager.
+- `peek(Context curr)`: returns an `Optional` containing the diff only if it’s already computed and available immediately; otherwise empty.
+- `clear()`: clears the cache so subsequent `diff()` calls recompute.
+
+The internal diff computation behavior (timeouts, fallbacks, placeholder entries, etc.) must remain compatible with existing expectations.
+
+#### 5) Trigger diff computation on demand from the history UI
+Update `ai.brokk.gui.HistoryOutputPanel` so diffs are requested only when needed:
+- When the visible portion of the history table changes (scroll/viewport changes), request diffs for the rows currently visible.
+- When a context row becomes selected, request its diff as well.
+- When a diff computation completes, update any UI sizing/layout that depends on diff availability (e.g., row height adjustments) on the Swing EDT.
+
+This replaces any prior “compute everything up front” approach.
+
+#### 6) Test infrastructure support
+The test context manager used in unit tests must provide a background executor consistent with the production interface so `DiffService` can schedule work on it. Ensure that diff computation in tests can run asynchronously and deterministically enough for the updated tests.
+
+### Notes
+- Add any required dependency for a bounded cache implementation via the Gradle version catalog and app dependencies.
+- Ensure cache clearing truly removes entries so `peek()` reflects an empty cache immediately after `clear()`.
+- Make sure the cache strategy is safe under concurrent access (multiple threads calling `diff()` simultaneously for the same context pair).

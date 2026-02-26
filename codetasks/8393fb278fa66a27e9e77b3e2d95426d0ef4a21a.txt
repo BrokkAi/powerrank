@@ -1,0 +1,43 @@
+Refactor the “cumulative changes” pipeline to use a structured Git diff model instead of the existing fragment-based diff representation, and ensure working-tree comparisons behave correctly.
+
+### Goals
+
+1. **Replace the per-file diff representation used by `DiffService.CumulativeChanges`**
+   - `CumulativeChanges.perFileChanges()` must no longer be a list of the existing `DiffService.FragmentDiff` type.
+   - Introduce and use a repository-level diff record (e.g., `GitRepoData.FileDiff`) that represents a file change with:
+     - optional old-side file reference
+     - optional new-side file reference
+     - old text content
+     - new text content
+
+2. **Compute cumulative diffs using JGit’s structured diff**
+   - Update `DiffService`’s cumulative-diff computation so it derives the list of changed files using JGit diff entries between two refs (commit-to-commit, and commit-to-working-tree).
+   - Rename/copy detection must be enabled so file moves are represented correctly.
+   - The diff computation should not require the caller to supply a precomputed set of modified files.
+
+3. **Support `"WORKING"` as a right-side ref**
+   - When comparing `oldRef` to `"WORKING"`, the resulting diffs must reflect the tracked working tree state.
+   - Untracked files must not be treated as “added” changes in this mode.
+
+4. **Content retrieval rules**
+   - For each changed path, populate `oldText` and `newText` appropriately based on whether the file exists on each side:
+     - added file: old side should be absent and old text empty
+     - deleted file: new side should be absent and new text empty
+   - When a file cannot be read at a given ref (e.g., doesn’t exist at that ref), treat its content as empty rather than failing the whole operation.
+
+5. **Update all consumers to the new model**
+   - Any UI and agent code that previously relied on `FragmentDiff` fields like `title()`, `diff()`, or `fragment()` must be updated to work from the new `FileDiff` representation.
+   - Where textual patch output is needed (e.g., for review prompts), compute it from `oldText`/`newText` using the existing diff utility in the codebase rather than storing patch text on the per-file object.
+   - Title/display names should be derived from the available file reference (new if present, otherwise old), using its relative path.
+
+6. **Keep the per-file summaries preparation API consistent**
+   - `DiffService.preparePerFileSummaries(...)` must return entries keyed by the file title and valued with the new per-file diff type, maintaining deduplication and stable sorting.
+
+### Scope touchpoints (for orientation)
+
+The change affects:
+- `ai.brokk.context.DiffService` cumulative-diff computation and `CumulativeChanges` data structure.
+- `ai.brokk.git.GitRepoData` for generating structured per-file diffs and reading content for refs including `"WORKING"`.
+- Call sites that render aggregated diffs or build review context, including `ReviewAgent`, `SessionChangesPanel`, and `CreatePullRequestDialog`.
+
+The provided tests include new coverage for the structured diff/content behavior and working-tree handling, and existing tests must continue to pass.

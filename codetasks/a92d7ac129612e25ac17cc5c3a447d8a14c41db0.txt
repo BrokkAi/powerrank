@@ -1,0 +1,101 @@
+### Goal
+
+Extend Key Connector “set key” signup/registration to support **Account Encryption v2** payloads while keeping the existing **v1** payload supported. The API endpoint must accept either format, persist the appropriate cryptographic state, and enforce Key Connector eligibility rules.
+
+---
+
+### Context / Existing Behavior
+
+The Key Management API exposes an endpoint implemented in `src/Api/KeyManagement/Controllers/AccountsKeyManagementController.cs` that finalizes a Key Connector-based signup by storing a user key and related crypto fields.
+
+Historically this endpoint accepted a **v1** request body containing:
+- a wrapped user key (`Key`)
+- legacy `Keys` (public/private keypair)
+- KDF parameters
+- `OrgIdentifier`
+
+This flow must remain functional.
+
+---
+
+### New Requirements (v2 encryption support)
+
+Add support for a **v2** request shape that includes:
+- `KeyConnectorKeyWrappedUserKey` (an encrypted-string formatted value)
+- `AccountKeys` (v2 account crypto state payload)
+- `OrgIdentifier`
+
+When a v2 request is received, the endpoint must:
+1. Reject unauthenticated callers (same as today).
+2. Enforce that the user is allowed to use Key Connector:
+   - not already using Key Connector (`UsesKeyConnector` is false)
+   - not an **Owner** or **Admin** of any organization in the current context
+3. Persist both:
+   - the user’s wrapped key (stored in the user’s `Key` field) and mark the user as using Key Connector
+   - the **v2 account cryptographic state** derived from `AccountKeys`
+4. Perform the same “post-registration” side effects as the v1 flow where applicable (event logging and organization user acceptance by org SSO identifier).
+
+This work is expected to be implemented via a dedicated Core command (not by expanding the legacy `IUserService.SetKeyConnectorKeyAsync` path).
+
+---
+
+### Request Model + Validation
+
+Update `src/Api/KeyManagement/Models/Requests/SetKeyConnectorKeyRequestModel.cs` so the endpoint can distinguish v1 vs v2 based on which fields are present.
+
+Key points:
+- The model must support **both** payload styles.
+- v2 fields must be nullable and validated appropriately, including encrypted-string validation for `KeyConnectorKeyWrappedUserKey`.
+- v1 fields should remain available but treated as legacy/obsolete, and still validated when the request is not v2.
+- The model must provide a way to:
+  - determine whether the request is v2
+  - produce a Core-friendly data object for v2 processing (containing wrapped key, account keys payload, org identifier)
+  - keep the existing “apply v1 fields onto a User entity” behavior for the legacy path
+
+---
+
+### Core Command + Authorization
+
+Introduce a Key Management command in Core that performs the v2 “set key connector key” operation end-to-end. It must:
+- use ASP.NET Core authorization to evaluate a Key Connector operation requirement against a `User` resource
+- update user data and v2 account cryptographic state through repository APIs
+- log an appropriate user event
+- accept the organization user invitation by the provided org SSO identifier
+
+Add an authorization handler under `src/Core/KeyManagement/Authorization/` that implements the “can use Key Connector” rule described above, and register it through the Key Management service collection extensions.
+
+---
+
+### Repository Support (Dapper + EF) + SQL
+
+Add a repository-level update operation to set the Key Connector wrapped user key and related user fields in a way that can be composed with other user updates performed during the v2 flow.
+
+This includes:
+- a new `IUserRepository` method returning an `UpdateUserData` delegate for setting:
+  - `Key` to the wrapped key
+  - `UsesKeyConnector` to true
+  - KDF fields to sensible defaults for Key Connector usage
+  - `RevisionDate` and `AccountRevisionDate` to “now”
+- implementations for both:
+  - `src/Infrastructure.Dapper/Repositories/UserRepository.cs` using a stored procedure
+  - `src/Infrastructure.EntityFramework/Repositories/UserRepository.cs`
+
+Create the SQL stored procedure `User_UpdateKeyConnectorUserKey` under `src/Sql/...` and add a corresponding migrator script under `util/Migrator/DbScripts/`.
+
+---
+
+### Feature Flag Constant
+
+Add a feature-flag key constant under `src/Core/Constants.cs` for enabling v2 encryption on Key Connector registration (even if the flag gating is handled elsewhere).
+
+---
+
+### Testing Expectations
+
+The provided unit and integration tests cover:
+- v1 request handling and failure propagation
+- v2 request handling, including validation and persistence expectations
+- authorization behavior for Key Connector usage eligibility
+- repository update behavior for the new “set key connector user key” operation
+
+Your implementation should satisfy those behaviors through the production code changes described above.

@@ -1,0 +1,68 @@
+Update the search/query utilities to support parallel execution while keeping results deterministic and error handling explicit.
+
+### Scope
+You are working in the project’s search tooling (notably `ai.brokk.tools.SearchTools`) and a call site in `ai.brokk.analyzer.usages.FuzzyUsageFinder`.
+
+### Functional requirements
+
+#### 1) Regex compilation is now strict and reusable
+Introduce a shared mechanism to compile a list of regex strings into `java.util.regex.Pattern` objects:
+
+- Blank patterns are ignored.
+- If any non-blank pattern is not a valid Java regex, the compilation step must fail with an aggregated, human-readable error describing all invalid patterns (valid ones must not be reported as errors).
+- Callers that expose tools should convert this failure into a user-facing error message (rather than silently falling back to substring matching as before).
+
+This compiled-pattern API must be usable by both filename search and content search.
+
+#### 2) File-content prefiltering supports compiled patterns and error reporting
+Replace/augment the existing “find files containing patterns” helper so it can:
+
+- Accept compiled `Pattern` instances.
+- Search only text files.
+- Search file contents for any match across the provided patterns.
+- Execute efficiently over large file sets (tests expect concurrency support).
+- Return **both**:
+  - the set of matching `ProjectFile`s, and
+  - a list of file-read/search errors (do not fail the entire search on a single unreadable file).
+
+Tool output must mention when errors occurred (at least a count and a representative example).
+
+`FuzzyUsageFinder` must be updated to use the new compiled-pattern-based prefilter rather than passing raw strings.
+
+#### 3) `searchFileContents` behavior changes
+The `searchFileContents(pattern, filepath, contextLines)` tool must:
+
+- Treat the `pattern` as a regex (using the strict compiler above); invalid regex produces a readable error response.
+- Search matching files (glob expansion) and include support for the existing `**/…` retry behavior for project-root files.
+- Scan line-by-line and emit context around matching lines.
+- Clamp `contextLines` to an allowed range.
+- Avoid printing the same line more than once when contexts overlap.
+- Execute across files efficiently (parallel-friendly), but keep output stable/consistent.
+
+#### 4) `xpathQuery` is parallel-capable, secure, and namespace-agnostic
+The `xpathQuery(filepath, xpath)` tool must:
+
+- Apply the existing “namespace-agnostic” transformation for simple element names (local-name based matching).
+- Evaluate the XPath against each matched XML file and return matching node text content.
+- Use secure XML parsing settings that reject dangerous constructs (e.g., DTD/DOCTYPE-based entity expansion); failures should be reported per-file rather than crashing the whole query.
+- Run efficiently across many files and reuse expensive compilation where appropriate.
+- If no results are produced, return a clear “no results” message; if errors occurred, the response must indicate that.
+
+#### 5) `jq` is parallel-capable with clear filter/content errors
+The `jq(filepath, filter)` tool must:
+
+- Reject blank filters.
+- Compile jq filters; invalid filters must return a clear “invalid jq filter” message.
+- Apply the compiled filter to each JSON file; JSON parse failures must be reported as per-file errors (not as a total failure).
+- Run efficiently across many files and reuse expensive compilation where appropriate.
+- If there are no results, return a clear “no results” message; if errors occurred, indicate that.
+
+#### 6) Deterministic outputs and minor correctness fixes
+- Where file lists are returned or embedded in tool outputs, ensure ordering is stable (e.g., sorted paths) so parallel execution doesn’t make results nondeterministic.
+- Any internal refactors must preserve existing tool contracts (string formats/messages can evolve only as required above).
+- Ensure `getGitLog` continues to support rename tracking output (tests validate presence of rename breadcrumbs).
+
+### Concurrency and interruption
+Several tool methods now need to support being interrupted during parallel work. Ensure your design allows:
+- parallel execution without sharing non-thread-safe objects across threads, and
+- correct propagation of `InterruptedException` when applicable (rather than swallowing interrupts).

@@ -1,0 +1,25 @@
+Update the Home Assistant Todoist integration to be compatible with `todoist-api-python==3.1.0` while preserving the integration’s existing behavior for calendar entities, todo list entities, and the “create task” service.
+
+Key compatibility changes you must address:
+
+- **Paginated async results**: In v3.x, several API methods no longer return a plain list; they return a paginated async result (iterable via an async generator yielding pages). The integration must transparently consume these results so existing code continues to work with normal `list[...]` semantics (projects, labels, sections, tasks, collaborators).
+
+- **Task completion field change**: The library no longer exposes completion as a simple boolean in the same way; completion should be derived from the presence/absence of a completion timestamp. Update all places that determine whether a task is completed (calendar event mapping and todo list items/status updates).
+
+- **Task completion endpoints renamed**: The API methods used to mark tasks complete/incomplete have changed names in the new library version. Update the todo item update flow accordingly.
+
+- **Due date object semantics**: The `Due` model deserialization in v3.x yields Python `date`/`datetime` objects rather than relying on separately-parsed ISO strings. Centralize due-date parsing so:
+  - date-only tasks produce a `date`
+  - datetime tasks produce a localized `datetime`
+  - missing/invalid due data yields `None`
+  Ensure both calendar event generation and todo item representation use the same parsing rules.
+
+- **Calendar event filtering robustness**: When building calendar events and filtering them by a requested time window, handle the possibility that start/end datetimes may be absent (e.g., if a due date could not be interpreted) without raising exceptions.
+
+- **Task creation service behavior changes**:
+  - When creating tasks with a due datetime, pass an appropriate datetime value in the format expected by the updated client (don’t rely on manually formatting strings if the client now handles it).
+  - The REST API still does not support reminders; reminders must still be created via Todoist’s Sync endpoint using an authenticated HTTP request. Ensure the correct endpoint and headers are used, and that reminder “absolute date” formatting matches what the Sync API expects.
+
+- **Test fixtures compatibility**: The provided tests construct Todoist model objects in ways that mimic real API deserialization behavior. Your integration code must work correctly with these objects (especially `Due` and `Task` fields) and with mocked API methods that may be invoked multiple times.
+
+Implement the necessary updates across the integration so it functions correctly with the new Todoist library version and satisfies the updated unit tests.

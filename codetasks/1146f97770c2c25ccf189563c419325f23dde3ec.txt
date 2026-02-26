@@ -1,0 +1,86 @@
+### Goal
+
+Extend share-group offset description to include **per-partition lag** and expose it end-to-end (broker protocol → coordinator logic → admin client parsing), while preserving backward compatibility with existing protocol versions.
+
+### Functional requirements
+
+#### 1) Protocol/message changes (wire compatibility)
+Update the `DescribeShareGroupOffsets` API messages so that:
+
+- The request/response support a **new version** in addition to the existing one.
+- The **response partition** structure includes a new `Lag` field:
+  - Present only in the newer version.
+  - Defaults to `-1` and is ignorable for forward/backward compatibility.
+
+These changes are defined in:
+- `clients/src/main/resources/common/message/DescribeShareGroupOffsetsRequest.json`
+- `clients/src/main/resources/common/message/DescribeShareGroupOffsetsResponse.json`
+
+#### 2) Broker-side response population and error defaults
+When the broker builds `DescribeShareGroupOffsetsResponse`, ensure every partition response contains a meaningful lag value when possible, and otherwise uses an “uninitialized” value.
+
+Specifically:
+- If lag cannot/should not be computed (see below), return `Lag = -1`.
+- For authorization failures generated in the request handling path, ensure `Lag` is also set to `-1` alongside the existing `StartOffset = -1`.
+
+This impacts `core/src/main/scala/kafka/server/KafkaApis.scala`.
+
+#### 3) Coordinator-side lag computation
+Enhance `GroupCoordinatorService` so that it computes **share partition lag** using:
+- The share partition’s `startOffset` and `deliveryCompleteCount` from the share-state summary returned by the persister.
+- The partition’s **latest/end offset** retrieved asynchronously via a new abstraction.
+
+Lag formula:
+- `lag = latestOffset - startOffset - deliveryCompleteCount`
+- The “latest offset” here is the log end offset (offset of the next message to be produced).
+
+Lag must only be computed when all of the following are true for a partition summary:
+- The summary indicates success (no partition-level error).
+- `startOffset` is initialized (not the uninitialized sentinel).
+- `deliveryCompleteCount` is initialized (not the uninitialized sentinel).
+
+If the latest-offset lookup for a partition fails, return a partition response that carries the corresponding error code/message for that failure rather than a computed lag.
+
+This work is centered in:
+- `group-coordinator/src/main/java/org/apache/kafka/coordinator/group/GroupCoordinatorService.java`
+
+#### 4) Introduce a latest-offset lookup abstraction
+Add a `PartitionMetadataClient` interface in the group coordinator module that can fetch latest offsets for a set of `TopicPartition`s and return per-partition `CompletableFuture<Long>` results.
+
+Wire it through:
+- `GroupCoordinatorService.Builder` (required dependency)
+- `GroupCoordinatorService` constructor/state
+- `core/src/main/scala/kafka/server/BrokerServer.scala` so the broker can supply an instance when building the coordinator
+
+Initially, the broker-side implementation may be a stub/no-op that returns `-1` for all requested partitions (but must still satisfy the interface and lifecycle requirements).
+
+Files involved:
+- `group-coordinator/src/main/java/org/apache/kafka/coordinator/group/PartitionMetadataClient.java`
+- `core/src/main/scala/kafka/server/BrokerServer.scala`
+- `group-coordinator/src/main/java/org/apache/kafka/coordinator/group/GroupCoordinatorService.java`
+
+#### 5) Client-side admin parsing
+Update the admin handler that processes `DescribeShareGroupOffsetsResponse` so that:
+- It reads the new `lag` field when present.
+- It maps negative lag values to “empty/unknown” in the returned `SharePartitionOffsetInfo` (similar to how leader epoch is handled).
+
+File involved:
+- `clients/src/main/java/org/apache/kafka/clients/admin/internals/ListShareGroupOffsetsHandler.java`
+
+#### 6) Shared constants / sentinel values
+Introduce a reusable constant for “uninitialized lag” (value `-1`) alongside other existing uninitialized/sentinel values used by the share-state machinery.
+
+File involved:
+- `server-common/src/main/java/org/apache/kafka/server/share/persister/PartitionFactory.java`
+
+### Notes/edge conditions to support
+
+- Topics requested by name must be mapped to topic IDs and back consistently when constructing `TopicPartition` keys for offset lookup and when building response topics.
+- The response must remain well-formed and deterministic even when:
+  - Some partitions are eligible for lag computation and others are not.
+  - Some latest-offset futures complete successfully and others fail.
+  - The request includes topics that do not exist in metadata (those should continue to be represented in the response as before, and lag should be uninitialized).
+
+### Verification scope
+
+The provided updated tests validate protocol versioning, response field population, coordinator lag computation behavior (including error paths), wiring of the new dependency, and admin-side parsing/representation.

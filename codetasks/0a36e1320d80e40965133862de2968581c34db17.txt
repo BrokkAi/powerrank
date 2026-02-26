@@ -1,0 +1,36 @@
+Implement robust **native tool-call contract enforcement** in the LLM request path and remove the legacy “tool-call emulation” feature.
+
+### Goal
+When tool specifications are provided to the model, the system must:
+1. **Validate every tool execution request** returned by the model against the registered tool contracts.
+2. **Retry a limited number of times** when the model returns invalid tool calls (unknown tool name, invalid/missing/ill-typed arguments, etc.) or when tool calls are **missing while `ToolChoice.REQUIRED`**.
+3. Stop retrying and surface an error after the configured retry budget is exhausted.
+
+### Required behavior (high level)
+- In `ai.brokk.Llm`, enforce the tool contract **after** receiving a streaming response:
+  - If `ToolChoice.REQUIRED` is set and the response contains **no tool requests**, treat that as a contract failure eligible for retry.
+  - If tool requests exist, validate them using the tool registry; any validation failures are contract failures eligible for retry.
+- Retries must:
+  - Be bounded (separate from the existing transport retry mechanism).
+  - Provide the model with feedback describing what was wrong with the prior tool calls.
+  - Avoid “message bloat”: retry guidance should be added in a way that does not keep appending new assistant/user turns on every retry.
+- When retries succeed, return the successful response (including tool requests) and ensure any configured “echo/pretty print” behavior still works for native tool calls.
+- When retries are exhausted:
+  - If the failure is due to `ToolChoice.REQUIRED` with no tool calls, raise/return a dedicated “missing tool calls” failure.
+  - Otherwise, raise/return an error that reports tool validation issues.
+
+### StreamingResult bookkeeping
+Update any retry/result bookkeeping needed so that:
+- The returned `StreamingResult` correctly reflects the total number of attempts used across retries.
+- Any existing fields (including elapsed timing, if present) remain consistent when creating derived results (e.g., via helper methods like `withRetryCount`).
+
+### Removal of tool-call emulation
+Eliminate the legacy emulation path that attempted to synthesize tool calls via JSON/schema prompting. This includes:
+- Removing logic that decides whether a model “requires emulated tools”.
+- Removing JSON-fencing / response-format hacks used only for emulation.
+- Removing emulation-specific parsing/instruction helpers and associated tests that were only relevant to emulation.
+
+### Test harness model support
+The test streaming chat model used by unit tests has been updated to support scripted responses that may include tool requests and must allow tests to inspect what requests were sent (to verify retry/message behavior). 
+
+The provided tests (old and new) must pass after these changes.

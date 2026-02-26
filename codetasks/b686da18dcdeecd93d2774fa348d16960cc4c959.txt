@@ -1,0 +1,41 @@
+### Goal
+
+Update storage-limit enforcement for **file uploads** so that when a user’s premium/file-storage access is **granted via an organization** (i.e., the user is not personally premium but still has premium access), the allowed storage is derived from the **current Premium plan returned by the Pricing Service**, rather than a hard-coded cloud default.
+
+This impacts validation in both **Send file uploads** and **Vault attachment uploads**.
+
+---
+
+### Required behavior
+
+When determining “how much storage is available” for a **user-owned file upload** (Send files and cipher attachments), apply these rules:
+
+1. **User has personal premium (individual premium)**
+   - Use the user’s own configured storage entitlement (e.g., their per-user maximum), and do **not** consult the Pricing Service.
+
+2. **User is not personally premium, but has premium access through an organization**
+   - If running **self-hosted**, use the existing self-hosted maximum storage constant.
+   - If running **cloud-hosted**, fetch the currently available **Premium plan** from the Pricing Service and use that plan’s **included/provided storage** as the user’s storage entitlement.
+
+3. **Organization-owned uploads**
+   - If the upload is owned by an organization (e.g., an org Send or an org cipher), storage limits should continue to be based on the organization’s storage rules and must **not** require the Pricing Service.
+
+---
+
+### Scope
+
+Implement this storage-entitlement change in:
+
+- The logic used by `SendValidationService` when validating file Send storage limits.
+- The logic used by `CipherService` when creating attachments / enforcing storage limits for user-owned ciphers.
+
+The involved services must be able to obtain plan storage data via the Pricing Service (through the existing pricing client abstraction) and be wired accordingly so the tests can provide substitutes/mocks.
+
+---
+
+### Notes / constraints
+
+- The Pricing Service returns a Premium plan that includes a storage “provided” amount; your implementation should use that value as the storage entitlement in the org-granted-premium cloud case.
+- Tests assert both:
+  - that the Pricing Service is invoked in the correct scenario, and
+  - that it is **not** invoked in scenarios where it shouldn’t be needed (personal premium, self-hosted, org-owned uploads).

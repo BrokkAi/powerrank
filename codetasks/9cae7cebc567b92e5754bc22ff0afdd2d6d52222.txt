@@ -1,0 +1,59 @@
+Implement per-session task list persistence backed by the session ZIP, with asynchronous, per-session-serialized I/O and UI integration.
+
+### Background / Goal
+The application has a task list UI (`TaskListPanel`) whose contents must be saved and loaded per session. The persistence mechanism should be moved into the session subsystem so that task list data:
+
+1. Is stored inside each session’s ZIP (as `tasklist.json` at the root of the ZIP filesystem), not as a standalone file in the session directory.
+2. Is read/written asynchronously, without blocking the Swing EDT.
+3. Is concurrency-safe: operations for the same session must execute in submission order, while different sessions can proceed concurrently.
+4. Survives other session ZIP operations (notably saving history/manifest) without being lost.
+
+### Requirements
+
+#### 1) Introduce DTOs for serialization
+Create lightweight JSON-serializable DTOs in the core package:
+
+- `TaskListData`: a wrapper containing a list of entries.
+- `TaskListEntryDto`: one entry containing `text` and `done`.
+
+These are the types used for serialization/deserialization.
+
+#### 2) Add task list I/O to `SessionManager`
+Extend `SessionManager` with asynchronous APIs:
+
+- `CompletableFuture<Void> writeTaskList(UUID sessionId, TaskListData data)`
+- `CompletableFuture<TaskListData> readTaskList(UUID sessionId)`
+
+Behavioral constraints:
+
+- **Storage location:** `tasklist.json` must be stored *inside* the session ZIP.
+- **Serialization:** use the project’s existing Jackson `ObjectMapper` (already present in the codebase) to serialize/deserialize the DTOs.
+- **Per-session serialization:** use the existing “serial by key” execution mechanism already used for other session work, keyed by the session UUID string, so that same-session reads/writes are ordered with respect to each other.
+- **Missing/blank data:** reading from a non-existent session ZIP or missing/blank `tasklist.json` must yield an empty `TaskListData` (no tasks), not an exception.
+- **Error handling:** failures when reading should not crash callers; log and return empty data. Failures when writing should complete the future exceptionally (or otherwise surface the failure to callers) in a way that UI code can report.
+
+Also ensure that when the session ZIP is rewritten as part of history/manifest saving, any existing `tasklist.json` content is preserved rather than silently dropped. (This is particularly important if the ZIP writing logic replaces the ZIP contents.)
+
+#### 3) Refactor task loading/saving in `TaskListPanel`
+Update the task list UI logic to use the new `SessionManager` APIs instead of direct filesystem reads/writes.
+
+Key aspects:
+
+- **Async load:** loading tasks for the current session must request the task list from `SessionManager` and apply results on the Swing EDT.
+- **Session switch safety:** if a load for session A completes after the user has switched to session B, the late result must be ignored.
+- **Immediate clearing on switch:** when switching sessions, clear the visible list promptly to avoid showing stale tasks from the prior session.
+- **Async save:** saving must call the async write API and must not block the EDT.
+- **Load/save recursion guard:** preserve existing protection that prevents “load triggers save” loops while the model is being populated.
+- **User-visible errors:** if an async read or write fails, report it via the existing UI error notification mechanism (non-blocking), and ensure the UI remains stable.
+
+#### 4) Lifecycle compatibility with session operations
+Task list data must follow the session ZIP during core session lifecycle operations, so that:
+
+- Copying a session carries the task list into the copied session.
+- Deleting a session removes the task list along with it.
+- Moving a session to an “unreadable” location keeps the task list inside the moved ZIP.
+
+This should work naturally if the task list is stored inside the ZIP and the lifecycle operations manipulate the ZIP as a single artifact.
+
+### What will be evaluated
+The provided tests exercise concurrent read/write ordering guarantees, parallelism across sessions, correct empty behavior for non-existent sessions, and task list survival across copy/delete/move operations. They also rely on the ZIP-based storage approach and on the task list not being lost during history saves.

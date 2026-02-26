@@ -1,0 +1,42 @@
+Add a lightweight “Java pre-lint” step to the code-edit workflow that parses recently edited Java sources using Eclipse JDT and records only high-signal diagnostics, without requiring a project classpath.
+
+### Goal
+When the agent has applied edits since the last build and any of the changed files are Java sources, run a parse-only analysis before build verification. This analysis must:
+- Use Eclipse JDT’s `ASTParser` to parse the current in-memory contents of each changed `.java` file.
+- Avoid producing false positives caused by missing dependencies/classpath.
+- Persist any kept diagnostics in the agent’s edit state, keyed by file, while allowing the workflow to continue (i.e., this phase does not block or fail the run).
+
+### Required behavior
+1. **Triggering conditions**
+   - Run the parse phase only when there have been edits since the last build attempt (based on the existing “blocks applied without build” counter or equivalent notion).
+   - Only consider changed files whose extension matches the Java language configuration (use the project’s language/extension mechanism rather than hardcoding).
+   - If there are no qualifying files, or no edits since last build, skip the phase without changing behavior.
+
+2. **Parsing approach**
+   - Parse each qualifying file with JDT in a way that does not depend on a project classpath.
+   - Configure the parser/compiler options to be broadly compatible with modern Java syntax (including preview features), and avoid diagnostics that come from optional analyses (e.g., annotation-based null analysis).
+   - Blank/empty sources should not produce diagnostics.
+
+3. **Diagnostic filtering**
+   - Collect JDT `IProblem`s from the parsed `CompilationUnit`, then filter aggressively to keep only “local” issues that are very likely true positives without full type information.
+   - Suppress categories and problem IDs that are primarily classpath/type-resolution noise (imports, missing external types, unresolved methods/fields, type mismatch, generic inference noise, etc.).
+   - Some diagnostics (e.g., override/applicability/foreach-related problems) should be reported only when the compilation unit does not show signs that type resolution is unreliable; if the same compilation unit also contains “resolution noise” indicators (undefined types/names, import not found, inference failures, etc.), suppress those type-sensitive diagnostics to prevent false positives.
+   - Ensure syntax and similarly local control-flow/structure errors are retained when appropriate.
+
+4. **State and data model**
+   - Extend the edit-state structure to hold a per-file map of Java lint diagnostics.
+   - Introduce a small value type to represent one diagnostic entry (must include the JDT problem id, optional category id, and a human-readable description).
+   - Add a state update method to set/replace this diagnostics map after the parse phase.
+   - Update any existing edit-state constructors/call sites accordingly.
+
+5. **Formatting**
+   - Each kept diagnostic’s description must include file path, line, column, and message derived from JDT and the compilation unit’s line/column mapping.
+
+6. **Non-functional considerations**
+   - The analysis may process multiple files and can do so concurrently, but must produce stable, correct results.
+   - The parse phase must integrate into both the normal multi-step workflow and the single-file mode flow so it runs at the appropriate point after edits are applied and before build verification.
+
+7. **Dependencies**
+   - Add the Eclipse JDT Core dependency to the build configuration via the project’s version catalog so the parser APIs are available.
+
+The resulting implementation should satisfy the new Java parse-phase tests as well as all existing agent workflow tests.

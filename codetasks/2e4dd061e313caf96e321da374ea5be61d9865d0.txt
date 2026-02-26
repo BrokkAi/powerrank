@@ -1,0 +1,35 @@
+Implement support for immediately charging prorated **Premium storage** adjustments for users whose Premium subscription is billed via **PayPal through Braintree**, while keeping the existing Stripe-only behavior for other users.
+
+### Context
+`UpdatePremiumStorageCommand` updates the “additional storage” subscription item for a Premium user (add, increase, decrease, or remove extra storage). Today it relies on Stripe’s normal proration invoicing behavior. For PayPal/Braintree-backed Premium subscriptions, prorations must still be generated in Stripe, but the resulting invoice must be explicitly created/finalized and then paid via Braintree.
+
+### Required behavior
+
+#### 1) Detect PayPal/Braintree-backed Premium subscriptions
+When fetching the user’s Stripe subscription in `UpdatePremiumStorageCommand`, ensure the returned subscription includes the Stripe **Customer** object and its metadata. Use that metadata to determine whether the subscription is associated with a Braintree customer (via the appropriate metadata key).
+
+#### 2) Proration + payment flow differences
+When the command applies a storage change that requires updating subscription items:
+
+- **Non-PayPal users (standard Stripe billing):**
+  - Update the subscription as before such that Stripe immediately generates and attempts to collect any proration invoice through its normal flow.
+
+- **PayPal/Braintree users:**
+  - Update the subscription in a way that *creates prorations* but does **not** rely on Stripe to automatically invoice/collect them.
+  - After updating the subscription, explicitly:
+    - Create an invoice for the subscription/customer in Stripe in a non-auto-advancing “draft” state suitable for immediate processing.
+    - Finalize that invoice (still without auto-advancing), ensuring the finalized invoice includes whatever customer information is needed downstream.
+    - Hand the finalized Stripe invoice to Braintree billing logic to charge it immediately for that user.
+
+#### 3) Stripe adapter surface area
+The billing code should be able to create an invoice via the Stripe adapter abstraction. Extend the Stripe adapter interface/implementation accordingly.
+
+#### 4) Dependency wiring
+`UpdatePremiumStorageCommand` must be able to trigger the Braintree payment step, so it needs access to the appropriate Braintree billing service abstraction and must use the correct user identifier type expected by that API.
+
+### Acceptance criteria
+A correct solution will:
+- Preserve current storage update semantics and calculations.
+- For Braintree-backed PayPal Premium users, ensure proration adjustments result in an immediately paid invoice through Braintree rather than Stripe’s normal invoice collection path.
+- Integrate invoice creation through the Stripe adapter abstraction.
+- Rely on subscription customer metadata to choose the correct flow.

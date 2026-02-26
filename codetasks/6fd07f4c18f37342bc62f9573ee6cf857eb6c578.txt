@@ -1,0 +1,117 @@
+Implement support for analyzing projects that have a Git repository but no tracked files, and centralize filesystem tree walking for both Git and non‑Git projects.
+
+### High‑level behavior
+
+1. **New filesystem walker utility**
+
+   Introduce a reusable utility that:
+   - Recursively walks a directory tree starting from a given root `Path`.
+   - Collects all regular files as `ProjectFile` instances rooted at that `Path`.
+   - Skips directories whose *names* appear in a provided exclusion set (e.g. `.git`, `.brokk`), including all their contents.
+   - Skips unreadable directories and logs them.
+   - Handles I/O errors during traversal gracefully (logs, does not throw) and returns an empty set in the case of a top‑level failure.
+   - Uses `ProjectFile` such that:
+     - `getRoot()` is the root path passed into the walk.
+     - `getRelPath()` is the path relative to that root.
+     - File extensions (e.g. `"java"`) are exposed correctly via `ProjectFile`’s existing API.
+
+2. **IGitRepo: files for analysis vs tracked files**
+
+   The `IGitRepo` interface should expose two concepts:
+   - `getTrackedFiles()` – “true” Git‑tracked files (unchanged semantics).
+   - `getFilesForAnalysis()` – files that the application should consider for analysis.
+
+   Requirements:
+   - Add `getFilesForAnalysis()` as a default method on `IGitRepo` that, by default, just delegates to `getTrackedFiles()`.
+   - Existing callers that only care about “Git‑tracked files” should continue to use `getTrackedFiles()`.
+   - Callers that want “whatever files we can reasonably analyze from this repo” should use `getFilesForAnalysis()`.
+
+3. **GitRepo: filesystem fallback when nothing is tracked**
+
+   In `GitRepo`:
+   - Continue to implement `getTrackedFiles()` using Git (as today).
+   - Override `getFilesForAnalysis()` so that:
+     - If `getTrackedFiles()` returns a non‑empty set, return that set unchanged.
+     - If `getTrackedFiles()` is empty (e.g. freshly initialized repo, no staged/committed files), fall back to a filesystem scan:
+       - Walk the working tree from the repository root using the new filesystem walker.
+       - Exclude `.git` and the Brokk metadata directory (see below).
+       - Return the discovered `ProjectFile` set.
+     - Log when this fallback is used so it is visible in diagnostics.
+
+   The fallback must not change behavior for repositories that already have staged/committed files: in that case, untracked files must not suddenly appear in analysis results.
+
+4. **LocalFileRepo: use filesystem walker and exclude Brokk metadata**
+
+   For non‑Git projects (`LocalFileRepo`):
+   - `getTrackedFiles()` should be implemented as a filesystem walk of the project root using the new walker.
+   - All regular files in the directory tree should be included, except:
+     - The Brokk metadata directory (e.g. `.brokk`) and its contents must be excluded by name.
+   - Unreadable files/directories should be skipped without failing the whole walk.
+   - Keep using a cache so that the directory tree is not needlessly re‑walked on every call.
+
+   There is no concept of “Git‑tracked” here, so `getFilesForAnalysis()` can continue to rely on the default implementation that calls `getTrackedFiles()`.
+
+5. **AbstractProject: use analysis files, not raw tracked files**
+
+   Where the project currently aggregates all project files (e.g. in `AbstractProject.getAllFilesRaw()`):
+   - Switch from calling `repo.getTrackedFiles()` to `repo.getFilesForAnalysis()`.
+   - This ensures that:
+     - Normal Git repos still use Git‑tracked files.
+     - Empty Git repos automatically use the filesystem fallback.
+     - Non‑Git repos continue to use filesystem enumeration via `LocalFileRepo`.
+
+   The rest of the `getAllFiles` behavior (e.g. merging with `.brokk/dependencies`, filtering via ignore rules) should remain as it is.
+
+6. **Brokk metadata directory constant**
+
+   The Brokk metadata directory name (e.g. `.brokk`) is already defined in `AbstractProject` (via `BROKK_DIR`). Use that constant when specifying exclusion lists (e.g. for the filesystem walker) so that:
+   - `LocalFileRepo` excludes that directory from its scan.
+   - `GitRepo`’s filesystem fallback also excludes it.
+
+7. **Git‑specific consumers must guard against non‑Git repos**
+
+   Some parts of the code assume that the backing repository is actually a `GitRepo`. These should now handle non‑Git repositories more defensively:
+
+   - **ContextManager style‑guide generation**  
+     The logic that computes the “most important files” for style‑guide generation using `GitDistance` must:
+       - Check that `project.getRepo()` is a `GitRepo`.
+       - If not, log an appropriate warning including the actual repo class and return an empty result for the style guide (e.g. `""`) rather than throwing or casting blindly.
+       - If it is a `GitRepo`, continue to use it as before.
+
+   - **GitHubAuth**  
+     The logic that derives the GitHub owner/repo from the project’s Git configuration must:
+       - Verify that `project.getRepo()` is a `GitRepo`.
+       - If it is not, throw an `IOException` explaining that GitHub authentication requires a Git repository and reporting the actual repo type.
+       - If it is, proceed exactly as before to read the origin remote URL and derive owner/repo from it.
+
+   - **MainProject.isGitHubRepo()**  
+     This method should:
+       - Return `false` if the underlying repo is not a `GitRepo`.
+       - If it is a `GitRepo`, proceed as before: inspect the `origin` remote URL and return `true` only if it refers to GitHub.
+
+   - **MainProject style‑guide migration**  
+     The code that optionally passes a `GitRepo` into style‑guide migration utilities should:
+       - Only pass a non‑null `GitRepo` when the underlying repo actually is a `GitRepo`.
+       - Otherwise pass `null` or omit it, consistent with the existing API expectations.
+
+8. **GitDistance usage now relies on IGitRepo methods**
+
+   Where `GitDistance` relies on the repository to get histories and sort by importance:
+   - It should use the `IGitRepo` it is given to obtain file histories instead of recasting some external `repo` to `GitRepo` again.
+   - Type assumptions and casts should be centralized so that once you have a `GitRepo` reference, you reuse it consistently rather than re‑casting arbitrary repos.
+
+9. **UI: hide splash screen before non‑Git confirmation dialog**
+
+   In the UI (`Brokk`):
+   - When a project is opened and `project.hasGit()` is `false`, ensure the splash screen is hidden before showing the confirmation dialog about proceeding without Git.
+   - This must happen on the Swing event dispatch thread.
+
+---
+
+The end result should be:
+
+- Non‑Git projects walk the filesystem to find files, while ignoring the Brokk metadata directory.
+- Git projects with tracked files still behave exactly as before, based on Git tracking.
+- Git projects with no tracked files automatically fall back to a filesystem scan, excluding `.git` and Brokk’s own metadata, so that analysis still has meaningful context.
+- Git‑specific functionality handles non‑Git repos gracefully with clear behavior and error messages.
+- The UI interaction for non‑Git projects does not show the confirmation dialog on top of an active splash screen.

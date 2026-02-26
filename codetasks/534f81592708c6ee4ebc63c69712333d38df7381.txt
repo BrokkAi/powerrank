@@ -1,0 +1,38 @@
+Enhance Lucene’s buffered checksum computation so that checksum updates for primitive reads no longer require feeding the underlying `Checksum` one byte at a time.
+
+### Context
+`org.apache.lucene.store.BufferedChecksum` wraps another `java.util.zip.Checksum` and batches updates into an internal byte buffer, flushing to the delegate when needed. This is currently optimized for byte and byte-array updates but not for higher-level primitive values that are frequently read from `IndexInput`.
+
+### Required changes
+1. **BufferedChecksum: primitive-aware updates**
+   Extend `BufferedChecksum` with additional update capabilities for:
+   - `short`
+   - `int`
+   - `long`
+   - contiguous ranges of `long[]` (`(array, offset, length)`)
+
+   These updates must:
+   - Add the value(s) to the existing internal byte buffer in the same byte order that Lucene’s on-disk formats use for these primitives (little-endian).
+   - Interoperate correctly with existing `update(byte)`, `update(byte[], ...)`, `getValue()`, and `reset()` semantics, including correct handling when the internal buffer does not have enough remaining capacity (i.e., proper flushing at boundaries).
+   - Ensure that updating a sequence of values via the new methods produces the exact same checksum as updating using the equivalent serialized bytes.
+
+2. **BufferedChecksumIndexInput: avoid byte-by-byte checksum updates for primitive reads**
+   `org.apache.lucene.store.BufferedChecksumIndexInput` wraps an `IndexInput` and maintains a running checksum of all bytes read.
+   Update it so that when callers read primitives or long blocks, the checksum is updated using the new primitive-aware capabilities rather than relying on byte-oriented paths.
+   Concretely, the wrapper should account for reads performed through:
+   - `readShort()`
+   - `readInt()`
+   - `readLong()`
+   - `readLongs(long[] dst, int offset, int length)`
+
+   The checksum reported by `getChecksum()` must match the checksum of the exact byte sequence consumed from the underlying input, regardless of which mix of read methods is used.
+
+3. **Adopt bulk long reads where available**
+   In places that currently read many longs in a loop from an `IndexInput`, switch to the bulk long-read API to reduce per-element overhead (without changing the logical results). This applies to code paths that reconstruct `long[]` backing storage from an input stream.
+
+### What correctness means
+- The checksum value must be invariant with respect to how the same underlying bytes are fed (bytes vs shorts/ints/longs vs long arrays, including mixed sequences).
+- Byte order must be consistent with Lucene’s encoding of primitives.
+- Buffer boundary conditions must not drop or reorder bytes, and partial trailing bytes (when input length is not aligned to primitive sizes) must still be handled correctly through the byte-based update paths.
+
+Implement the above so that the updated test suite (including new coverage around mixed input types) passes.

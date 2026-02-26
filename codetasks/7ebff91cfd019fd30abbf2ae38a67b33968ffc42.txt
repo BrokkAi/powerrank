@@ -1,0 +1,30 @@
+Implement gating for OTLP→Prometheus Remote Write metadata persistence so that series metadata is only written to storage/WAL when explicitly enabled.
+
+### Background / goal
+The OTLP receiver’s `combinedAppender` currently updates series metadata in storage whenever it first sees a series (and again if metadata fields change). This should become optional: metadata must only be written when a dedicated “append metadata” setting is enabled (intended to be used together with the `metadata-wal-records` feature).
+
+### Required behavior
+1. **Add an “append metadata” switch to the OTLP ingestion path**
+   - Extend the OTLP receiver configuration (`OTLPOptions`) with a boolean that controls whether metadata should be written.
+   - Ensure the flag is plumbed from API construction / handler setup into the OTLP exporter/consumer and ultimately into the `combinedAppender` used by the OTLP translator.
+
+2. **Make `combinedAppender` conditionally write metadata**
+   - Update the `NewCombinedAppender(...)` constructor signature to accept a boolean controlling metadata writes.
+   - Store this setting on the `combinedAppender`.
+   - Only call `storage.Appender.UpdateMetadata(...)` when:
+     - metadata writing is enabled, and
+     - it is the first time the series is observed **or** the metadata values have changed (help/type/unit) compared to what the appender has cached for that series.
+   - If metadata writing is disabled, the appender must **not** write metadata to storage, but it still must correctly handle:
+     - series reference reuse,
+     - created-timestamp handling,
+     - exemplar appends,
+     - and internal caching of the latest metadata values.
+
+3. **Metadata change detection**
+   - “Metadata changed” is defined by differences in the metadata fields used by this translator (e.g., help, unit, type) relative to the cached values for the series.
+   - When metadata changes, update the in-memory cache even if storage metadata writing is disabled.
+
+4. **Call-site updates**
+   - Update all call sites constructing `NewCombinedAppender` (including benchmarks and OTLP write handling) to pass the new argument and preserve existing semantics.
+
+The solution should ensure all provided unit tests (including newly added coverage around metadata gating and metadata-change handling) pass.

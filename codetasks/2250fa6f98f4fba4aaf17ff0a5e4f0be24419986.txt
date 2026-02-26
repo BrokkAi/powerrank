@@ -1,0 +1,30 @@
+## Problem
+
+The project reports certain uses of `await` as *semantic syntax errors* in two places:
+
+- Pyflakes rule **F704** (“`await` statement outside of a function”)
+- Pylint-compatible rule **PLE1142** (“`await` should be used within an async function”)
+
+A regression/bug causes **false positives** around `await` when it appears inside **generator expressions**, especially when generator expressions are nested with comprehensions and/or `async for`.
+
+## Required behavior
+
+Python allows `await` in a broader set of contexts than “inside an `async def`”:
+
+- `await` is valid within a **generator expression** (including async generator expressions), even when the surrounding code is not an `async def`, because the generator executes lazily.
+- `await` is **not** valid inside list/set/dict comprehensions in the same way (these are evaluated eagerly and have different scoping rules).
+- For `async for` generator expressions, parts of the expression (notably the **iterator** expression) can be evaluated in the **enclosing scope**, so context detection must be sensitive to nested evaluation boundaries rather than assuming everything is evaluated inside the generator’s “inner” scope.
+
+The current implementation incorrectly decides whether `await` is “outside an async function” by relying too narrowly on the *current* scope, and it doesn’t reliably treat generator-expression contexts as valid `await` contexts when nested scopes are involved. This affects both Ruff’s linter integration and the `ruff_python_parser` semantic-syntax checker (and, in this repository, the corresponding `ty` semantic index implementation).
+
+## What needs fixing
+
+Update the semantic-syntax context logic used by the `await`-validation checks so that:
+
+1. **Generator-expression context is recognized as a valid place for `await`** where appropriate (even outside `async def`).
+2. The decision about whether the visitor is “within a generator expression” must work correctly for **nested constructs**, i.e., it must not rely solely on the innermost/current scope.
+3. The scope classification used to decide whether `await` is allowed must correctly differentiate:
+   - generator expressions vs. comprehensions,
+   - and the cases where subexpressions of an async generator expression are evaluated in the parent scope.
+
+The end result should eliminate the false positives reported in the updated fixtures and snapshots, while continuing to flag genuinely invalid `await` usages.

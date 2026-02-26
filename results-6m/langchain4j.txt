@@ -1,7 +1,0 @@
-011f6c33c0b5cca7f0627c7ef992b29237ad33fd  Classpath document loading - relative path not working (#3172)
-718dde32811751587251977d31aed765853a680c  Add mcp server health check (#3241)
-9297f183c73158f1d63c4258227e0c3609bc4811  Improve the Judge0 code execution engine (#3216)
-7752b9413f4c26b4c16f55ad52b5d88e53a2380a  Add blocking utility methods for streaming response handling (#3165)
-81abc06e2a43e4a5a4e9ed4d332ff7b683cbf9a6  Ollama - Partial thinking support in Ollama (#3135)
-aabfd635ff03ff6e5c2ee3ce29f2a501dc937d5e  Improve JSON extraction from LLM response (#3268)
-75ae6b48ce72a7c78028adb9af86428c0765aaee  MCP: roots support (#3283)

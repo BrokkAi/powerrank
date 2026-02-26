@@ -1,0 +1,28 @@
+## Problem: Optimize and harden lazy type-hierarchy descendant lookup, caching, and snapshot persistence
+
+The analyzer maintains a type hierarchy with **direct ancestors** (supertypes) and **direct descendants** (subtypes). This hierarchy is computed lazily and partially persisted in analyzer state snapshots. Several new tests expose performance and correctness gaps in descendant lookup and snapshot behavior.
+
+Update the implementation so that:
+
+### 1) Direct descendant lookup avoids full-project scans
+`getDirectDescendants(...)` currently degenerates into scanning and resolving ancestry for many/all classes in the project when the subtype relationship is not already cached/persisted.
+
+Change descendant resolution so that when it must “discover” subtypes, it first applies a **cheap candidate filter** based on each class’s *raw* declared supertypes (the un-resolved textual representation already stored in state), and only performs expensive ancestor resolution for those likely candidates. This must correctly handle cases where a class references its supertype via a fully-qualified name.
+
+### 2) Ancestor computation populates the reverse subtype index as a side effect
+When `getDirectAncestors(...)` computes or returns a class’s resolved direct ancestors, the analyzer must also update the in-memory reverse index so that later descendant queries can be served from that cache without redoing work.
+
+This side-effect indexing must occur both when:
+- ancestors are computed lazily, and
+- ancestors are already persisted as “computed” in `CodeUnitProperties` and simply being read back.
+
+### 3) Snapshotting must persist lazily discovered subtype relationships
+When creating a snapshot of the analyzer state, the snapshot must correctly incorporate subtype relationships that were discovered only in transient/lazy caches (including those populated as a side-effect of ancestor resolution). If both persisted and lazy subtype mappings exist for a key, snapshotting must **merge** them (union), not overwrite/lose one side.
+
+### 4) Improve robustness of concurrent/recursive cache updates
+The type-hierarchy caches are updated during computations that can be nested. Ensure cache mutation is done in a way that avoids runtime failures such as `ConcurrentModificationException` and “recursive update” issues from map operations when updates occur while other computations are in progress. The updated behavior should remain correct in the presence of cycles/recursion in the type graph.
+
+### 5) Descendants must be recoverable from persisted supertypes even when subtype graph is missing
+Some loaded/legacy states may not contain an explicit persisted subtype graph, while individual code units still have persisted “computed supertypes.” After loading such a state, querying direct descendants must still be able to produce correct results by leveraging the available persisted supertype information and the transient reverse index population behavior.
+
+The provided test suite (including newly added tests around snapshot round-tripping, legacy-state behavior, fully-qualified supertype declarations, and caching efficiency) must pass.

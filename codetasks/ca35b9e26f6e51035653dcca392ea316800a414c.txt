@@ -1,0 +1,71 @@
+Refactor the Two‑Factor WebAuthn (security key) registration/deletion logic out of `UserService` into feature-scoped commands, and update the API layer and dependency registration accordingly.
+
+### Goal
+Introduce a small command-based API for Two‑Factor WebAuthn operations and route the existing controller endpoints through those commands, while removing the old WebAuthn-specific methods from `IUserService` / `UserService`.
+
+### Required functional behavior
+
+#### 1) Start WebAuthn registration (challenge generation)
+Expose a command that initiates a WebAuthn credential registration for a user and returns `Fido2NetLib.CredentialCreateOptions`.
+
+Key requirements:
+- Work against the user’s TwoFactor provider data for `TwoFactorProviderType.WebAuthn`.
+- Ensure `MetaData` exists and store the serialized request options under a `"pending"` key.
+- Enforce a maximum allowed number of registered credentials based on premium access:
+  - Use global settings values under `IGlobalSettings.WebAuthn` (premium vs non-premium limits).
+  - Determine premium access via `IHasPremiumAccessQuery`.
+  - Only count *saved* credentials toward the limit (metadata keys that start with `"Key"`).
+- If the limit is exceeded, throw `BadRequestException` with the message:
+  - `"Maximum allowed WebAuthn credential count exceeded."`
+- Persist the provider update through the existing two-factor provider persistence mechanism (and preserve any semantics around suppressing logging for the “start” update).
+
+#### 2) Complete WebAuthn registration (attestation verification + persistence)
+Expose a command that finalizes a pending registration and persists the resulting credential, returning `bool` to indicate success.
+
+Key requirements:
+- The command must require a `"pending"` registration entry; if it’s missing, return `false`.
+- Re-check the maximum allowed credential count at persistence time using the same rules as “start”; if exceeded, throw `BadRequestException` with:
+  - `"Maximum allowed WebAuthn credential count exceeded."`
+- Use `IFido2.MakeNewCredentialAsync(...)` to validate the attestation response against the pending options.
+  - If credential creation fails (e.g., no result), throw `BadRequestException` with:
+    - `"WebAuthn credential creation failed."`
+- On success:
+  - Remove `"pending"` from metadata.
+  - Save the new credential under a key formatted as `"Key{id}"` (where `id` is provided by the caller).
+  - Populate the stored credential data from the FIDO2 verification result (descriptor, public key, counter, user handle, etc.) and include the provided friendly `name`.
+- Persist via the standard two-factor provider update path (no special suppression expected here).
+- If the user has no two-factor provider collection to update at persistence time, treat this as an error and throw `BadRequestException` with:
+  - `"No two-factor provider found."`
+
+#### 3) Delete a WebAuthn credential
+Expose a command that deletes a single saved WebAuthn credential by its numeric id (mapped to `"Key{id}"`), returning `bool` to indicate whether deletion occurred.
+
+Key requirements:
+- Return `false` if:
+  - the user has no two-factor providers stored,
+  - the WebAuthn provider/metadata is missing,
+  - the specified `"Key{id}"` does not exist,
+  - deleting would remove the *last* registered WebAuthn credential (prevent lockout).
+    - “Last credential” should be determined by counting only metadata keys starting with `"Key"`.
+- If deletion occurs:
+  - remove the `"Key{id}"` entry from metadata,
+  - persist the updated provider.
+
+Also update the API endpoint that deletes credentials to:
+- reject requests without an id (throw `BadRequestException` with `"Unable to delete WebAuthn credential."`),
+- call the delete command and, if it returns `false`, throw the same `BadRequestException` message.
+
+### API / wiring changes
+
+- Update `TwoFactorController` to use the new commands for:
+  - challenge generation,
+  - completion,
+  - deletion.
+- Register the new commands in the existing user-feature DI extension(s) so they can be injected in the controller.
+
+### Removal / compatibility
+
+- Remove the old WebAuthn-specific methods from `IUserService` and delete their implementations from `UserService`.
+- Ensure TwoFactor “is enabled” querying remains available under the expected namespaces and DI registration (the query type may be relocated/reorganized, but must still be resolvable and usable by existing code).
+
+The final solution must compile cleanly and satisfy the provided test suite.

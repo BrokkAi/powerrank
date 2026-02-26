@@ -1,0 +1,27 @@
+Implement client-side “shuffle sharding” for Index Gateway requests in **simple mode**, controlled by a new per-tenant limit.
+
+### Requirements
+
+1. **New per-tenant limit**
+   - Introduce a new per-tenant configuration value `index_gateway_max_capacity` (float, range `0.0` to `1.0`, default `1.0`).
+   - Add it to the limits/overrides plumbing so it can be set via YAML/JSON and via the CLI flag `-index-gateway.max-capacity`.
+   - Extend the `pkg/indexgateway` limits interface to expose this value.
+
+2. **Client-side gateway subset selection (simple mode only)**
+   - When the Index Gateway client is operating in simple mode and has a list of discovered gateway addresses:
+     - Keep the current pre-processing steps (sorting/filtering as applicable).
+     - Then deterministically reduce the address list for a tenant based on `index_gateway_max_capacity`.
+   - The reduction must:
+     - Use a consistent hashing strategy based on the **tenant ID** so the same tenant repeatedly selects the same subset as long as the gateway set is unchanged.
+     - Compute the number of gateways assigned to a tenant as a fraction of the available gateways (rounding in a way that preserves capacity intent for small clusters).
+     - Treat `0.0` the same as `1.0` (i.e., no reduction; all gateways available).
+     - Never return an empty set when there is at least one gateway available.
+
+3. **Jump hash utility exposure**
+   - The repository already contains a jump-hash implementation used elsewhere. Make it reusable by other packages by exposing it appropriately (adjust naming/visibility as needed) while keeping existing behavior intact.
+
+4. **Testing expectations**
+   - The provided tests validate edge cases (empty/one gateway, fraction values, rounding behavior) and determinism (same tenant → stable subset; different tenants → typically different subsets).
+   - Ensure the new limit is represented in the mock limits used by tests and that all compilation errors from interface changes are resolved.
+
+The changes should result in deterministic, tenant-specific gateway subsets in simple mode without requiring any server-side ring/state, while preserving existing behavior when the new limit is not restricting capacity.

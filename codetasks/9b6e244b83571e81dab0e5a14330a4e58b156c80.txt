@@ -1,0 +1,41 @@
+Extend the AWS ECS service discovery implementation to correctly discover and label tasks that do **not** use `awsvpc` networking.
+
+### Background / Current behavior
+The ECS discovery role currently derives a target’s IP address from the task’s attached Elastic Network Interface (ENI). This works for `awsvpc` networking, but ECS tasks running on **EC2 launch type** can also use **`bridge`** or **`host`** networking where the task does **not** have a dedicated ENI and instead shares the **EC2 instance** network.
+
+### Required behavior
+Update the ECS discovery logic (in `discovery/aws/ecs.go`) so that:
+
+1. **Target IP selection supports multiple networking modes**
+   - If a task has an ENI attachment (the existing `ElasticNetworkInterface` attachment), treat it as `awsvpc` mode:
+     - Use the ENI-provided **private IPv4 address** as the discovered target IP.
+     - Use the ENI-provided **subnet ID** when available.
+     - Also expose a “public IP” label when the ENI has an associated public IP.
+   - If a task does **not** have an ENI attachment but **does** have a `ContainerInstanceArn` (EC2-backed task), treat it as **bridge/host style** networking:
+     - Discover the target IP using the **EC2 instance private IP** of the host running the task.
+     - Discover subnet ID from the EC2 instance when available.
+     - Expose a “public IP” label from the EC2 instance when available.
+
+2. **EC2-backed tasks must be resolvable via container instance metadata**
+   - For EC2 tasks, resolve `ContainerInstanceArn -> EC2 instance ID` using ECS container instance APIs.
+   - Then fetch EC2 instance details (private IP, public IP, subnet ID, instance type, tags) from EC2 APIs.
+
+3. **Additional meta labels**
+   Add new meta labels on each discovered target (when data is available), including:
+   - Task network mode label (at minimum distinguish ENI-based `awsvpc` vs non-ENI `bridge`/`host` style tasks).
+   - A general “public IP” label for the target (ENI public IP for `awsvpc`, instance public IP for bridge/host).
+   - For EC2 launch type tasks, include container instance ARN and EC2 instance metadata labels (instance ID, instance type, instance private/public IPs).
+   - Also expose EC2 instance tags as meta labels (tag-keyed) for EC2 launch type tasks.
+
+4. **Client initialization**
+   - The discovery must be able to talk to both ECS and EC2 APIs using the same configured AWS credentials/HTTP client setup already used by ECS discovery.
+   - Ensure initialization logic accounts for the additional client dependency.
+
+5. **Batching / API constraints**
+   - The implementation must respect AWS API constraints for describing container instances (avoid issuing invalid oversized requests).
+
+### Documentation update
+The `ecs` role documentation in `docs/configuration/configuration.md` must be updated to reflect:
+- Support for `awsvpc`, `bridge`, and `host` networking modes.
+- Additional required IAM permissions for the extra API calls.
+- The newly exposed meta labels.

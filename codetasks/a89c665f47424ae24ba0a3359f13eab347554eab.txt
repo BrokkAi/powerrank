@@ -1,0 +1,51 @@
+Implement a refactor of Prometheus’s `notifier` package so alert delivery is no longer driven by a single global notification queue. Instead, alert delivery must be performed by **independent per-Alertmanager send loops**, managed dynamically as Alertmanager endpoints appear/disappear via service discovery and configuration reloads.
+
+### Core requirements
+
+1. **Per-Alertmanager send loop**
+   - Introduce a component (e.g. a `sendLoop`) responsible for:
+     - Maintaining its **own bounded in-memory queue** of `*Alert`.
+     - Batching according to `Options.MaxBatchSize`.
+     - Sending batches to exactly **one** Alertmanager endpoint URL using the Alertmanager v2 API.
+     - Respecting `alertmanager_config.timeout` per send attempt.
+     - Using `Options.Do(ctx, client, req)` for HTTP execution (must support custom `Do`).
+   - A stalled/unresponsive Alertmanager must not prevent sending to other Alertmanagers (no shared queue/throughput coupling).
+
+2. **Queue behavior**
+   - Each send loop queue must enforce `Options.QueueCapacity`:
+     - If a single `Send()` call provides more alerts than capacity, drop the oldest portion of that incoming batch.
+     - If appending would exceed capacity, drop the oldest queued alerts to make room for newer ones.
+   - Dropping must be reflected in metrics (see below).
+
+3. **Lifecycle management**
+   - `alertmanagerSet` must manage send loops keyed by the Alertmanager’s canonical URL (including the API path used for posting).
+   - `alertmanagerSet.sync(tgs)` must:
+     - Deduplicate discovered Alertmanagers by URL.
+     - Start send loops for newly discovered endpoints.
+     - Stop and remove send loops for endpoints that disappeared.
+     - Avoid recreating/tearing down loops unnecessarily for endpoints that remain present.
+   - When a configuration reload removes an entire `alertmanagerSet`, its send loops must be stopped and cleaned up.
+
+4. **Shutdown / draining semantics**
+   - Stopping a send loop must honor `Options.DrainOnShutdown`:
+     - If enabled, flush queued alerts before fully stopping.
+     - If disabled, drop remaining queued alerts.
+   - `Manager.Stop()` must prevent accepting new alerts promptly.
+   - `Manager.Run(...)` must terminate cleanly and ensure send loops are stopped/cleaned up.
+
+5. **Relabeling and isolation**
+   - `Manager.Send()` must still apply global relabeling (`Options.RelabelConfigs`) and attach `Options.ExternalLabels`.
+   - `alertmanagerSet` must apply per-Alertmanager relabeling (`AlertmanagerConfig.AlertRelabelConfigs`) **independently per set**.
+   - Relabeling must not “leak” mutations across alertmanagers or reuse mutable label structures incorrectly.
+
+6. **Metrics changes**
+   - Notification queueing/dropping metrics must become **per Alertmanager endpoint** (label dimension `alertmanager`), specifically:
+     - dropped alerts
+     - queue length
+     - (and any capacity representation required by the updated metrics API)
+   - Metrics for a removed/stopped Alertmanager endpoint must be deleted/cleaned up so that re-adding the same URL later does not cause collector/label conflicts.
+   - Existing latency/sent/error metrics must continue to work per endpoint.
+
+### Compatibility expectations
+- All existing notifier behaviors around API v2 payload encoding, request headers (e.g. User-Agent and JSON content type), and error handling must remain correct.
+- Service discovery updates must not be blocked by slow/hung sends; configuration updates should be applied even while some endpoints are unhealthy.

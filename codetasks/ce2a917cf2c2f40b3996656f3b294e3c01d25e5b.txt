@@ -1,0 +1,29 @@
+Implement support in Lucene’s analysis wrappers so that component reuse decisions made by a wrapped `Analyzer` are honored even when an `AnalyzerWrapper` uses a different `ReuseStrategy`.
+
+### Context
+`AnalyzerWrapper` creates tokenization pipelines by calling the wrapped analyzer’s `createComponents(...)` and then applying `wrapComponents(...)`. Lucene also supports reusing previously-created `TokenStreamComponents` via `Analyzer.ReuseStrategy`.
+
+Today, when an `AnalyzerWrapper` is configured with an external reuse strategy (e.g., per-field reuse), the wrapper may reuse its previously-created components even if the wrapped analyzer’s own reuse strategy would *not* reuse and would require rebuilding components.
+
+### Required changes
+1. **Make `Analyzer.TokenStreamComponents` extensible**
+   - Adjust `Analyzer.TokenStreamComponents` so it can be subclassed where needed.
+
+2. **Add a reuse strategy for `AnalyzerWrapper` that consults the wrapped analyzer**
+   - Introduce a new `AnalyzerWrapper`-scoped `ReuseStrategy` that, when asked whether components are reusable, first checks the wrapped analyzer’s reuse strategy for the same field:
+     - If the wrapped analyzer indicates components are *not* reusable (i.e., its strategy would return no reusable components), the wrapper must behave as non-reusable as well (forcing recreation).
+     - Otherwise, the wrapper’s configured reuse strategy remains in control of retrieving/storing reusable components for the wrapper analyzer instance.
+
+3. **Ensure reusable state is stored appropriately for both wrapper and wrapped analyzers**
+   - When reusable components are stored for the wrapper analyzer, the wrapped analyzer must also receive the corresponding wrapped components via its own reuse strategy, so that subsequent reuse checks/updates remain consistent between wrapper and wrapped analyzers.
+
+4. **Preserve delegation behavior for `DelegatingAnalyzerWrapper`**
+   - `DelegatingAnalyzerWrapper` already has a reuse strategy designed to delegate reuse decisions to wrapped analyzers. Ensure that `AnalyzerWrapper` does not interfere with or double-wrap this behavior when such a delegating strategy is supplied.
+
+5. **Component creation must retain access to both “wrapper” and “wrapped” components**
+   - Since the wrapper constructs a new component chain around the wrapped one, the resulting object used for reuse must keep a link to the wrapped components in addition to the wrapper components, so that storing/reuse decisions can be propagated correctly.
+
+### What should be true after your change
+- Reuse decisions made by a wrapped analyzer can prevent reuse at the wrapper level (triggering new component creation).
+- When reuse is allowed, the wrapper-level reuse strategy continues to provide reuse behavior (e.g., per-field), and both wrapper and wrapped analyzers’ reuse strategies receive the correct stored component instances.
+- Existing wrapper behavior (including reader wrapping and normalization paths) remains compatible, and the `DelegatingAnalyzerWrapper` reuse semantics continue to function as intended.

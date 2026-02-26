@@ -1,0 +1,38 @@
+Refactor the control client’s reported connection/authentication state away from a single “state machine” enum into a pair of independent, observable facts.
+
+### Goal
+
+In `control/controlclient`, eliminate the legacy `State` enum and any `Status` plumbing that depends on it, and replace it with two explicit booleans carried on `controlclient.Status`:
+
+- **`LoggedIn`**: true when authentication has successfully completed and there is no ongoing login transition that would make “logged in” ambiguous.
+- **`InMapPoll`**: true once the client has received at least one netmap in the current map polling stream (i.e., it is connected and receiving updates), and false again when that poll ends.
+
+These two facts must be able to vary independently (e.g., logged in but not yet in a map poll).
+
+### Required behavioral updates
+
+1. **`controlclient.Status` API**
+   - Remove the `State` type and constants from `control/controlclient/status.go`.
+   - Remove any test-only accessors/mutators that expose the old enum.
+   - Add the two boolean fields above to `Status`.
+   - Update `(*Status).Equal` to compare the new fields instead of the removed enum.
+   - Ensure `Status`’s field set and equality semantics stay aligned with the reflection-based “stays in sync” tests.
+
+2. **Status production in `controlclient.Auto`**
+   - Stop tracking/updating the removed enum in `control/controlclient/auto.go`.
+   - When creating/emitting a `Status`, populate `LoggedIn` and `InMapPoll` consistently from the client’s internal auth and map-poll progress.
+   - Preserve the existing behavior around when `Persist`/`NetMap` are included versus suppressed (i.e., only include what is safe/meaningful given auth and map-poll status).
+   - Update any “skip duplicate statuses” logic (the `canSkipStatus` behavior) so it uses the new booleans rather than the old enum, and remains correct with respect to errors, login transitions, URLs, and netmap-only changes.
+
+3. **Consumers in `ipn/ipnlocal`**
+   - Update `ipn/ipnlocal/local.go` to use the new `Status` booleans for decisions previously based on `Status`’s derived/enum state (notably around detecting that login completed and unblocking/resetting interactive auth state).
+
+4. **Test-only state assertions in `ipn/ipnlocal`**
+   - The updated `ipn/ipnlocal/state_test.go` no longer relies on the controlclient’s internal enum state. Ensure the mock control/status injection in that test can express “login finished” using the new `Status` booleans.
+   - The tests also introduce backend-level helpers that validate independent facts (netmap validity, need for login, presence of auth URL, machine authorization, etc.). Your code must expose/maintain the underlying backend behavior those helpers observe (without reintroducing the removed enum concept).
+
+### Constraints / compatibility
+
+- Both the older test expectations (that previously used the enum) and the newer fact-based tests must pass with your changes.
+- Do not reintroduce a new single “combined state” field as a replacement for the enum; the intention is explicitly to model state as composable facts.
+- Ensure the public surface of `controlclient.Status` remains coherent for downstream packages: it should be possible to understand whether authentication has completed and whether a netmap has been received without consulting hidden/internal state.

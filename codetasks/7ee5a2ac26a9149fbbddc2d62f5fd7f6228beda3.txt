@@ -1,0 +1,28 @@
+Extend the transaction marker plumbing to carry a per-marker “transaction version” (as introduced by KIP-1228) from the transaction coordinator through to `WriteTxnMarkersRequest` construction, while remaining wire-compatible with brokers that only support `WRITE_TXN_MARKERS` request version 1.
+
+### Required behavior
+
+1. **`WriteTxnMarkersRequest.TxnMarkerEntry` must include transaction version**
+   - Add a new field representing the transaction version (a `short`) to `TxnMarkerEntry`.
+   - Update its constructor and expose an accessor.
+   - Ensure `toString()`, `equals()`, and `hashCode()` incorporate this new field.
+
+2. **`WriteTxnMarkersRequest.Builder` must propagate transaction version into request data**
+   - When building `WriteTxnMarkersRequestData` markers, copy the transaction version from each `TxnMarkerEntry` into the corresponding `WritableTxnMarker`’s `TransactionVersion` field.
+   - This field is defined as *ignorable* in the protocol schema: requests built with versions that don’t support the field must still serialize successfully, with the field omitted automatically by the protocol layer.
+
+3. **Reading markers back from a request must preserve transaction version where possible**
+   - When reconstructing `TxnMarkerEntry` objects from the underlying request data (e.g., via `markers()`), populate the transaction version from the deserialized marker data.
+   - For requests parsed/deserialized using version 1, the transaction version should reflect whatever default the protocol layer provides when the field is absent.
+
+4. **Coordinator-side marker creation must supply the transaction version**
+   - In `TransactionMarkerChannelManager`, when creating `TxnMarkerEntry` instances for outgoing marker requests, derive the transaction version from the transaction metadata’s client transaction version and attach it to every marker created for that transaction.
+   - Handle the case defensively if the version metadata is unavailable.
+
+### Compatibility constraints
+
+- Building a `WriteTxnMarkersRequest` with a non-zero transaction version must not break serialization for request version 1.
+- Parsing/serializing request version 2 must round-trip the transaction version correctly.
+- Requests containing multiple markers may include different transaction versions per marker, and those versions must be preserved in the request’s marker data and when reading markers back.
+
+The provided tests (including updated request/response serialization tests and coordinator-side request construction tests) should all compile and pass with your changes.

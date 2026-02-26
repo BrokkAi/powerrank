@@ -1,0 +1,37 @@
+Extend the Lovelace integration to better support YAML dashboards during the deprecation of `lovelace: mode: yaml`, and to decouple “dashboard mode” from “resource loading mode”.
+
+### Requirements
+
+1. **Allow `lovelace` as a dashboard URL path in YAML**
+   - The slug validator used for `lovelace.dashboards` keys currently enforces a hyphenated slug.
+   - Update validation so the reserved/default path `"lovelace"` is accepted even though it contains no hyphen, while keeping the existing validation rules for other slugs (including rejecting invalid slugs and `None`).
+
+2. **Introduce a separate `resource_mode` setting**
+   - Add a new `lovelace:` config option named `resource_mode` (string, case-insensitive), accepting `yaml` or `storage`.
+   - This option controls **only how Lovelace resources are loaded** (YAML-defined resources vs storage-managed resources).
+   - `lovelace: mode:` is deprecated but still present; when `resource_mode` is not set, resource loading should fall back to the value of `mode` for backward compatibility.
+
+3. **Fix YAML mode “default dashboard” migration behavior**
+   - When Home Assistant is configured with `lovelace: mode: yaml` (legacy behavior), ensure the default Overview dashboard is represented as an actual YAML dashboard entry with URL path `"lovelace"` if the user has not already defined it under `lovelace: dashboards:`.
+   - This migration should populate the expected dashboard metadata (title/icon/sidebar/admin/filename) and should also trigger the existing repair issue flow for YAML mode deprecation.
+
+4. **Default-dashboard lookup when `url_path` is not provided**
+   - In code paths that resolve a dashboard by `url_path` (including cast/dashboard info and relevant websocket handlers), when `url_path` is `None`/omitted:
+     - Prefer the `"lovelace"` dashboard if it exists.
+     - Otherwise fall back to the existing default dashboard stored under `None`.
+
+5. **Expose resource mode over WebSocket**
+   - Add a new websocket command `lovelace/info` that returns basic Lovelace info including the effective `resource_mode` value.
+   - Ensure it is registered during Lovelace setup and returns the correct mode for:
+     - default configuration (storage),
+     - explicit `resource_mode: yaml`,
+     - legacy `mode: yaml` without `resource_mode`.
+
+6. **System health reporting**
+   - System health for Lovelace should determine the overall `mode` based on the dashboards present (YAML vs storage dashboards), not purely from a single global flag.
+   - Account for the fact that YAML mode migration can result in both a storage default dashboard (`None`) and a YAML `"lovelace"` dashboard being present at the same time.
+
+7. **Update internal data model**
+   - The data stored under `hass.data[LOVELACE_DATA]` should reflect the separation of concerns: keep the effective resource-loading mode available (e.g., as `resource_mode`) rather than treating it as the global Lovelace mode.
+
+Implement these changes so the updated and existing Lovelace tests pass, including tests covering slug validation, websocket responses, YAML mode migration, and system health counts/mode.

@@ -1,0 +1,24 @@
+Implement an enhancement to Ruff’s `RUF052` rule (“used-dummy-variable”) so it reports dummy variables (names matching the configured “dummy variable” pattern, typically leading underscores like `_item`) when they are **introduced as local loop variables inside comprehensions and generator expressions and then accessed**.
+
+### Background
+
+`RUF052` flags locals that look like “intentionally unused” placeholders but are actually referenced. Historically, the rule has correctly handled dummy locals created by typical statements (e.g., assignments and `for` loops inside functions), while avoiding parameters and non-local bindings (`global`, `nonlocal`, etc.). However, it has not reliably detected the same issue when the dummy variable is created by the implicit loop of:
+
+- list comprehensions (`[...]`)
+- dict comprehensions (`{k: v for ...}`)
+- set comprehensions (`{... for ...}`)
+- generator expressions (`(... for ...)`), including when passed directly to a call like `sum(...)`
+
+### Requirements
+
+Update the rule implementation so that:
+
+1. **Dummy loop variables introduced by comprehensions / generator expressions are treated the same as dummy loop variables introduced by `for` statements**: if they are referenced anywhere in that comprehension/generator expression, `RUF052` should be emitted on the binding site.
+2. The rule must continue to **ignore function parameters** and must not start flagging globals/nonlocals/imports/definitions/etc. that are not considered local variables for this rule.
+3. The rule must work with:
+   - multiple loop targets (e.g., `for _i, _x in ...`)
+   - nested comprehensions/generators
+   - filters/conditions in comprehensions (e.g., `... if _x > 0`)
+4. Any existing autofix behavior and safety constraints (e.g., cases where renaming would shadow another name and therefore should not be fixed) must remain coherent with the expanded detection.
+
+The provided tests include both the pre-existing scenarios and new coverage for comprehensions and generator expressions; your implementation should satisfy them all.

@@ -1,0 +1,51 @@
+Add **job-level model overrides** for **reasoning level** and **temperature** to the headless executor pipeline (API → persistence → model resolution), and expose them in the CLI. The implementation must support both new and existing execution modes and model-selection behavior.
+
+### Requirements
+
+#### 1) JobSpec: represent overrides
+Update `ai.brokk.executor.jobs.JobSpec` to include two new optional top-level fields:
+- `reasoningLevel` (`String?`)
+- `temperature` (`Double?`)
+
+These must deserialize from/serialize to JSON using the same field names. Ensure any existing factory methods/builders that create `JobSpec` still work and can optionally accept overrides.
+
+#### 2) HeadlessExecutorMain: accept + validate overrides on job creation
+In `ai.brokk.executor.HeadlessExecutorMain`, extend the `POST /v1/jobs` request payload handling to accept the new optional fields.
+
+Validation rules:
+- `reasoningLevel`:
+  - If provided and non-blank, normalize case/whitespace consistently and validate it against the supported set of reasoning levels used by the service (the `AbstractService.ReasoningLevel` enum).
+  - Reject unknown values with an HTTP 400 validation error that explains which values are allowed.
+- `temperature`:
+  - If provided, it must be a finite JSON number in `[0.0, 2.0]` (inclusive).
+  - Reject out-of-range values and NaN with an HTTP 400 validation error.
+
+When validation passes, the overrides must be stored on the created `JobSpec` that is handed off to job execution.
+
+#### 3) JobStore: persist and reload overrides
+In `ai.brokk.executor.jobs.JobStore`, ensure the job metadata written to disk includes the new `reasoningLevel` and `temperature` fields and that reloading a stored job spec restores them correctly.
+
+Sensitive-tag redaction behavior must remain unchanged.
+
+#### 4) JobRunner: apply overrides during model resolution
+In `ai.brokk.executor.jobs.JobRunner`, apply job-level overrides when resolving models for execution (planner/scan/code/default models). This includes:
+- Reasoning level override: interpret `JobSpec.reasoningLevel()` as an override of the base model configuration’s reasoning setting.
+- Temperature override: apply only when supported by the underlying service/model; otherwise ignore it (no failure).
+
+Model override application must work consistently whether a model name is explicitly supplied by the job (`plannerModel`, `scanModel`, `codeModel`) or when the runner falls back to a project/service default model.
+
+#### 5) AbstractService: detect temperature support per model
+In `ai.brokk.AbstractService`, add a capability check that determines whether a given model supports the OpenAI-style `temperature` parameter. The logic should use the service’s existing model metadata lookup (e.g., location → model info) and return `false` when the model is unknown or lacks the relevant capability information.
+
+`JobRunner` must consult this support check before attempting to pass a temperature override.
+
+#### 6) HeadlessExecCli: add flags and pass through
+In `ai.brokk.tools.HeadlessExecCli`:
+- Add `--reasoning-level LEVEL` (optional) and include it in the JSON payload only when non-blank.
+- Add `--temperature VALUE` (optional), parse it as a double, and fail CLI argument parsing with a clear error on invalid numeric input.
+- When provided, include `temperature` in the job payload as a JSON number.
+
+Update CLI help/example text accordingly.
+
+### Outcome
+With these changes, jobs created via API and CLI can optionally override `reasoningLevel` and `temperature`, those values are validated and persisted, and model construction uses them appropriately—while safely skipping temperature overrides for models that don’t advertise support.

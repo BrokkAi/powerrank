@@ -1,0 +1,88 @@
+Implement task list persistence + navigation, and add configuration modals/shortcuts to the Textual TUI and the executor API.
+
+### 1) Executor API: replace task list via `POST /v1/tasklist`
+Add a new HTTP route to the executor so clients can replace the current task list content.
+
+Requirements:
+- Register `POST /v1/tasklist` alongside the existing `GET /v1/tasklist` route.
+- The request body must accept:
+  - `bigPicture` (nullable string)
+  - `tasks` (list of task items; may be empty but must not be `null`)
+- Validate input:
+  - If `tasks` is `null`, return a 400 validation error with a clear message.
+  - Reject lists containing explicit `null` elements (avoid server-side NPEs); return a 400 validation error.
+- On success, replace the task list in the selected context and return the same JSON shape as `GET /v1/tasklist` (including server-assigned IDs where applicable).
+
+### 2) Python executor client: support persisting task list
+Extend the Python-side executor client to support replacing the task list:
+- Add a method that POSTs to `/v1/tasklist` with the provided task list payload and returns the decoded JSON.
+- Ensure HTTP failures are surfaced consistently with the existing client error-handling style.
+
+### 3) TUI task list panel: selection, keyboard navigation, and CRUD support
+Enhance the Textual task list panel widget to support browsing tasks and interacting with a selected task.
+
+Requirements:
+- The task list panel must be focusable.
+- Maintain an internal “selected task index” when detailed task list data is present.
+- Expose:
+  - the currently selected task (or `None`)
+  - a way to move selection forward/backward (clamped; return whether it changed)
+  - a way to obtain a mutable copy of the current detailed task list data suitable for editing/persisting
+- Render selection state in the UI (including “no selection” when appropriate) and show brief inline usage help.
+- Add key handling on the panel:
+  - Arrow keys (or equivalent) move selection
+  - Enter/Space toggles the selected task’s done state (by delegating to an app action)
+- When task list details update, preserve selection by task id when possible.
+
+### 4) `/task` command handling in the TUI
+Extend the app’s command handler to support task operations:
+
+Supported subcommands:
+- `/task` (no args): show selected-task info if one is selected; otherwise show task-command help text.
+- `/task next` and `/task prev`: move selection in the task list panel and report when navigation can’t proceed.
+- `/task toggle`: toggle done state of the selected task and persist via the API.
+- `/task delete`: delete the selected task and persist via the API.
+- `/task add <title>`: add a new task and persist via the API (reject blank titles).
+- `/task edit <title>`: rename the selected task and persist via the API (reject blank titles).
+
+Persistence rules:
+- If the panel doesn’t yet have detailed task list data, fetch it first (`GET /v1/tasklist`) before applying mutations.
+- After persisting (`POST /v1/tasklist`), refresh the panel from the saved response.
+
+### 5) Model selection + reasoning selection modals and shortcuts
+Add two full-screen modal selectors to the Textual app:
+
+**Model selector**
+- Fetch available models from the executor.
+- Display them in a list; selecting an item dismisses the modal and updates the app’s current model.
+- Must handle model entries returned as either strings or objects containing a `name`.
+
+**Reasoning selector**
+- Display a fixed set of reasoning levels (e.g., disable/low/medium/high).
+- Indicate the current level in the list.
+- Selecting a level dismisses the modal and updates the app’s reasoning setting.
+
+Shortcuts / bindings:
+- Add a visible shortcut for model selection (`Ctrl+U`).
+- Add a visible shortcut for reasoning selection (`Ctrl+E`).
+- Ensure these actions can be triggered even when the chat input widget has focus.
+
+### 6) Settings shortcut and footer/help-bar adjustments
+Standardize shortcuts and how they appear:
+- Use `Ctrl+P` for “Settings” (Textual command palette), and ensure the UI labels it as “Settings”.
+- Remove the old theme/palette shortcut behavior (e.g., no `F2` theme binding).
+- Update the footer/help bar so the displayed shortcuts appear in a consistent, intentional order (including Settings).
+
+Also adjust the chat command surface:
+- Replace any legacy `/theme` / `/palette` command behavior with a single `/settings` command that opens Settings.
+
+### 7) Chat panel streaming behavior regression fix
+Simplify streaming output handling:
+- Remove incremental streaming preview behavior (no separate “live streaming” widget).
+- Ensure flushing logic correctly resets per-message state when a terminal flush occurs with an empty/whitespace-only buffer—especially so “reasoning mode” does not remain active for subsequent messages.
+
+### 8) Swing TUI (Java) task list panel: focus + getters (small UI plumbing)
+For the Swing terminal UI components:
+- Add focus-border behavior around the task list scroll area.
+- Expose getters for task list subcomponents used by the chrome/focus manager (e.g., scroll pane and relevant buttons).
+- Ensure the main chrome’s “is this component part of the UI we manage” logic includes these task list components.

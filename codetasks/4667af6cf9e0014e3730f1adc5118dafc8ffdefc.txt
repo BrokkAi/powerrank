@@ -1,0 +1,40 @@
+Implement resilient handling for Stripe customers whose metadata references a Braintree customer ID that no longer exists.
+
+### Context
+Billing code uses a Stripe `Customer` metadata field (the Braintree customer ID) to look up a Braintree `Customer` in order to:
+- detect an existing PayPal payment method when returning the organization’s current payment method
+- replace or add a PayPal payment method when updating payment details
+
+Currently, a stale/invalid Braintree customer ID can cause lookups to fail and prevent expected flows (such as adding PayPal) from proceeding.
+
+### Requirements
+
+#### 1) Add a Braintree customer lookup API that tolerates missing customers
+Extend `IBraintreeService` with a method that accepts a Stripe `Customer` and returns the corresponding Braintree `Customer` if it can be retrieved, otherwise returns `null`.
+
+Behavior expectations:
+- If the Stripe customer metadata does not contain the Braintree customer ID key, return `null`.
+- If the metadata contains an ID but the Braintree gateway lookup throws Braintree’s “not found” exception, do not propagate the error; instead log a warning and return `null`.
+- If found, return the Braintree customer.
+
+Add/adjust unit coverage for this behavior in `BraintreeService` implementation.
+
+#### 2) Update “get payment method” to use the tolerant lookup
+In `GetPaymentMethodQuery`, when checking for an existing PayPal payment method, use the new `IBraintreeService` lookup rather than directly querying the Braintree gateway.
+
+Expected outcome:
+- If the linked Braintree customer is missing, the PayPal check should simply behave as “no PayPal on file” (i.e., no exception and no hard failure).
+
+#### 3) Update “update payment method” flow to allow PayPal even with stale Braintree linkage
+In `UpdatePaymentMethodCommand`, when handling the PayPal update path, stop assuming the Braintree customer ID in Stripe metadata always points to a valid Braintree customer.
+
+Expected outcome:
+- If the Stripe customer has a Braintree customer ID that is invalid/missing in Braintree, the command should proceed as if there is no existing Braintree customer and perform whatever “create/link and add PayPal” behavior is appropriate for that flow.
+- If a valid Braintree customer exists, continue to replace/update the existing Braintree payment method as before.
+
+#### 4) Align `PayInvoice` interface types
+`IBraintreeService.PayInvoice` should accept a `Stripe.Invoice` (not an unqualified `Invoice`), and the implementation should compile accordingly (including any necessary type qualification for Stripe option types used in invoice update/pay calls).
+
+### Notes
+- Ensure dependency injection signatures are updated consistently wherever `GetPaymentMethodQuery` and `UpdatePaymentMethodCommand` are constructed.
+- The warning log message content is not required to match exactly, but it must be emitted when a Stripe customer is linked to a non-existent Braintree customer.

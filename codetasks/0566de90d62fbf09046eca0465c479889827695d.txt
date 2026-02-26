@@ -1,0 +1,42 @@
+Implement a compliance gate that prevents enabling **Automatic User Confirmation** for an organization unless specific prerequisites are met, and reuse the same compliance logic both when the policy is enabled and when the org setting is toggled in the Admin Portal.
+
+### Background / Goal
+There is an existing policy validator for `PolicyType.AutomaticUserConfirmation`. A new requirement is to also block enabling the equivalent organization-level flag from the Admin Portal UI (i.e., when editing an organization) unless the organization is compliant with the same prerequisites the policy enforces.
+
+### Required behavior
+When an organization attempts to enable automatic user confirmation (whether via policy enablement or via the organization edit flow):
+
+1. **Single-organization prerequisite**
+   - All *non-invited* organization users with a real `UserId` must not be members of any *other* organization in a non-invited state.
+   - Memberships in other organizations with `Invited` status do **not** count as a violation.
+
+2. **No provider users**
+   - If any organization users correspond to provider-user relationships, enabling must be blocked.
+
+3. **Error reporting**
+   - Provide a clear, user-facing error message for each failure case:
+     - One message for the “user is in multiple orgs” case.
+     - One message for the “provider user exists” case.
+
+### Structural / integration requirements
+- Extract the prerequisite checks into a dedicated validator component in the Core policy enforcement area (under the AutoConfirm policy enforcement namespace), with:
+  - An interface suitable for dependency injection.
+  - A request object containing the organization identifier.
+  - A result type compatible with the existing validation utilities (`ValidationResult` / `Error` patterns used in the codebase).
+
+- Update the existing `AutomaticUserConfirmationPolicyEventHandler` so it no longer performs repository queries directly; it should delegate prerequisite validation to the new validator and translate failures into the string error returned by `ValidateAsync`.
+
+- Update the Admin Portal organization edit flow (`OrganizationsController`) so that:
+  - The edit model includes the `UseAutomaticUserConfirmation` flag when mapping from the persisted organization.
+  - When a request transitions the organization from **disabled → enabled** for this flag, the controller performs the same compliance validation and, on failure, redirects back to the edit view while surfacing the validation message (via the controller’s existing error mechanism).
+  - If the flag is unchanged, or already enabled, the compliance validator is not invoked.
+
+- Register the new validator in the policy service collection extensions so it can be resolved both by the policy event handler and by the Admin Portal controller.
+
+### Notes on repository usage
+The compliance validator must determine:
+- Organization user details for the organization.
+- Whether any of those users (excluding invited-only cases as described) belong to other organizations.
+- Whether any of those users are provider users.
+
+The implementation should follow the domain semantics already used elsewhere for organization user statuses and provider-user relationships.

@@ -1,0 +1,47 @@
+Implement improved diagnostics and fix behavior for Ruff “range suppression” comments (`# ruff: disable[...]` / `# ruff: enable[...]`) so that invalid, unused, and unmatched suppressions are surfaced consistently.
+
+### Background
+
+Ruff supports range suppressions via paired `disable[...]` / `enable[...]` comments. The suppression parser and the reporting phase should now distinguish:
+
+1. **Invalid rule codes** included in suppression brackets.
+2. **Invalid suppression comment syntax** (e.g., missing codes, malformed directive, unsupported placement).
+3. **Unmatched suppressions** where a `disable[...]` is never closed by a corresponding `enable[...]`.
+4. **Unused suppressions** where a valid suppression does not actually suppress any diagnostics.
+
+### Required behavior
+
+#### 1) Invalid rule codes inside suppression comments → `RUF102`
+When a range suppression comment contains a rule code that Ruff does not recognize (after applying any rule-code redirects), emit `RUF102` for each invalid code that appears inside a suppression directive. The diagnostic message must clearly indicate the context is a **suppression** (not `# noqa`).
+
+* External/third-party rule code prefixes configured as “external” must be treated as valid for this purpose (i.e., do not emit `RUF102` for them).
+* The invalid-code handling must work for both `disable[...]` and `enable[...]` comments.
+* Provide an autofix that removes only the invalid code when multiple codes are present, or removes the whole suppression comment if it consisted solely of invalid codes.
+
+#### 2) Invalid suppression comment syntax → `RUF103`
+Emit a new diagnostic `RUF103` for suppression comments that are recognized as intended suppression directives but are syntactically invalid or unsupported, such as:
+- Missing suppression codes (e.g., `# ruff: disable` or `# ruff: disable[]`).
+- “Enable” without a matching “disable”.
+- Other parse/validation failures produced by the suppression comment parser.
+
+These invalid suppression comments are ignored by Ruff’s suppression mechanism, so the diagnostic should offer an autofix that removes the offending comment.
+
+#### 3) Unmatched range suppression (implicit/unterminated range) → `RUF104`
+Emit a new diagnostic `RUF104` when a `# ruff: disable[...]` starts a range suppression that is never closed by a corresponding `# ruff: enable[...]` for that same suppression (i.e., the suppression effectively runs to end-of-scope / end-of-file).
+
+This warning is about the **comment itself** (highlight the disable comment) and should not require the suppressed rule to be enabled/disabled in the current configuration to trigger. Avoid duplicate reporting for the same comment.
+
+#### 4) Unused range suppressions → `RUF100`
+Continue reporting unused suppressions, but ensure unused **range suppressions** are also covered:
+- If a suppression code is valid (including redirected codes) and it never suppresses anything, report `RUF100` (“Unused suppression”) for that suppression.
+- For externally configured rule prefixes, do not treat the suppression as a Ruff rule for “unused suppression” purposes (i.e., don’t report `RUF100` solely based on Ruff not recognizing the external code).
+
+Autofix behavior should match existing unused-suppression fixes: remove the whole comment if it only had one code, otherwise remove the unused code from the bracket list.
+
+### Additional integration requirements
+
+- Add the new rule codes `RUF103` and `RUF104` to Ruff’s rule-code registry so they can be enabled/disabled like existing `RUF` diagnostics.
+- Ensure rule-code redirects are respected when determining whether a suppression actually applies (e.g., suppression of a redirected code must match the canonical rule).
+- Update documentation text where relevant so it reflects the new behavior around implicit/unmatched range suppressions.
+
+The updated test fixtures and snapshots expect these new diagnostics and messages, along with correct highlighting and fixes.

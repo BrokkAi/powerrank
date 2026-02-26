@@ -1,0 +1,40 @@
+### Goal
+
+Fix long-running Network Lock (TKA) clients so their local TKA storage does not grow without bound. A node should periodically compact its locally stored AUM history, and this compaction must happen as part of normal ongoing operation (not only at startup).
+
+In addition, the in-memory TKA storage used in tests must support deterministic/controllable commit timestamps so tests can model “old” AUMs becoming eligible for compaction.
+
+---
+
+### Required behavior changes
+
+#### 1) Compact TKA state as part of sync
+
+In `ipn/ipnlocal/network-lock.go`, adjust the logic that performs TKA synchronization (the code path used by `LocalBackend` when it sees the control plane’s TKA head differs from the node’s).
+
+When a sync actually runs and completes successfully, the node must then attempt to compact its local TKA state using the existing compaction defaults. This compaction should be safe to run repeatedly and may often be a no-op.
+
+If compaction fails, surface the error as part of the sync flow (with enough context to distinguish a compaction failure from a sync failure).
+
+#### 2) Provide an in-memory “chonk” constructor with an overridable clock (tests)
+
+In `tka/tailchonk.go`, the in-memory implementation (`Mem`) currently records per-AUM commit timestamps. Tests need to backdate these timestamps to make AUMs eligible for compaction, so `Mem` must support an injectable clock:
+
+- Add a constructor-style helper that returns a correctly initialized in-memory `Chonk` implementation (backed by `Mem`) suitable for use throughout tests and production in-memory scenarios.
+- `Mem` must record commit times using its configured clock rather than directly using the system clock.
+- Provide a way for tests to replace the clock used by `Mem`, but ensure this cannot be used from non-test code (panic or otherwise fail fast if invoked outside a test environment).
+
+This change must still satisfy the existing `Chonk` / `CompactableChonk` interface expectations for `Mem`.
+
+#### 3) Update TKA-related code to use the new in-memory chonk where appropriate
+
+Where code previously instantiated the in-memory chonk directly, it should now use the new constructor so that internal fields (including the clock) are set consistently. This includes the Network Lock bootstrap/initialization paths that use in-memory storage before committing to disk.
+
+---
+
+### What must remain true
+
+- Network Lock enablement/bootstrap flows continue to work with both filesystem-backed storage and in-memory storage.
+- TKA syncing continues to converge correctly with the control plane.
+- The compaction step must not break correctness: the node must still end up at the correct head even if it has compacted away older historical AUMs.
+- All provided unit tests (including newly added ones around compaction triggering and time-based eligibility) must pass.

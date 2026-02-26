@@ -1,0 +1,31 @@
+Implement an optimization to make doc-values based multi-term rewriting take advantage of doc-values skip lists when they are available, without introducing incorrect matches for non-contiguous term sets.
+
+### Context / goal
+Lucene already has range-query iterators that can speed up doc-values range checks by consulting a `DocValuesSkipper` (per-block min/max value and doc-id ranges). This exercise extends that idea to doc-values rewriting of multi-term queries (eg. `TermInSetQuery` and `RegexpQuery` when using `DOC_VALUES_REWRITE`) so that:
+
+* segments that can’t possibly match (based on skipper min/max) are skipped efficiently, and
+* segments/blocks are **not** incorrectly treated as “fully matching” when the query represents a **set of terms** that may have gaps between the minimum and maximum term ordinal.
+
+### Required behavior changes
+1. **Expose a reusable range iterator in the search package**
+   * Provide a `DocValuesRangeIterator` under `org.apache.lucene.search` (it should be usable by both document range queries and the rewrite method).
+   * It must wrap a `TwoPhaseIterator` and use an associated `DocValuesSkipper` to improve the approximation (skipping blocks based on min/max values and doc-id ranges).
+   * It must support two modes:
+     * **Continuous range mode** (normal numeric/ordinal range queries): it may conclude that an entire skipper block matches (or matches for all docs that have a value) when the skipper’s min/max are fully inside the query range.
+     * **Range-with-gaps mode** (term-set queries rewritten to ordinal checks): it must **not** conclude “all docs in this block match” merely because block min/max fall within the query’s `[min,max]`; it may only use the skipper to rule blocks out when they are completely outside the range.
+
+2. **Update doc-values range queries to use the new iterator**
+   * The existing sorted numeric and sorted set doc-values range queries should continue to use the skipper optimization in continuous range mode.
+
+3. **Leverage skippers in `DocValuesRewriteMethod` when available**
+   * When rewriting a multi-term query to doc-values ordinal matching, if a `DocValuesSkipper` exists for the field in the current leaf, use it to:
+     * quickly return no matches when the query’s ordinal range is entirely outside the skipper’s global min/max for the segment, and
+     * wrap the two-phase iterator with the new `DocValuesRangeIterator` **in range-with-gaps mode**, using the query’s minimum and maximum matched ordinals as the bounds.
+   * This integration must be correct for both singleton and multi-valued sorted-set doc-values.
+
+4. **Correctness constraint for “gap” queries**
+   * For term-set based queries (eg. query terms `{a, c}`), the optimization must not accidentally match documents that only contain terms strictly between them (eg. `b`) just because those terms fall within the min/max ordinal interval. The skipper may only be used to skip blocks that cannot match, not to accept blocks wholesale.
+
+### Notes
+* The change will require adjusting imports and visibility (the iterator is now part of `org.apache.lucene.search` and marked experimental).
+* Ensure the modified code compiles and the provided tests validate both the optimization and the gap-safety requirement.

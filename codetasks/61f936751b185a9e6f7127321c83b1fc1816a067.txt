@@ -1,0 +1,31 @@
+### Problem
+
+In the log parsing pipeline, labels can come from multiple sources with different precedence:
+
+- **Base labels** (already present on the log stream)
+- **Structured metadata labels** (pre-attached metadata on the entry, stored separately from base labels)
+- **Parsed/extracted labels** produced by parsers (JSON, logfmt, regexp, pattern, unpack, and “expression” extractors)
+
+A regression/bug exists where a parser may extract a label key that already exists as **structured metadata**, and the extracted value ends up **overriding** (or colliding with) the structured metadata instead of being treated as a duplicate.
+
+### Required behavior
+
+When any parser attempts to add an extracted label:
+
+- If the extracted label key already exists as a **base label**, the extracted label must not replace it; instead it must be written using the existing duplicate-key convention (the project’s duplicate suffix, e.g. `*_extracted`).
+- The **same duplicate handling must apply when the key already exists as structured metadata**. In other words, structured metadata must be protected from being overridden by parsed labels exactly like base labels are.
+
+This applies consistently across all parsers that create labels from log content, including:
+- JSON parsing
+- regexp parsing
+- logfmt parsing
+- pattern parsing
+- unpack parsing
+- JSON expression extraction
+- logfmt expression extraction (including any “pre-registration” of extracted label names)
+
+### Scope
+
+Update the label-building/parsing logic so parsers can detect key presence not only in base labels, but also within the structured metadata label category, and use that to prevent extracted labels from taking precedence over structured metadata.
+
+The end result should preserve structured metadata values under their original keys, while still extracting the parsed value under the appropriate duplicate key.

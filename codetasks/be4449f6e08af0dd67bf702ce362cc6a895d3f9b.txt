@@ -1,0 +1,14 @@
+Extend the wgengine watchdog wrapper to surface watchdog timeouts as client metrics, broken down by the operation that timed out.
+
+Requirements:
+
+- Introduce a distinct, typed identifier for “which watchdog-protected operation is running” (covering the engine methods the watchdog wraps, including `PeerForIP`). Use this identifier everywhere the watchdog currently tracks/logs an operation name.
+- Define a set of client-side counters (using `tailscale.com/util/clientmetric`) that count watchdog timeouts:
+  - one counter per operation type
+  - one additional counter that tracks the total number of watchdog timeouts across all operations
+- When a watchdog timeout occurs (i.e., the watchdog path that logs goroutine stacks and reports the timeout is taken), increment:
+  - the counter for the specific operation that timed out
+  - the “total/any” counter
+- Keep the existing watchdog behavior intact: tracking in-flight operations for debugging, emitting logs/stacks, and invoking the configured fatal/log callbacks. The metric reporting must not interfere with those flows.
+
+The provided tests will validate that timeouts correctly increment the per-operation counters and the overall counter, and that counters can be reset between test cases.

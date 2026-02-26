@@ -1,0 +1,30 @@
+Update the LSP diagnostics emitted by `ty_server` so that the diagnostic **message content and presence of `relatedInformation`** depend on whether the client declares support for diagnostic related information.
+
+### Required behavior
+
+1. **Detect client support for diagnostic related information**
+   - During capability resolution, determine whether the client supports `textDocument.publishDiagnostics.relatedInformation`.
+   - Expose this as a resolved capability that can be queried wherever diagnostics are converted to LSP types.
+
+2. **Conditionally include `relatedInformation` in emitted diagnostics**
+   - If the client supports related diagnostic information:
+     - Populate `Diagnostic.related_information` with secondary/sub-diagnostic locations currently available in the internal diagnostic model.
+     - Do not emit an empty list when there is no related information; still use the appropriate LSP representation.
+   - If the client does **not** support related diagnostic information:
+     - Do **not** include related information in the LSP diagnostic payload (i.e., omit it rather than sending an empty array).
+
+3. **Adjust diagnostic `message` based on support**
+   - If the client supports related information, ensure the main `Diagnostic.message` is suitable even when some detail is moved into `relatedInformation` (e.g., the primary message should remain clear on its own and may need to incorporate the primary annotation text if that text would otherwise only appear in related info).
+   - If the client does **not** support related information, use a **more concise** diagnostic message that preserves key information without relying on `relatedInformation`.
+
+4. **Apply consistently across all diagnostic publishing paths**
+   - The capability-aware conversion must be used for:
+     - standard publish diagnostics notifications,
+     - pull diagnostics responses,
+     - workspace diagnostics reporting,
+     - notebook diagnostics (per-cell diagnostics mapping).
+
+### Notes on scope
+
+- This change is purely about **LSP output shaping** (capability detection + conversion logic). The underlying diagnostic production should remain unchanged.
+- The updated tests cover both clients that do and do not advertise `relatedInformation` support, so the implementation must correctly thread resolved client capabilities to the diagnostic conversion layer in all relevant code paths.

@@ -1,0 +1,28 @@
+Implement improvements to external-change handling and diff generation so that history entries and computed diffs accurately reflect meaningful changes, and failures/timeouts produce actionable output.
+
+### External file change processing (ContextHistory / ContextManager)
+When the system is notified that project files changed outside the app:
+
+- The “backward compatibility” notification path that does **not** provide a concrete set of changed files must be treated as “all project files are candidates” (so external changes can still be detected).
+- `ContextHistory.processExternalFileChangesIfNeeded(Set<ProjectFile> changed)` must:
+  - Refresh only fragments that are actually associated with the provided changed `ProjectFile`s (based on each fragment’s referenced files).
+  - Merge refreshed fragments back into the live context without disturbing unrelated fragments.
+  - **Not** create/replace a history entry when the refresh results in no real content changes (i.e., avoid no-op “Load external changes” entries, especially ones that would appear with empty/meaningless file lists).
+  - Preserve the existing “Load external changes” labeling semantics, including continuation behavior across consecutive external-change events (counter incrementing and replacing the top entry instead of growing the stack).
+
+### Diff computation (DiffService)
+Update diff computation between contexts so that it includes all relevant editable content while avoiding noise:
+
+- Diffs must be computed for **all editable fragments**, including non-file-based editable fragments such as `USAGE`, in addition to non-text/image fragments.
+- Editable fragments representing **external paths** must be excluded from diff candidates.
+- Diff results must not contain duplicates.
+- Diff computation must treat “no changes” as “no diff entry” (no empty/placeholder entries).
+
+### Robust content extraction and error reporting
+Diff generation must be resilient to slow/failed fragment content computation:
+
+- When fragment text extraction times out, the “new/old content” used for diffing must fall back to a clear, non-empty diagnostic message (not an empty string).
+- When extraction fails, the resulting diagnostic should include fragment identity/type/description and a formatted stack trace suitable for logging and debugging, and must not cause diff computation to crash.
+- Expose a reusable stack-trace formatting utility via `ExceptionReporter` so it can be used outside the reporter implementation.
+
+The end result should prevent empty “Load external changes” history entries, correctly produce diffs for editable non-file fragments (like `USAGE`) when they change, avoid diffing excluded fragment types, and provide deterministic, debuggable fallback text on timeouts/errors.

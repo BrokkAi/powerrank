@@ -1,0 +1,66 @@
+### Goal
+
+Extend Prometheus’s scrape ingestion pipeline to support the newer storage API (`storage.AppendableV2` / `storage.AppenderV2`) in addition to the existing `storage.Appendable` / `storage.Appender`. The scrape loop must be able to ingest samples, histograms, exemplars, and optional metadata through either API, selected at runtime, while preserving scrape semantics (limits, staleness tracking, error handling, and reporting).
+
+### What to implement
+
+#### 1. Dual appendable wiring through manager → scrape pool → scrape loop
+* The scrape `Manager` and `scrapePool` must be able to hold **either**:
+  * a legacy `storage.Appendable` (v1), **or**
+  * a `storage.AppendableV2` (v2),
+  and pass the chosen one down into each `scrapeLoop`.
+* `newScrapePool` should accept both appendable variants and store them in the pool.
+* `newScrapeLoop` must copy the chosen appendable(s) from the pool into the loop.
+* The scrape loop must select which appender implementation to use based on whether v2 is configured (non-nil).
+
+#### 2. Scrape loop appender selection
+Update `(*scrapeLoop).appender()` so that:
+* when a v2 appendable is present, the loop uses an adapter backed by `AppenderV2`,
+* otherwise it continues using the v1 adapter backed by `Appender`.
+
+The adapter must satisfy the same internal interface used by the scrape loop (`scrapeLoopAppendAdapter`) so the rest of the loop can remain unchanged.
+
+#### 3. AppenderV2 ingestion path
+Add a v2-backed scrape append implementation that mirrors the existing v1 behavior, including:
+* Parsing supported scrape formats (text, OpenMetrics text, protobuf).
+* Applying relabeling/mutation and validation.
+* Series caching and ref reuse across scrapes.
+* Staleness marker injection for series that disappeared (including the empty-scrape case).
+* Correct handling of explicit timestamps vs scrape timestamps and timestamp-staleness tracking.
+* Classic and native histogram handling, including optional conversion behaviors.
+* Exemplar extraction from parsers and passing exemplars into the v2 append call (via options), including ordering requirements for validation/performance.
+
+This should be introduced as a separate implementation (e.g. a new adapter type) to avoid disrupting the existing v1 path.
+
+#### 4. V2 limit wrappers (time limit, sample limit, bucket limit, max schema)
+The v1 ingestion path already wraps appenders with additional validation/limits. Provide equivalent wrappers for `storage.AppenderV2` with matching semantics:
+* Enforce “max ahead” time bound.
+* Enforce per-scrape sample limit with the same exception behavior around writing staleness markers for already-known series.
+* Enforce native histogram bucket limit, including resolution reduction where applicable.
+* Enforce maximum schema for exponential native histograms by reducing resolution when needed.
+
+These wrappers must work for both integer and float native histogram variants.
+
+#### 5. Error accounting and partial errors (especially exemplars)
+The scrape loop aggregates append errors into scrape metrics/logging buckets. Extend error handling so it properly accounts for v2-specific “partial success” behavior:
+* v2 append operations may return a `storage.AppendPartialError` containing exemplar-related errors.
+* Treat “partial errors” as non-fatal for the overall sample append (i.e., sample may be accepted while some exemplars are rejected).
+* Only count exemplar out-of-order errors in a way that matches the intended scrape reporting semantics for exemplars.
+* Update the helper responsible for categorizing append errors (`checkAddError`) to accept the exemplar set for the current sample so exemplar error reporting can be derived from what was attempted.
+
+#### 6. Metadata behavior differences between v1 and v2
+Support passing metric metadata (type/unit/help/family name) through v2 append options when enabled in the scrape loop configuration, and maintain the v1 semantics that rely on the legacy metadata update path.
+
+#### 7. Test utilities updates to support both APIs
+The test harness uses `util/teststorage` extensively. Update it to:
+* Support chaining a mock appendable into another appendable that implements both APIs.
+* Provide comparison helpers for recorded samples that correctly handle Prometheus-specific equality concerns, including NaN/staleness behavior and order-independence where needed.
+* Change test storage construction so TSDB options can be configured via functional options rather than positional parameters (notably for out-of-order time window and other TSDB flags used by benchmarks/tests).
+
+### Expected outcome
+
+After the change:
+* Scrapes can ingest using either `Appender` or `AppenderV2`, selectable by which appendable is configured.
+* All scrape features (staleness, label mutation, limits, histograms, exemplars, optional metadata propagation) function correctly in both modes.
+* Error handling and scrape metrics/logging behave correctly for v2 partial errors, especially exemplars.
+* The updated test utilities and TSDB test storage creation support the new API surface and configuration style.

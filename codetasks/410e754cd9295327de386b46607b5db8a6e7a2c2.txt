@@ -1,0 +1,29 @@
+Implement support for a premium subscription purchase flow where a user already has an existing Stripe customer record (because they previously bought account credit) but does **not** yet have any stored payment method, and they now attempt to purchase premium using a tokenized payment method.
+
+### Context
+Premium subscriptions are created by `CreatePremiumCloudHostedSubscriptionCommand` (`src/Core/Billing/Premium/Commands/CreatePremiumCloudHostedSubscriptionCommand.cs`). Users may already have `GatewayCustomerId` set even if they’ve never attached a card/bank/PayPal method (e.g., they only purchased credit).
+
+### Required behavior
+1. **PaymentMethod model ergonomics**
+   - In `src/Core/Billing/Payment/Models/PaymentMethod.cs`, the `PaymentMethod` union wrapper must expose typed accessors for both variants so callers can retrieve the underlying `TokenizedPaymentMethod` or `NonTokenizedPaymentMethod` without using the raw `OneOf` fields directly.
+
+2. **Existing customer + missing payment method**
+   - When running the premium subscription command:
+     - If the user has **no** `GatewayCustomerId`, proceed with the normal “create Stripe customer” flow using the provided payment method and billing address.
+     - If the user **does** have a `GatewayCustomerId`, the command must fetch and use the existing Stripe customer **unless**:
+       - The incoming `PaymentMethod` is **tokenized**, and
+       - The Stripe customer currently has **no attached payment method** (determined via a query dependency).
+     - In that specific case, the command must first update/attach the payment method to the existing customer (using a command dependency that takes the user, tokenized payment method, and billing address), then continue with subscription creation using the existing customer.
+
+   - If the incoming payment method is **non-tokenized** (e.g., “account credit”), do not attempt to attach/update a Stripe payment method.
+
+3. **Premium activation rules based on subscription status**
+   - Ensure the command sets the user’s premium flags based on the resulting Stripe subscription status in a way consistent with existing behavior:
+     - Tokenized PayPal may have a different “successful” status than other tokenized methods.
+     - Non-tokenized payment methods should only grant premium when the subscription is actually active.
+
+4. **Update code to use Stripe constants consistently**
+   - The command should reference the Stripe constant values in a consistent way (e.g., via imported constants) so status/metadata/tax/payment-behavior values align with what the rest of the billing code expects.
+
+### Notes
+- The updated tests introduce coverage for the “existing customer from credit purchase + no payment method + tokenized purchase” scenario, and the previous “existing customer already has a payment method” scenario must still behave correctly.

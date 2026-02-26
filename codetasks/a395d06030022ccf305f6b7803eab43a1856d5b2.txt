@@ -1,0 +1,32 @@
+Implement support for KIP-1188 in Kafka Connect by adding a new `ConnectorClientConfigOverridePolicy` implementation that restricts connector-level client config overrides to an explicit allowlist, and integrate it with existing policy loading/validation.
+
+### Required behavior
+
+1. **New policy: “Allowlist”**
+   - Add a new class `org.apache.kafka.connect.connector.policy.AllowlistConnectorClientConfigOverridePolicy` that extends the existing policy framework (same base class used by other built-in policies).
+   - It must support the worker configuration key:
+     - `connector.client.config.override.allowlist`
+       - Type: list
+       - Default: empty
+   - Semantics:
+     - Only client config keys present in this allowlist may be overridden via connector configs (e.g., `producer.override.*`, `consumer.override.*`, `admin.override.*`).
+     - If the allowlist is empty or unset, **no** client config overrides are permitted.
+   - The policy must be configurable via the existing `connector.client.config.override.policy` mechanism using the alias/name `Allowlist`.
+
+2. **Integration with Connect’s policy discovery**
+   - Ensure the new policy is discoverable through the same mechanism as existing built-in policies (the ServiceLoader registration under `connect/runtime/src/main/resources/META-INF/services/...`).
+
+3. **Principal policy deprecation**
+   - Update `org.apache.kafka.connect.connector.policy.PrincipalConnectorClientConfigOverridePolicy` to be deprecated (with appropriate annotation metadata).
+   - When configured, it should emit a warning log indicating deprecation and pointing users to the Allowlist policy as the replacement, including how to reproduce the old Principal behavior using the allowlist setting.
+
+4. **WorkerConfig documentation string update**
+   - Update the documentation for `connector.client.config.override.policy` in `org.apache.kafka.connect.runtime.WorkerConfig` to mention the new Allowlist policy and the `connector.client.config.override.allowlist` setting, and note that `Principal` is deprecated.
+
+5. **Validation behavior**
+   - Connect’s existing connector config validation must correctly apply the Allowlist policy:
+     - allowed override keys validate cleanly
+     - disallowed override keys are surfaced as validation errors (as with other policies)
+   - This must work both in unit validation paths (e.g., herder validation) and in integration-style flows where connector creation is rejected/accepted based on the policy.
+
+The provided tests exercise policy configuration, default-deny behavior, allowlisted overrides, and end-to-end connector creation/validation behavior under different policies.

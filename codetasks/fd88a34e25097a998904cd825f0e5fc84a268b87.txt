@@ -1,0 +1,35 @@
+Update the GitHub pull request workflow to prefer the repository’s `origin` remote when determining the GitHub repository URL, while still behaving sensibly for repos that don’t have an `origin`.
+
+### Background / Goal
+Several parts of the UI and authentication code infer the GitHub **owner/repo** by parsing a Git remote URL. Today this inference uses the “default/target” remote resolution, which may select a remote associated with the currently tracked branch (or another non-`origin` remote). For GitHub PR operations, the expected behavior is:
+
+- If a remote named `origin` exists, use it.
+- If no `origin` exists, fall back to the existing remote-selection logic already used elsewhere (e.g., tracking remote, single remote, etc.).
+- If no remotes exist, the result should remain `null`.
+
+### Required Behavior
+Implement support in the Git layer for “origin-preferred” remote resolution and expose it via the repo interface:
+
+1. Add a new repo-level API to retrieve a remote URL intended for GitHub PR operations (origin-preferred with fallback).
+2. Add corresponding remote-resolution logic that:
+   - Detects whether `origin` is among configured remote names.
+   - Uses `origin` when present, regardless of what the current branch tracks.
+   - Otherwise delegates to the existing mechanism that chooses the target remote name.
+3. Update GitHub PR-related components that currently read a remote URL for parsing owner/repo so they use the new origin-preferred API instead of the previous one.
+
+### Integration Points
+The change must cover the code paths involved in:
+- GitHub authentication/repository identification (parsing owner/repo from a remote URL).
+- The GitHub Pull Requests UI (including operations that need to identify the repo for PR actions, such as checkout flows).
+
+### API / Contract Expectations
+- The new API must be available via the existing Git repo interface abstraction (so callers using the interface can access it).
+- `null` must be handled consistently: if no suitable remote can be resolved, callers receive `null` and downstream parsing should continue to work with an empty-string fallback where currently used.
+- The new “origin-preferred” URL must match the URL returned by the underlying remote helper implementing the same policy.
+
+### Validation
+New unit tests cover cases such as:
+- `origin` existing alone or alongside other remotes.
+- `origin` existing while the current branch tracks a different remote.
+- Falling back correctly when `origin` does not exist (including the “no remotes” scenario).
+Ensure your implementation satisfies these scenarios without breaking existing remote-selection behavior in other areas.

@@ -1,0 +1,38 @@
+Add a new Ruff linter rule for Airflow 3.0 that detects calls which will fail at runtime due to an incompatible function signature change.
+
+### Goal
+
+Implement a new Airflow rule with code **`AIR303`** that reports an error when **positional arguments** are passed to:
+
+- `airflow.lineage.hook.HookLineageCollector.create_asset`
+
+In Airflow 3.0 this method is keyword-only, so any positional argument usage (including unpacked positional arguments) should be flagged.
+
+### Required behavior
+
+The rule must:
+
+- Trigger on method calls to `create_asset` where the receiver is an instance of `HookLineageCollector`, including:
+  - instances stored in variables and later used (e.g., `hlc.create_asset(...)`)
+  - direct constructor usage (e.g., `HookLineageCollector().create_asset(...)`)
+- Report when the call provides positional arguments in any form, including:
+  - normal positional arguments (`create_asset("...")`, `create_asset("a", "b")`, etc.)
+  - starred positional arguments (`create_asset(*args)`), including literal unpacking like `*["..."]`
+  - starred args combined with keywords (`create_asset(*args, extra="...")`)
+- Not report when the call uses:
+  - only keyword arguments (`create_asset(uri="...", name="...")`)
+  - no arguments (`create_asset()`)
+  - only `**kwargs` expansion (`create_asset(**kwargs)`)
+
+### Diagnostics
+
+Produce a diagnostic for `AIR303` with a message indicating that the `create_asset` signature changed in Airflow 3.0, and include a help message guiding the user to pass values via keyword arguments (for example, `create_asset(uri=...)`). No autofix is required.
+
+### Integration requirements
+
+Ensure the new rule is:
+
+- wired into expression analysis so it runs on relevant call expressions
+- registered under the Airflow linter code mapping as `AIR303`
+- included in the Airflow rule test suite/snapshots
+- reflected in the generated schema/output metadata as appropriate for a new rule (including its preview availability)

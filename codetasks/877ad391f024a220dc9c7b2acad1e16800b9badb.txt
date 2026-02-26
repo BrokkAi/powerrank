@@ -1,0 +1,53 @@
+Implement UI configuration (config flow) and config-entry-based setup for the **Splunk** integration, while preserving YAML support for **entity filtering** and enabling YAML-to-UI import with deprecation handling.
+
+### Functional requirements
+
+#### 1) Config flow (`homeassistant/components/splunk/config_flow.py`)
+Create a config flow for the `splunk` domain that:
+- Supports **user setup** with fields for Splunk HEC connection details (token, host, port, SSL, verify SSL, optional name).
+- Validates input by checking:
+  - Basic **connectivity** to the Splunk HEC endpoint.
+  - **Token validity** separately from connectivity.
+- Maps validation failures to appropriate flow errors/abort reasons (e.g., cannot connect vs invalid auth vs unknown).
+- Supports **YAML import** (`SOURCE_IMPORT`) that creates a config entry when valid, or aborts with a reason that can be used for later issue creation.
+- Supports **reauthentication**:
+  - Triggered by the integration when authentication fails at runtime.
+  - Presents a token-only step to update the existing entry and reload it when the new token validates.
+- Enforces the integration’s **single instance** behavior (as indicated by the manifest).
+
+#### 2) Move runtime setup to config entries (`homeassistant/components/splunk/__init__.py`)
+Refactor setup so the integration is driven by config entries:
+- `async_setup` handles YAML:
+  - Accepts YAML configuration where connection settings may be present.
+  - Always extracts and stores the **entity filter** for later use by entry setup.
+  - If YAML includes connection settings, it must start an **import flow** and raise a **deprecation warning issue** for YAML configuration removal (with a stated future breaking version).
+  - If YAML contains **only the filter**, it must **not** trigger import and must **not** create a deprecation issue.
+- `async_setup_entry`:
+  - Builds a Splunk HEC client from the config entry.
+  - Performs validation on startup:
+    - Connectivity failures should result in a **retryable** setup failure.
+    - Authentication failures should result in a **non-retryable auth failure** that leads to reauth.
+  - Sends an initial “startup” event to Splunk.
+  - Registers an `EVENT_STATE_CHANGED` listener that:
+    - Applies the configured/stored **entity filter**.
+    - Serializes numeric vs non-numeric state appropriately.
+    - Queues events to Splunk and handles common error cases gracefully.
+    - On unauthorized/token rejection during event send, starts a **reauth flow** for the existing entry.
+  - Ensures listeners are correctly cleaned up when the entry unloads.
+
+#### 3) Constants and manifest
+- Introduce a `const.py` for the Splunk integration containing domain and defaults (and any YAML-only keys you need to keep stable).
+- Update `manifest.json` to declare:
+  - `config_flow: true`
+  - single config entry behavior
+- Add/adjust `strings.json` to provide UI text for the config flow steps, errors/aborts, reauth text, and YAML deprecation issue text.
+
+#### 4) YAML deprecation issues
+When YAML contains connection settings and import is attempted:
+- If import succeeds (or is skipped because the integration is already configured / single-instance), create the standard **deprecated YAML** issue under the Home Assistant domain.
+- If import aborts due to validation/connection/auth/unknown reasons, create an issue under the integration domain that explains the import failure and the YAML deprecation, using distinct issue IDs per failure reason.
+
+### Notes
+- The entity filter remains YAML-configurable and must influence which state-changed events get forwarded even when connection settings are configured via the UI.
+- Use the existing `hass_splunk` client for connectivity/token checks and event queuing.
+- Ensure all expected generated metadata is consistent with a config-flow-enabled integration (config flows registry / integrations metadata are updated in the repo as needed by the exercise).

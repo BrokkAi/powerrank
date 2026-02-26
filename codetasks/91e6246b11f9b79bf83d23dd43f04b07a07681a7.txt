@@ -1,0 +1,30 @@
+## Problem: Make newly imported dependencies “Live” by default and persist/update consistently
+
+In the GUI dependencies workflow, importing a new dependency (either by copying a directory or cloning a repo) currently results in the dependency appearing in the list but not reliably being treated as “Live” by default, and the subsequent persistence/analyzer update logic is handled inconsistently across UI code paths.
+
+Implement a change so that:
+
+1. **After an import completes**, the imported dependency is immediately added to the project’s “live dependencies” set by default (equivalent to the user having the “Live” checkbox enabled for that dependency), rather than only appearing in the table.
+2. **Updating the live dependency set** is performed through a single project-layer API that:
+   - Persists the complete desired live-dependency directory set.
+   - Optionally coordinates with an analyzer/watcher when available (pause/resume and update the analyzer with the file-level delta between the previous and next live sets).
+   - Works both for GUI usage (analyzer present) and headless/CLI usage (analyzer absent).
+3. **Import dialogs** should behave as true background operations: once the import action is initiated successfully, the dialog should close immediately while the copy/clone continues in the background, and any error reporting should not depend on a disposed dialog window.
+
+### Required behavioral outcomes
+
+- Importing the first dependency into a project makes it live by default.
+- Importing additional dependencies keeps existing live dependencies live while adding the new one.
+- Live dependency changes are persisted such that a project reload restores the same live set.
+- Worktree-style projects that inherit live dependencies from a parent must still behave correctly when importing additional dependencies locally (parent and worktree live sets remain isolated as designed).
+- Toggling a dependency off and back on must still work.
+
+### Key areas involved
+
+- The dependencies UI includes a “Live” column whose value is used both for rendering and determining whether a dependency should be included in the computed live set when saving. Ensure the UI can represent transitional states (e.g., enabling/disabling) without mixing unrelated value types in the table model.
+- The import workflow notifies a lifecycle listener when import starts and finishes; the “finished” hook should ensure the dependency becomes live (and persisted) before the UI refreshes.
+- The project layer must expose APIs to:
+  - Replace/update the full live dependency directory set (with optional analyzer integration).
+  - Add a single dependency to the existing live set (merge semantics) for post-import behavior.
+
+You may reference existing types such as `IProject`, `AbstractProject`, and the dependencies GUI components, but the final solution should ensure the above outcomes while keeping UI responsiveness and background task behavior correct.

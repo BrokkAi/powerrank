@@ -1,0 +1,24 @@
+Implement a new Ruff linter rule under the **flake8-implicit-str-concat** linter to prevent a common footgun: **implicit string concatenation occurring as an element inside a collection literal**.
+
+### Requirements
+
+1. **New rule + code**
+   - Add a new rule with code **`ISC004`**: *ImplicitStringConcatenationInCollectionLiteral*.
+   - Register it in the rule-code mapping so `flake8-implicit-str-concat` + `"004"` resolves to the new rule, and ensure it appears in generated configuration/schema outputs as needed.
+
+2. **Detection behavior**
+   - Report a diagnostic when a **list**, **tuple**, or **set** literal contains an element that is a **string-like expression formed via implicit concatenation** (adjacent string literals) **and that concatenation is not explicitly parenthesized**.
+   - Do **not** report when the implicitly concatenated string element is already wrapped in parentheses (including when it appears as a nested element inside a collection).
+
+3. **Diagnostic text**
+   - Message: **`Unparenthesized implicit string concatenation in collection`**
+   - Add a helpful note like: **`Did you forget a comma?`** (as a “help”/hint attached to the diagnostic).
+
+4. **Fix**
+   - Provide an auto-fix that makes the concatenation explicit by **wrapping the implicitly concatenated string element in parentheses**.
+   - The fix must be offered consistently for each reported case and should be marked/displayed as **unsafe** (since users often intended to add a comma instead, changing semantics).
+
+5. **Integration point**
+   - Ensure the rule runs during AST analysis for the relevant collection-expression nodes so that the new fixture-based tests for `ISC004` pass.
+
+The added fixture `crates/ruff_linter/resources/test/fixtures/flake8_implicit_str_concat/ISC004.py` and its snapshot define the expected diagnostics and fix formatting for tuples/lists/sets and for cases involving comments and nested parentheses.

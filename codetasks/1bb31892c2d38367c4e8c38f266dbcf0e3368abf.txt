@@ -1,0 +1,69 @@
+Implement a new Home Assistant integration named **`onedrive_for_business`** that provides a **Backup Agent** backed by **OneDrive for Business (Microsoft 365 / Entra tenant)**, using OAuth2 via `application_credentials` and the `onedrive-personal-sdk` library.
+
+### Core requirements
+
+#### 1) Integration scaffolding and registration
+- Add a new integration domain `onedrive_for_business` with a valid `manifest.json`, translations (`strings.json`), and brand support under Microsoft.
+- The integration must be strict-typing compatible and follow Home Assistant’s config entry patterns (runtime data, config flow, etc.).
+- It must be discoverable as a backup agent through Home Assistant’s backup system.
+
+#### 2) OAuth2 + Application Credentials with tenant-specific endpoints
+- The config flow must be OAuth2-based and require the user to **enter a Tenant ID** before selecting/using the OAuth implementation.
+- OAuth authorization/token URLs must be constructed using that tenant ID (tenant-specific Microsoft identity endpoints).
+- Implement the `application_credentials` hook so the authorization server returned depends on the tenant currently being configured (i.e., not a single static URL for all tenants).
+- Requested OAuth scopes must include OneDrive file read/write access and support refresh tokens.
+
+#### 3) Config flow behavior
+- Flow structure must include:
+  - A step to collect the tenant ID.
+  - OAuth authentication using application credentials.
+  - A step to select/enter a **backup folder path** (within the drive).
+- During config flow, validate connectivity to OneDrive and obtain a stable unique identifier for the config entry (drive-based).
+- The flow must create (or ensure) the configured backup folder and store both:
+  - `folder_path`
+  - `folder_id`
+  in the entry data.
+
+#### 4) Config entry setup (runtime initialization)
+- On entry setup:
+  - Build an authenticated `OneDriveClient` using the config entry OAuth token, ensuring token refresh is handled.
+  - Verify the configured folder exists using the stored folder id; if it no longer exists, create it and update the config entry with the new folder id.
+- Store runtime data on the entry (at minimum: the client and a callable that yields a valid access token).
+
+#### 5) Backup agent implementation
+Implement a `BackupAgent` for the domain that supports:
+- Listing backups stored in OneDrive.
+- Getting backup details by ID.
+- Downloading a backup as a stream.
+- Uploading a backup from a stream (large file upload supported).
+- Deleting a backup.
+
+Backups must be stored as **two files** in the configured folder:
+- The archive file: `<suggested base name>.tar`
+- A metadata file alongside it: `<suggested base name>.metadata.json` containing the serialized `AgentBackup` representation.
+
+When listing backups:
+- Use the metadata files as the source of truth, but **ignore orphaned metadata** where the corresponding `.tar` file is missing.
+- Include a small TTL-based cache for metadata-to-backup mapping to reduce repeated remote reads.
+
+For uploads:
+- Use the large file upload capability from the SDK and choose a chunk size appropriate for typical backup sizes while respecting OneDrive limits.
+- If the archive upload succeeds but the metadata upload fails, remove the uploaded archive to avoid leaving partial backups.
+- If the SDK signals a hash mismatch for the uploaded content, surface an appropriate backup-agent-level error.
+
+For downloads:
+- Locate the backup by `backup_id`, derive the expected filenames, and stream the `.tar` content.
+
+For deletes:
+- Delete both the `.tar` and the `.metadata.json` objects for the backup.
+
+#### 6) Error handling expectations
+- Map OneDrive authentication problems to a user-facing authentication failure at setup time and to a backup-agent error during backup operations.
+- Map transient OneDrive/API issues and timeouts to “retry later” behavior during config entry setup.
+- Backup operations should raise `BackupAgentError` (and `BackupNotFound` where appropriate) rather than leaking SDK exceptions.
+
+#### 7) Backup agent change notifications
+- Provide a mechanism for the backup integration to register/unregister listeners that are called when OneDrive for Business backup agents may have been added/removed (e.g., config entry state changes).
+- Ensure listeners are cleaned up correctly when removed.
+
+The delivered implementation should align with Home Assistant’s integration architecture (config entries, OAuth2 flow, application credentials, backup agent API) and satisfy the behaviors validated by the provided test suite.

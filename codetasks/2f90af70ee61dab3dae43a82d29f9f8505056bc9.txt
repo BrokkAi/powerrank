@@ -1,0 +1,37 @@
+### Goal
+
+Simplify topic/partition deletion handling in the group coordinator by removing the dedicated “partitions deleted” callback and instead performing the same cleanup work as part of the normal metadata update flow.
+
+### Context
+
+Today, topic deletion results in a separate notification path that provides a list of deleted `TopicPartition`s to the `GroupCoordinator`. However, the metadata update already carries enough information to infer which topics were removed (via the metadata delta), making the extra callback redundant.
+
+### Required changes
+
+Implement a refactor such that:
+
+1. **The `GroupCoordinator` API no longer exposes a method for partition deletion notifications.**
+   - Remove the `onPartitionsDeleted(...)` method from the `GroupCoordinator` interface and adjust any implementations and call sites accordingly.
+
+2. **Partition/topic deletion cleanup happens during metadata updates in `GroupCoordinatorService`.**
+   - When `GroupCoordinatorService#onMetadataUpdate(MetadataDelta, MetadataImage)` is invoked, it must detect deleted topics from the provided delta and trigger the same cleanup that previously happened via `onPartitionsDeleted`.
+   - Deleted topics must be obtained from the delta (not from external inputs).
+   - From the deleted topics, derive the affected partitions so that committed offsets for those partitions can be removed.
+
+3. **Both offset cleanup and share state cleanup are still performed.**
+   - Offset cleanup must be scheduled as a write operation across shards (as before).
+   - Share-group state cleanup must also be scheduled for the deleted topic IDs.
+
+4. **Error handling expectations**
+   - Failures from the scheduled cleanup operations must not cause `onMetadataUpdate` to throw (errors should be handled internally).
+   - `onMetadataUpdate` must still reject calls when the service is not active (consistent with existing service lifecycle rules).
+
+5. **Call site adjustment**
+   - Any broker-side metadata publisher logic that previously invoked the deleted-partitions callback must no longer do so, relying solely on `onMetadataUpdate` to trigger the required coordinator cleanup.
+
+### What should remain true
+
+After the change:
+- Topic deletion observed through a metadata delta results in removal of committed offsets for the deleted topic’s partitions and cleanup of any related share-group state.
+- The coordinator’s metadata update path remains the single mechanism to propagate deletions.
+- The project compiles cleanly with the updated interface and all provided tests (old and new) pass.

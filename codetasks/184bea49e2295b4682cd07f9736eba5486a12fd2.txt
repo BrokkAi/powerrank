@@ -1,0 +1,54 @@
+Implement a new Home Assistant cloud-polling integration named **`redgtech`** that exposes Redgtech “switch” endpoints as `switch` entities and supports UI configuration via a config flow.
+
+### Functional requirements
+
+#### Integration setup / lifecycle
+- The integration domain is `redgtech`.
+- It must be set up **only** via config entries (no YAML).
+- On `async_setup_entry`, create a coordinator responsible for logging in and polling the Redgtech cloud API, perform the first refresh, store the coordinator as the config entry’s runtime data, and forward setup to the `switch` platform.
+- On `async_unload_entry`, unload the forwarded platform(s).
+
+#### Config flow (UI)
+- Provide a user step that asks for **email** and **password**.
+- Attempt to authenticate against the Redgtech API during the flow.
+- Handle and surface these error cases from the API client:
+  - authentication failure → `invalid_auth`
+  - connection failure → `cannot_connect`
+  - any other exception → `unknown`
+- Prevent duplicate configurations for the same email (abort with the standard “already configured” reason).
+- On success, create the entry titled with the email and store email/password in the entry data.
+
+#### Coordinator behavior
+- Use `DataUpdateCoordinator` with a fixed polling interval (short interval; tests rely on periodic refresh behavior).
+- Use the `redgtech_api` client:
+  - `login(email, password)` returns an access token.
+  - `get_data(token)` returns a structure containing device “boards”.
+  - `set_switch_state(endpoint_id, new_state, token)` controls a device.
+  - Exceptions: `RedgtechAuthError`, `RedgtechConnectionError`.
+- Maintain an access token and ensure API calls always use a valid one:
+  - If no token exists, log in.
+  - If an API call fails with an auth error, renew the token (by logging in again) and retry the call once.
+- When polling, build coordinator data as a mapping of devices keyed by a stable unique id derived from the API payload.
+- Only create switch entities for endpoints whose `displayCategories` indicate they are switches **and not lights** (i.e., exclude items that are categorized as lights, even if also marked as switches).
+
+#### Switch platform / entities
+- Create one `SwitchEntity` per eligible device returned by the coordinator.
+- Entities must:
+  - Have stable `unique_id` derived from the device endpoint identifier.
+  - Use entity naming such that the friendly name from the API becomes the entity’s displayed name (and entities report `has_entity_name = True`).
+  - Provide `DeviceInfo` identifying each device under the Redgtech domain and showing Redgtech as manufacturer.
+  - Reflect on/off state from the coordinator’s latest data.
+- `turn_on` / `turn_off` must call the API control method via the coordinator’s “valid token” wrapper and then refresh coordinator data.
+- Translate control errors into `HomeAssistantError` using translation keys under the integration domain:
+  - auth error while controlling a switch
+  - connection error while controlling a switch
+
+#### Integration metadata / translations
+- Include a manifest declaring config flow support and the dependency on `redgtech-api`.
+- Provide `strings.json` entries for:
+  - config flow labels/descriptions and common errors
+  - the exception translation keys used when raising `HomeAssistantError`
+
+### Notes
+- The implementation must be fully async and compatible with Home Assistant’s config entry + coordinator patterns.
+- Keep typing strict (the harness expects mypy/strict-typing compliance for the new component).

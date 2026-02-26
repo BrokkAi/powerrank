@@ -1,0 +1,38 @@
+Implement lexical (block) scope resolution for Java so identifier “usage” detection can distinguish member/field accesses from locally-declared names that shadow them.
+
+### Required API additions (cross-language)
+Extend `IAnalyzer` with a new optional capability:
+
+- A method (defaulting to “not supported”) that, given a `ProjectFile`, a byte range (`startByte`, `endByte`) covering an identifier occurrence, and the identifier’s text, returns the *nearest* matching **block-scoped** declaration that would be in scope at that location.
+- A small data model to describe what was found:
+  - `DeclarationKind` enum covering at least: method/constructor parameter, local variable, enhanced-for variable, catch parameter, try-with-resources variable, pattern variable, and an `UNKNOWN`/fallback.
+  - `DeclarationInfo` containing the kind, the name, and an optional enclosing `CodeUnit` (may be `null`).
+
+**Important semantic constraint:** this scope resolution is *not* class/member resolution. If the identifier is not shadowed by a block-scoped declaration, the method must return empty (even if the identifier is a field).
+
+Also ensure `MultiAnalyzer` forwards this call to its delegate analyzer for the file.
+
+### Java implementation: lexical declaration lookup
+In `JavaAnalyzer`, implement the new API using Tree-sitter’s Java AST:
+
+- Locate the syntax node for the provided byte range within the parsed tree.
+- Walk outward through enclosing scopes to find the closest declaration whose declared name matches `identifierName`.
+- Recognize declarations from common Java block-scoped constructs, including:
+  - method and constructor formal parameters
+  - local variable declarations
+  - enhanced `for` loop variables
+  - `catch` clause parameters
+  - try-with-resources resource variables
+  - lambda parameters (typed and untyped forms)
+  - `instanceof` pattern variables (where present in the grammar)
+
+Return the first/nearest matching declaration as a `DeclarationInfo` with the appropriate kind; otherwise return empty.
+
+### Usage filtering: reduce false positives in access detection
+Update Java identifier “access expression” detection (the logic used by usage-finding) so that:
+
+- Plain identifiers that resolve (via the new lexical lookup) to a **local** declaration kind (parameter/local/catch/for/resource/pattern) are *not* treated as member/field usages.
+- Explicit member accesses must still be recognized even when names are shadowed, e.g. member access forms like `this.field` or `obj.field`, and method invocation names like `obj.method(...)` must continue to count as accesses for the member name portion.
+
+### Tree-sitter node type constants
+If your implementation relies on string node type names, ensure the Java node type constants include the relevant constructs needed for the lexical scan (local variable declarations, enhanced-for, catch parameter, resource specification/resource, lambda expression and its parameter forms, instanceof expression/pattern, etc.).

@@ -1,0 +1,44 @@
+Implement tolerance-aware response comparison for QueryTee/Goldfish, and centralize the comparison logic in a dedicated comparator module.
+
+### Core goals
+
+1. **Introduce a shared “response comparator” component**
+   - Provide a `ResponsesComparator` interface with a `Compare(expected, actual []byte, queryEvaluationTime time.Time)` method.
+   - Return a `ComparisonSummary` that exposes (as exported fields) whether the comparison was skipped and how many metrics were missing.
+   - Implement a comparator capable of comparing Loki/Prometheus-style JSON query responses that look like:
+     - top-level `status`
+     - `data.resultType`
+     - `data.result`
+   - Support at least these `resultType` values:
+     - `matrix`, `vector`, `scalar` (Prometheus semantics)
+     - Loki streams (`loghttp.ResultTypeStream`)
+
+2. **Tolerance and “skip window” behavior**
+   - Add configurable comparison options:
+     - absolute value tolerance for float samples (disabled when tolerance <= 0)
+     - optional relative-error comparison mode
+     - skipping samples/entries that are:
+       - newer than `evaluationTime - SkipRecentSamples`
+       - older than `SkipSamplesBefore`
+   - Floating-point comparison must handle special values consistently (e.g., `NaN`, `Inf`, `-Inf`).
+   - When filtering removes everything from both sides for a given response, the comparison should be treated as skipped.
+
+3. **Goldfish: tolerate “hash mismatches” when values are equivalent**
+   - Goldfish currently treats different response body hashes as a mismatch.
+   - Enhance the Goldfish comparison so that when both backends returned HTTP 200 but response hashes differ, it performs a semantic comparison of the two response bodies using the comparator:
+     - If the comparator deems them equivalent (e.g., only floating-point rounding differences within tolerance), mark the overall result as a match.
+     - Record in `DifferenceDetails` that this was a tolerance-based match (and if it wasn’t, include a flag and an error message describing why tolerance comparison failed).
+     - If tolerance comparison can’t run due to missing inputs (no bodies/comparator), log a warning and keep the mismatch behavior.
+
+4. **Wire the new comparator through QueryTee**
+   - Replace any locally-defined comparator interfaces/types in the proxy layer with the shared comparator types.
+   - Ensure routes/endpoints can still optionally compare responses and still emit metrics based on the comparison summary fields.
+   - Ensure Goldfish’s manager is constructed with a configured comparator (built from the proxy’s existing tolerance/relative-error/skip-window settings) and uses it when processing query pairs.
+
+### Expected outcome
+
+After the change:
+- Response comparison logic is reusable (not duplicated between packages).
+- QueryTee comparisons still work and expose the same metrics/behavior, but via the shared comparator types.
+- Goldfish no longer reports mismatches for responses that differ only within the configured numerical tolerance; it records that the match was tolerance-based.
+- All provided tests (including existing ones) pass.

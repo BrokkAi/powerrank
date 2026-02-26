@@ -1,0 +1,57 @@
+Implement structured “command result” event emission in the job execution flow so command outcomes can be audited and verified via the `JobStore` event stream.
+
+### Goal
+Extend `JobRunner` so that key command-like actions (verification runs, test/lint runs, and ISSUE-mode review-fix tasks) emit a consistent, structured event into the `JobStore`. These events must be emitted in addition to (not instead of) existing behavior, and must be robust to null outputs and runner failures.
+
+### Event type and payload
+Introduce a single event type identifier:
+
+- **Type**: `COMMAND_RESULT`
+
+Each emitted event must store a JSON-like map payload containing:
+
+- `stage` (string): logical stage name (see below)
+- `command` (string): the command label or identifier for the stage (must never be null)
+- `attempt` (number, optional): 1-based attempt index when applicable
+- `skipped` (boolean)
+- `skipReason` (string, optional): only present when meaningful/non-blank
+- `success` (boolean)
+- `output` (string): never null; may be truncated
+- `outputTruncated` (boolean, only when truncation happened)
+- `exception` (string, optional): a compact description of an exception when one occurred
+
+Also:
+- Long `output` must be truncated to a fixed maximum size, and the payload must record that truncation occurred.
+- Emission should be best-effort: failures to append the event must not crash the job.
+
+### Console notifications
+Update notification behavior so that end-user notifications are only shown for **failed** command results (`success == false`). Emitting the `COMMAND_RESULT` event should be independent of whether notifications succeed.
+
+### Stages to emit
+Update the following flows to emit `COMMAND_RESULT` events:
+
+1. **Single-fix verification gate**
+   - When verification runs, emit a `COMMAND_RESULT` with `stage = "verification"`, `attempt = 1` for the first run and `attempt = 2` for the post-fix run.
+   - If the first verification fails and triggers the fix attempt, emit an additional `COMMAND_RESULT` with `stage = "fix_trigger"` that surfaces the failing verification output as the trigger context.
+   - The “command” field must reflect the verification command label when available.
+   - If the verification runner throws, emit a failed verification event including `exception`, then throw an `IssueExecutionException` whose message remains useful even when the underlying exception message is blank.
+   - Treat null output from the runner as empty output.
+
+2. **ISSUE-mode final verification retry loop (tests/lint)**
+   - Each test/lint invocation must emit exactly one `COMMAND_RESULT` per stage per iteration/attempt.
+   - When a stage is skipped (e.g., blank command, or lint skipped because tests failed), emit a `COMMAND_RESULT` with `skipped = true`, an appropriate `skipReason`, and `success = true`.
+   - When a stage runs, success is determined by blank output; null output must be treated as empty.
+   - Ensure “tests failed => lint skipped for that attempt” is reflected via a skipped lint event with a distinct reason.
+
+3. **ISSUE-mode review-fix tasks (inline comments)**
+   - Add a dedicated loop for processing inline review comments that emits exactly one `COMMAND_RESULT` per comment attempt with `stage = "review_fix"`.
+   - The “command” field should uniquely identify the comment target (e.g., file path + line).
+   - The emitted `output` must include a structured textual context block describing the finding (path, line, severity, body) and include an explicit outcome marker indicating completion, failure, or skip.
+   - If the job is cancelled before an attempt, emit skipped events for the current and all remaining comments with `skipReason` indicating cancellation.
+   - If a review-fix task throws, emit a failed event including `exception`, then rethrow.
+
+### Additional robustness requirements
+- Prevent null values from propagating into emitted event payloads (notably `command` and `output`).
+- Ensure any derived verification command label is obtained safely and does not introduce new null-driven failures.
+
+The provided test suite expects these events to “round trip” through the `JobStore` (i.e., be readable back as maps with the expected keys/values), and expects the new structured events to coexist with existing job behavior.

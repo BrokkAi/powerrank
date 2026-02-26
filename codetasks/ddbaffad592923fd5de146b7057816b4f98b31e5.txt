@@ -1,0 +1,35 @@
+Implement support for assigning a “default collection” when restoring revoked organization users, gated behind a feature flag and the Organization Data Ownership policy.
+
+### Functional requirements
+
+1. **New feature flag**
+   - Add a new `FeatureFlagKeys` constant named `DefaultUserCollectionRestore` (string key provided by the harness context) and use it to gate all new behavior described below.
+
+2. **API surface changes (AdminConsole)**
+   - Bulk restore requests must be able to carry an *optional* encrypted `DefaultUserCollectionName` value.
+     - Update the existing bulk restore request model to include this nullable field and ensure it is validated as an encrypted string with a max encrypted length.
+   - Add a new request model for single-user restore that can carry the same optional encrypted `DefaultUserCollectionName`.
+   - Add a new “vNext” restore endpoint that:
+     - Accepts the new request body.
+     - Is protected by the new feature flag.
+     - Routes the provided `DefaultUserCollectionName` into the restore command.
+   - Existing restore endpoints must continue to work without requiring a request body and should pass `null` for the default collection name.
+
+3. **Command and interface changes (Core)**
+   - Update `IRestoreOrganizationUserCommand` so both single-user and bulk restore APIs accept an additional nullable `defaultCollectionName` argument.
+   - Update the command implementation so that, during restore:
+     - It may create a default collection for the restored org user(s) **only when all of the following are true**:
+       - The restored org user ends up in **Confirmed** status (not Invited).
+       - The org user has an associated `UserId` (i.e., it represents a real user account).
+       - The **Organization Data Ownership** policy requirement is enabled for that user (single restore) / for that org user in the organization (bulk restore).
+       - The feature flag `DefaultUserCollectionRestore` is enabled.
+       - `defaultCollectionName` is not `null`, empty, or whitespace.
+     - When eligible, call into the collections layer to create the default collection(s) for the restored org user(s).
+   - Ensure restore behavior (status transitions, validations, notifications, and event logging) still functions correctly with the new parameter present.
+
+4. **Null/empty handling**
+   - Treat `null`, empty string, and whitespace-only `defaultCollectionName` as “not provided” and do not attempt collection creation in those cases.
+
+### Scope
+
+The harness will provide the updated tests (including new tests around default collection creation). Your implementation must compile and satisfy those tests by wiring the optional default collection name from the API layer through to the restore command and applying the policy/flag/status eligibility rules above.

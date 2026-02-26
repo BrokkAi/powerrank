@@ -1,0 +1,53 @@
+### Goal
+
+Fix the **Automatic User Confirmation** policy validation so it correctly blocks enabling the policy when the organization has **any users who are also provider users**, and ensure policy dependency enforcement is represented through the handler’s required-policy metadata rather than by directly querying policy state.
+
+### Background
+
+`AutomaticUserConfirmationPolicyEventHandler` validates whether the “Automatically confirm invited users” policy can be enabled. Validation must ensure:
+
+1. Organization users are compliant with the **Single Organization** requirement.
+2. No “provider users” exist among the organization’s users.
+
+A bug exists in how “provider users” are detected: the current logic can incorrectly check provider users at the wrong scope (e.g., by organization rather than by the organization’s users).
+
+### Requirements
+
+#### 1) Correct provider-user detection during validation
+When enabling the policy, the handler must detect provider-user presence by examining the **users in the organization** and determining whether any of those users have corresponding `ProviderUser` records.
+
+- The validation should operate using organization user details (user IDs) and must handle null/missing user IDs appropriately.
+- The outcome should be an error message when any provider users exist among the organization’s users.
+
+#### 2) Update provider-user repository contract
+The provider-user repository must support querying provider-user records for **multiple user IDs** in one call.
+
+- Update `IProviderUserRepository` accordingly.
+- Provide working implementations for both Dapper and Entity Framework repository projects.
+- For the Dapper implementation, the query must be backed by a stored procedure that accepts a TVP of GUID IDs and returns provider users matching those user IDs.
+
+#### 3) Stored procedure support
+Add the SQL necessary to support the multi-user query for provider users.
+
+- A stored procedure named `ProviderUser_ReadManyByManyUserIds` must exist and return rows from the provider user view/table for any matching user IDs.
+- Include the procedure both in the main SQL project and in the migrator script set so integration environments can create/upgrade it.
+
+#### 4) Policy dependency representation
+The handler must express that it depends on the **SingleOrg** policy via its required-policy metadata (e.g., `RequiredPolicies` / dependent policies mechanism), rather than validating “SingleOrg is enabled” by directly loading and checking the SingleOrg policy in this handler.
+
+#### 5) Remove/neutralize save side effects in this handler
+The handler previously performed persistence side effects (updating an organization feature flag and revision date) during policy saves. That behavior should no longer be required for this exercise: the save-side-effects hook should no-op and the handler should not require repositories/time providers related to those side effects.
+
+### Affected behavior and surfaces
+
+- `AutomaticUserConfirmationPolicyEventHandler` must validate enablement using organization user membership data and provider-user lookups by user IDs.
+- `IProviderUserRepository` and its Dapper/EF implementations must expose and correctly implement a “get many by many users” query.
+- SQL assets must include the stored procedure needed by the Dapper implementation and the migrator.
+
+### Deliverable
+
+Implement the above so that the supplied unit tests and integration tests compile and pass, including tests covering:
+- Required policy dependencies,
+- Compliance evaluation across organization memberships/statuses,
+- Provider-user detection based on user IDs,
+- Repository behavior for the new multi-user provider-user query.

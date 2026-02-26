@@ -1,0 +1,42 @@
+### Goal
+
+Extend `tsnet` so that applications can optionally supply their own WireGuard TUN device implementation for packet I/O, while preserving existing behavior/performance when no TUN is provided. This change also requires `netstack` to correctly “catch” traffic for `tsnet`-managed listeners and outbound connections when packet flow is going through a real TUN device rather than the in-process fake TUN.
+
+### Requirements
+
+#### 1) `tsnet.Server` supports a user-supplied TUN
+Add a new optional field on `tsnet.Server` that accepts a `wireguard-go/tun.Device`. When set, `tsnet` must use it as the engine’s TUN device. This value must be configured before the server is started.
+
+#### 2) Netstack behavior differs depending on whether a TUN is provided
+`tsnet` currently relies on netstack to process traffic for the node’s own Tailscale IPs and subnets. When a user-supplied TUN is present, packet flow must instead primarily go through that TUN, but netstack still needs to handle traffic that belongs to `tsnet`’s own sockets (listeners and outbound connections created by the tsnet APIs).
+
+Introduce a new `netstack` option that, when enabled, allows netstack to decide to process inbound packets destined to local Tailscale IPs *only if* gVisor has a matching transport endpoint (e.g., a TCP listener, a UDP listener, or an established outbound connection). `tsnet` should enable this option when using a provided TUN, and keep the previous high-performance behavior when using the default fake TUN.
+
+#### 3) TCP listening must work in “real TUN” mode
+When a TUN is supplied, TCP listeners created through `tsnet` must result in a corresponding gVisor TCP listener so that inbound TCP traffic can be accepted via netstack even though general “local IP processing” is disabled.
+
+This should support:
+- IPv4 and IPv6 concrete listen addresses
+- Wildcard listen addresses (dual-stack behavior where applicable)
+
+Closing a `tsnet` listener must correctly tear down any associated netstack/gVisor listener resources.
+
+#### 4) UDP listening must correctly register/unregister
+`tsnet.ListenPacket` must continue to behave as a `net.PacketConn` while ensuring that any internal listener registration done by `tsnet` is undone when the returned packet conn is closed. This matters for correct resource cleanup and for avoiding stale listener registrations.
+
+#### 5) Netstack must expose a TCP listen primitive
+Add a `netstack` API that can create a TCP listener bound appropriately for the gVisor stack given a network (`tcp4`/`tcp6`) and address (`host:port`), consistent with how UDP listening already works.
+
+#### 6) Transport-endpoint-based inbound decision
+Update netstack’s inbound decision logic so that when the new option is enabled and a packet is addressed to a local Tailscale IP, netstack checks whether gVisor has a transport endpoint registered for that flow (TCP/UDP) and only then processes the packet in netstack. Packets that don’t match an endpoint should not be pulled into netstack in this mode.
+
+#### 7) Error wrapping consistency
+Where address parsing errors are surfaced from netstack listen helpers, use error wrapping that preserves the original error for callers.
+
+### Notes
+
+- The existing netstack-only mode (no user-supplied TUN) must retain its current behavior and performance characteristics.
+- The new “real TUN” mode must ensure that:
+  - packets for `tsnet` listeners are intercepted by netstack as needed,
+  - replies to outbound connections created by `tsnet` are correctly handled by netstack rather than leaking out to the TUN device,
+  - and special local traffic interception (e.g., service IP handling) continues to function.

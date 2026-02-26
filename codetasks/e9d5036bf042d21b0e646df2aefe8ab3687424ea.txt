@@ -1,0 +1,48 @@
+Implement improved handling for “empty/uninitialized” projects and make build/test configuration verifiable and agent-configurable.
+
+### 1) Empty project detection
+Add an `isEmptyProject()` capability on the project abstraction that returns `true` when the project contains **no analyzable source files**. A file is “analyzable” if its extension matches any language in `Languages.ALL_LANGUAGES` (excluding `Languages.NONE`). This should intentionally treat repositories containing only config/docs (e.g., `AGENTS.md`, `.brokk/**`, `.gitignore`, `README.md`, `.json`, `.xml`, `.txt`) as empty.
+
+Ensure the concrete project implementation uses the project’s full file listing (not only already-filtered/analyzed sets) so nested source files count.
+
+### 2) Build inference should skip empty projects
+When the system attempts to infer or populate build details for a project, it must **short-circuit** for empty projects:
+- Do not attempt build inference if `isEmptyProject()` is true.
+- If no build details exist yet, persist an explicit “empty build details” value so subsequent logic can treat the project as having configured-but-empty build metadata.
+
+### 3) Agent support for build setup + verification
+Expose agent tools to:
+- **Save build details** (build/lint command, test-all, test-some, excluded directories) into the project’s persisted configuration while preserving any existing environment variables.
+- **Verify** the currently configured build/lint command by executing it and returning a bounded amount of output and success/failure status.
+
+Agent prompting should include additional guidance:
+- If the project is empty, include a notice encouraging creation of minimal project structure.
+- If build details are still the “empty” sentinel, include guidance instructing the agent to configure build/test commands before attempting verification-dependent workflows.
+
+Task-oriented search objectives should also add guidance that when producing task lists for projects without configured build details, the first task must set up build/test commands (and env vars if needed).
+
+### 4) Shared build verification utility
+Create a reusable utility (e.g., `ai.brokk.util.BuildVerifier`) that:
+- Executes a shell command in the project root using the project’s executor configuration.
+- Accepts optional extra environment variables.
+- Can either (a) return a result with bounded combined output or (b) stream output line-by-line to a consumer while still capturing bounded output.
+- Returns a result containing: `success` (exit code 0), `exitCode` (or a sentinel like `-1` if execution didn’t reach an exit code), and output limited to the last N lines (use a fixed constant, e.g., 80).
+
+Update any UI-side “verify commands” action that previously invoked subprocess execution directly to use this utility, preserving streaming output in the UI and appropriate success/failure messages.
+
+### 5) New project creation (GUI)
+Add a “New Project…” action in the application menu that:
+- Prompts for a directory, creates it if necessary, initializes it as a git repository, and opens it as a project.
+- Performs filesystem/git initialization off the EDT and reports errors back to the UI.
+
+### 6) Test support updates
+The test project implementation used in unit tests must correctly model:
+- Persistence semantics for build details, including distinguishing “never explicitly set” from “set to empty”.
+- The build details future/await behavior (tests expect `load/await` semantics consistent with async storage).
+- Empty project detection consistent with the main heuristic.
+
+All new and existing tests must pass, including those covering:
+- Project emptiness across different file types and nesting
+- Build details default/empty persistence
+- Bounded output and error handling in build verification (success, command failure, startup error)
+- Environment variable passthrough to the verifier

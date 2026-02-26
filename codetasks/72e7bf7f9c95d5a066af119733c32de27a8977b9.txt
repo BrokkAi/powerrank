@@ -1,0 +1,57 @@
+Implement a new Home Assistant integration `liebherr` that connects to the Liebherr “HomeAPI” cloud via the `pyliebherrhomeapi` library and exposes device temperature readings as sensors.
+
+### Functional requirements
+
+#### Integration basics
+- Create a new integration domain `liebherr` with a config entry setup (config flow enabled) and a sensor platform.
+- The integration must use `pyliebherrhomeapi==0.2.1` and share a single API client instance per config entry using Home Assistant’s aiohttp session.
+- The integration is a “hub”-style integration that can manage multiple Liebherr devices returned by the API.
+
+#### Config flow
+- Provide a user step that asks for an `api_key` and trims whitespace.
+- Validate the API key by calling the API to retrieve devices.
+- Handle error conditions using Home Assistant config flow error codes:
+  - Authentication failures → `invalid_auth`
+  - Connection failures → `cannot_connect`
+  - Unexpected exceptions → `unknown`
+- If the API key is valid but the account has no devices, abort the flow with reason `no_devices`.
+- Prevent duplicates by aborting when a config entry already exists for the same API key.
+- Support Zeroconf discovery by starting the same config flow user step when a service name matching the integration’s discovery pattern is detected, while still respecting the “already configured” behavior.
+
+#### Config entry setup / unloading
+- On config entry setup:
+  - Create the API client.
+  - Fetch the list of devices.
+  - For each device, create a per-device `DataUpdateCoordinator` that polls device state periodically.
+  - Perform an initial refresh for each coordinator before forwarding platform setup.
+  - Store the per-device coordinators in config entry runtime data so platforms can create entities for all devices.
+- Map API exceptions to correct Home Assistant setup behavior:
+  - Invalid credentials during initial setup should fail the entry as a setup error.
+  - Connectivity problems during initial setup should trigger setup retry (`ConfigEntryNotReady`).
+- Support unloading the config entry and unloading the sensor platform cleanly.
+
+#### Coordinator behavior
+- Implement a `DataUpdateCoordinator` that fetches `DeviceState` for a specific device id on a fixed polling interval.
+- During refresh, translate API-layer exceptions into Home Assistant coordinator exceptions so entities become unavailable on update failures.
+
+#### Entities and sensors
+- Create a base entity class that:
+  - Uses coordinator data to populate `DeviceInfo` (manufacturer `Liebherr`, appropriate identifiers, name, model/model_id fields based on device attributes).
+  - Sets `has_entity_name` behavior appropriate for modern HA entities.
+- Create zone-aware entities for “temperature control zones”:
+  - Each zone should be addressable by its zone id and resolved from the latest coordinator data.
+  - If a zone disappears from API state, the entity should report unavailable and return `None` for value/unit properties.
+- Implement sensor entities representing zone temperature:
+  - Use a temperature device class and measurement state class.
+  - Report in °C or °F based on the API’s temperature unit.
+  - Use stable unique IDs that include device id, sensor type, and zone id.
+  - Naming/translation behavior must distinguish between single-zone and multi-zone devices:
+    - For devices with multiple zones, apply zone-based naming via translation keys for known zone positions (top/middle/bottom).
+    - For devices with only one zone, avoid appending a zone label so the entity name reflects only the device.
+
+#### Localization strings
+- Provide strings for the config flow UI (including the “no devices” abort) and for the zone translation keys used by sensor entities.
+
+### Non-functional / metadata requirements
+- Include appropriate manifest metadata for the integration (domain, name, config flow, requirements, iot class, etc.) and register the integration for discovery via Zeroconf using a `liebherr*` name pattern.
+- Ensure the integration is typed and structured in the standard Home Assistant style (config entry runtime data, coordinator pattern, platform forwarding).

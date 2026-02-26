@@ -1,0 +1,34 @@
+Implement separate limits for **compressed request size** and **decompressed request size** when ingesting Loki push payloads, including OTLP-over-HTTP.
+
+### Requirements
+
+1. **New decompressed-size limit in distributor config**
+   - Extend `pkg/distributor/distributor.go` `Config` with a field representing the maximum allowed **decompressed** message size.
+   - Support YAML and a CLI flag for it (documented in `docs/sources/shared/configuration.md`).
+   - Validation must apply a default when the new field is not explicitly configured: set it to a fixed multiple of `max_recv_msg_size` (only when `max_recv_msg_size > 0`).
+
+2. **Propagate the new limit through request parsing**
+   - Update the request parsing API in `pkg/loghttp/push/push.go`:
+     - The `RequestParser` function type and `ParseRequest(...)` must accept both limits (compressed and decompressed).
+   - Update all callers (e.g., distributor HTTP handler and promtail push target) and any parser implementations to match the new signature.
+
+3. **Enforce both limits for OTLP push requests**
+   - In `pkg/loghttp/push/otlp.go`, ensure OTLP extraction enforces:
+     - `maxRecvMsgSize`: limit/validate the size of the **compressed** HTTP request body.
+     - `maxDecompressedSize`: limit/validate the size of the **decompressed** payload after applying `Content-Encoding` (gzip, zstd, lz4).
+   - Errors for exceeding limits must be distinguishable (compressed vs decompressed) using the shared util errors.
+
+4. **Enforce both limits for Loki push requests (non-OTLP)**
+   - In `pkg/loghttp/push/push.go`, ensure Loki push body parsing applies:
+     - A hard cap on **compressed bytes read** from the request body for all encodings.
+     - A hard cap on **decompressed bytes produced** for encodings that decompress in-process (e.g., gzip/deflate) and for snappy/protobuf decoding.
+   - Preserve existing supported encodings and content-type behaviors.
+
+5. **Add util support for separate compressed/decompressed caps**
+   - In `pkg/util/http.go`, introduce an API that can enforce **two independent size limits** during protobuf decompression/decoding.
+   - Keep the existing API usable (for existing call sites), but ensure the new parsing flow can enforce decompressed-size limits and produce an appropriate error when exceeded.
+   - Add/maintain a dedicated error value for “decompressed message size too large”.
+
+6. **Tests and compilation**
+   - Update any affected fakes/mocks/benchmarks to match new function signatures (e.g., parser interfaces used in distributor/http tests).
+   - Both existing and newly added tests must pass.

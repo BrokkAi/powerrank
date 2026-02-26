@@ -1,0 +1,109 @@
+### Goal
+
+Refactor the analyzer “capability” APIs to be **`CodeUnit`-first** (instead of String FQNs) across skeleton extraction, source extraction, and call-graph functionality, while providing **String-based convenience helpers** for callers that only have a fully-qualified name.
+
+All provided tests (including newly added/expanded ones) must pass after the refactor.
+
+---
+
+### Key requirements
+
+#### 1) Capability provider interfaces become `CodeUnit`-based
+Update the public capability interfaces so their primary methods accept `CodeUnit`:
+
+- **`SkeletonProvider`**
+  - Skeleton and skeleton-header lookups must take a `CodeUnit`.
+- **`SourceCodeProvider`**
+  - Method-source retrieval must take a `CodeUnit` and support overloads by returning *all matching snippets*.
+  - The default “single source” method should concatenate all overload sources using a consistent separator.
+  - Class-source retrieval must take a `CodeUnit`.
+- **`CallGraphProvider`**
+  - Call graph queries must take a `CodeUnit` representing a method.
+
+Any previous String-based signatures must be removed or adapted so the codebase compiles and behavior matches the new tests.
+
+---
+
+#### 2) `IAnalyzer` should support `CodeUnit`-centric calling patterns
+Update `IAnalyzer` to align with the new API style:
+
+- Provide a `getDefinition(String fqName)` entry point that returns a `CodeUnit` if a match exists.
+  - Clarify and honor the behavior for **overloaded methods**: `getDefinition` may represent “all overloads” using a single returned `CodeUnit`.
+- Provide `CodeUnit`-based defaults where appropriate (e.g., file lookup and member listing) so callers can work directly with a resolved `CodeUnit`.
+- Remove any “definition availability” shortcut API; callers should rely on `getDefinition(...).isPresent()` instead.
+
+---
+
+#### 3) Add/extend String-based convenience helpers in `AnalyzerUtil`
+Introduce (or update) a utility class that acts as the **String-FQN adapter** for the new `CodeUnit` APIs.
+
+These helpers should:
+- Resolve a `CodeUnit` via `IAnalyzer.getDefinition(String)`.
+- Validate the resolved type (`isFunction` / `isClass`) when relevant.
+- Dispatch to the appropriate capability provider methods using the `CodeUnit`.
+- Return **empty** `Optional`/`Set`/`Map`/`List` results when:
+  - no definition exists,
+  - the resolved symbol type is incompatible (e.g., asking for method source of a class),
+  - the analyzer does not provide the needed capability.
+
+This utility should cover:
+- Skeleton retrieval
+- Skeleton header retrieval
+- Method sources (set of overload snippets)
+- Method source (concatenated overloads)
+- Class source
+- Call-graph to/from
+- Class member listing
+- File lookup for a symbol
+- String-based class-name extraction for member references (as an adapter around analyzer logic)
+
+---
+
+#### 4) Update analyzer implementations to match new signatures and behavior
+
+Several concrete analyzers and adapters must be updated to compile and satisfy behavior expectations:
+
+- **Tree-sitter based analyzers**
+  - Must implement the new `CodeUnit` signatures for skeletons, skeleton headers, class sources, and method sources.
+  - Method-source extraction must correctly handle overloads represented by a single `CodeUnit` (extracting multiple ranges and returning a set of snippets).
+- **SQL analyzer**
+  - Skeleton and skeleton header must accept a `CodeUnit`.
+- **TypeScript analyzer**
+  - Skeleton lookup for nested declarations must return the appropriate “full” skeleton consistent with TypeScript’s module/namespace structure (tests expect a nested lookup to resolve to the correct top-level skeleton content).
+- **Disabled/no-op analyzer**
+  - Must compile with updated `IAnalyzer` method signatures and return empty results.
+- **Multi-language analyzer wrapper**
+  - Must route capability calls based on the language inferred from the `CodeUnit`’s source file extension (and similarly for file-based queries).
+  - If no delegate exists for the detected language, calls must return empty results and must not throw.
+  - This wrapper must also expose call-graph capability when delegates support it.
+
+---
+
+#### 5) Update higher-level tools and UI/service code to use the new pattern
+
+Any callers that previously invoked provider methods using String FQNs must be updated to either:
+- resolve a `CodeUnit` first and call the provider directly, **or**
+- use the new `AnalyzerUtil` String convenience methods.
+
+This includes places that:
+- fetch method/class source for editing or context capture,
+- build call-graph views,
+- look up skeletons for symbol summaries,
+- check whether a symbol exists.
+
+---
+
+#### 6) Add support for “class skeletons” search tool behavior
+A search tool now needs to support retrieving skeletons for a list of class names (using the new CodeUnit-based skeleton APIs via the String adapter). Output should aggregate available skeletons and handle missing classes gracefully.
+
+---
+
+### Expected outcomes
+
+After the refactor:
+
+- The codebase compiles with the new `CodeUnit`-based capability provider APIs.
+- String-based consumers can still perform common operations through `AnalyzerUtil`.
+- Overloaded-method handling is consistent across definition lookup, source retrieval, and call-graph queries.
+- The multi-analyzer wrapper correctly dispatches by language and safely returns empty results when unsupported.
+- All updated and existing tests pass.

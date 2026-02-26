@@ -1,0 +1,31 @@
+Extend the `watts` (Watts Vision+) integration to support **switch devices** in addition to the existing thermostat/climate support.
+
+### Functional requirements
+
+1. **Platform support**
+   - The integration must set up and expose a **Switch** platform alongside the existing **Climate** platform.
+
+2. **Supported device filtering**
+   - During config entry setup and when handling newly discovered devices, the integration must create per-device coordinators only for device models that are supported by the integration.
+   - Switch devices provided by `visionpluspython` must be treated as supported devices alongside thermostat devices.
+
+3. **Switch entities**
+   - Implement a switch platform module for the integration that:
+     - Creates one `switch` entity per supported switch device.
+     - Uses the device’s on/off state from the library model for `is_on`.
+     - Supports turning the device on/off via Home Assistant services.
+     - Ensures entity uniqueness is based on the device id, and the entity uses the integration’s existing entity/coordinator patterns (including device info/name handling consistent with the existing thermostat entity behavior).
+
+4. **Service calls and error handling**
+   - When turning a switch on/off, call the library client API to apply the new state.
+   - If the client call fails with a runtime error, raise a `HomeAssistantError` that uses a translatable error message key (added under the integration’s translation domain).
+
+5. **Refresh / fast polling behavior**
+   - After successfully changing the switch state, the integration must trigger the same “fast polling” behavior used by the existing climate entities and then refresh the coordinator so the state updates promptly.
+   - The existing fast polling behavior for thermostats must remain compatible with the updated tests (including the “stops after duration” expectation).
+
+6. **Dynamic device addition**
+   - Switch entities must be added not only at initial setup but also when new devices are discovered at runtime through the integration’s existing dispatcher mechanism for “new device” events.
+
+### Localization
+- Add a new translation string for the switch state change failure message in `homeassistant/components/watts/strings.json` (under the integration’s existing error keys), and ensure the raised `HomeAssistantError` references it correctly.

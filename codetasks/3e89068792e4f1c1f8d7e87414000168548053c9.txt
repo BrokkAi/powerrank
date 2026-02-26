@@ -1,0 +1,65 @@
+Update the network-monitor “change delta” API to remove the legacy `ChangeDelta.Major` flag and replace it with a richer, precomputed change classification that callers can use without re-deriving state differences themselves.
+
+### Core requirements
+
+1. **Redesign `netmon.ChangeDelta` (net/netmon/netmon.go)**
+   - Stop exposing/using the legacy `Major` boolean.
+   - Treat the “old” and “new” states as internal to the delta (i.e. callers should not mutate them).
+   - Provide a constructor that *builds a delta from two states and eagerly precomputes* a set of cached booleans describing what changed.
+   - Expose:
+     - A single high-level “should likely rebind sockets” boolean (named in the diff as `RebindLikelyRequired`).
+     - The individual contributing booleans (default interface change, proxy/PAC change, IP changes, protocol availability changes, cost changes, initial-state, etc.) so consumers can make more targeted decisions.
+   - Add small helper methods used by other packages:
+     - Access the “current/new” state (`CurrentState()`).
+     - Report whether any interface is up in the current state (`AnyInterfaceUp()`).
+     - A helper to detect when a previously-present interface/source IP disappeared across the transition (`InterfaceIPDisappeared(netip.Addr)`).
+     - A compact logging-friendly description of the old vs new state (`StateDesc()`).
+
+2. **Define what counts as an “interesting” interface change**
+   - Introduce a package-level hook in `netmon` (a function variable) that decides whether an interface is “interesting” for change detection.
+     - If the hook is nil, treat all interfaces as interesting.
+     - On Darwin, set this hook to exclude certain interface name families (e.g. Apple-specific and tunnel/loopback style interfaces).
+   - When computing “interface IPs changed”, ignore:
+     - The Tailscale interface itself (by configured interface name).
+     - Interfaces that have no routable/usable addresses.
+     - Address changes that are not meaningful for routing/rebinding (filter out non-routable prefixes such as multicast and link-local; use existing internal helpers for “usable” v4/v6 where applicable).
+
+3. **Provide stable, order-insensitive prefix comparisons**
+   - Implement an internal helper to compare `[]netip.Prefix` as sets (order-independent).
+
+4. **Track the Tailscale interface index in `netmon.State` (net/netmon/state.go)**
+   - Extend `State` with a field to store the Tailscale interface index.
+   - Ensure it’s populated during state discovery when the Tailscale interface is identified.
+   - Ensure `Interface.IsUp` / `Interface.IsLoopback` / `Interface.Addrs` handle a nil underlying `*net.Interface` safely.
+
+5. **Adjust state gathering to respect “interesting interface” filtering**
+   - While building state, avoid letting uninteresting interfaces affect derived properties (like “default route IP selection” and related viability calculations), but still keep the raw interface maps populated.
+
+6. **Update debouncing behavior**
+   - The monitor’s debounce window should be longer (reflecting that network transitions often produce bursts of events).
+
+### Update downstream consumers to the new API
+
+Revise call sites to use the new delta fields/methods instead of `Major` and direct `delta.New` access, including (but not limited to):
+
+- `wgengine/userspace.go`: rebind/re-STUN decisions should be driven by the new “rebind likely required” flag, and logging should use the delta’s state description/current state helpers. Avoid unnecessary re-STUN/rebind when the system is down.
+- `net/tsdial/tsdial.go`: use the new cached booleans (e.g. “default interface changed”, “proxy/PAC changed”, “initial state”) and the IP disappearance helper. Also track the “no default route interface” metric using the delta’s cached default route value.
+- `logtail/logtail.go`, `cmd/tailscaled/debug.go`, `net/sockstats/sockstats_tsgo.go`, and `ipn/ipnlocal/local.go`: replace references to `Major` and `delta.New` with the new API.
+- `ipn/ipnlocal/peerapi*.go` and `ipn/ipnlocal/serve.go`: update the “init listen config” hook signature so it no longer requires a full `*netmon.State` or TUN interface name lookup; it should operate on the already-known Tailscale interface index.
+
+### Logging limiter change (net/netmon/loghelper.go)
+
+Revise `LinkChangeLogLimiter` so that:
+- It no longer keys off “major/time-jump clears once-per-event”.
+- It rate-limits repeated format strings using a cooldown window (fixed duration), while still resetting its suppression state when a change occurs that is significant enough to likely require a rebind.
+
+### Tests and expectations
+
+The provided tests cover:
+- Correct computation of the new delta booleans and the combined “rebind likely required” decision across many state transitions.
+- Proper filtering of routable vs non-routable prefixes.
+- Order-insensitive prefix equality.
+- Correct behavior of the log limiter under change events.
+- Continued correctness of existing monitor behavior and callback/eventbus integration.
+
+Implement the new API and update all impacted call sites so that both existing and newly added tests pass.

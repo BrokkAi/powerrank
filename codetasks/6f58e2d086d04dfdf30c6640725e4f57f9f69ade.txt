@@ -1,0 +1,32 @@
+Extend `brokk-code`’s installation workflow to support configuring ACP integration for IntelliJ-based IDEs, alongside the existing Zed support.
+
+### CLI changes
+- Update the `install` subcommand so it accepts an additional target: `intellij`.
+- When invoked as `brokk-code install intellij`, route to an IntelliJ-specific installer and print a success message identifying the IDE and the settings file path.
+- Ensure CLI error handling matches the existing behavior: configuration conflicts and invalid settings content should result in a non-zero exit with an error message.
+
+### IntelliJ ACP settings configuration
+Implement IntelliJ ACP configuration logic in a new module (e.g., `brokk_code/intellij_config.py`) with a public function:
+
+`configure_intellij_acp_settings(*, force: bool = False, settings_path: Path | None = None) -> Path`
+
+Required behavior:
+- Default settings location (when `settings_path` is not provided): `~/.jetbrains/acp.json`.
+- If the file exists, read and parse it as **JSON or JSONC** (comments and trailing commas supported). If parsing fails, raise `ValueError` with a helpful message.
+- The top-level settings must be a JSON object; otherwise raise `ValueError`.
+- Ensure the settings contain `default_mcp_settings` and `agent_servers`, and that both are JSON objects (create them if missing; error if present but not objects).
+- Add an `agent_servers` entry named `"Brokk Code"` that launches the agent via:
+  - command: `brokk-code`
+  - args: `["acp"]`
+  - env: `{}` (present even if empty)
+- If `"Brokk Code"` already exists under `agent_servers`:
+  - raise `ExistingBrokkCodeEntryError` unless `force=True`
+  - when forced, overwrite the existing entry
+- Write the resulting settings back to disk **atomically**, creating parent directories as needed.
+- When overwriting an existing file, preserve its file permissions.
+
+### Shared utilities refactor
+Some utilities currently internal to Zed configuration should be made reusable:
+- Expose the JSON/JSONC loader as a public function (used by both Zed and IntelliJ configuration).
+- Expose the atomic JSON writer as a public function (used by both Zed and IntelliJ configuration).
+- Keep the existing `ExistingBrokkCodeEntryError` but make its meaning IDE-agnostic (it should represent a conflict in any IDE configuration, not only Zed).

@@ -1,0 +1,35 @@
+Extend the mock storage implementation in `util/teststorage/appender.go` to support Prometheus’ newer append path (`storage.AppendableV2` / `storage.AppenderV2`) while keeping the existing v1 mock behavior intact.
+
+### Requirements
+
+#### 1) Add AppenderV2 support to the mock `Appendable`
+Implement `AppenderV2(context.Context) storage.AppenderV2` on the mock and ensure it records appended data into the same in-memory structures used by the v1 appender (pending → commit moves to result; rollback moves to rolled back).
+
+`AppenderV2.Append(...)` must:
+- Record all sample types (float, histogram, float-histogram) and the additional fields provided via `storage.AOptions` (metric family name, metadata, exemplars, etc.).
+- Correctly handle the “series ref” behavior in a way consistent with the v1 mock (refs must be stable for the same label set, and mismatched refs vs labels should be detected).
+- Treat the exemplars slice in options as unsafe for reuse by the caller: the mock must not retain references to the caller’s backing array.
+- Support returning “partial exemplar errors” consistent with the `storage` API expectations when exemplar appending is configured to fail (without failing the entire append).
+
+#### 2) Support chaining for both v1 and v2
+The mock currently supports chaining a “next” appendable for v1. Extend this so it can also chain a v2 appendable, with clear separation between:
+- a chain used for v1 appends, and
+- a chain used for v2 appends.
+
+Misconfiguration should be surfaced as an error: invoking v1 when only a v2 chain is configured (or invoking v2 when only a v1 chain is configured) must result in an appender that fails operations/commit appropriately.
+
+#### 3) Make commit/rollback behavior consistent and robust
+Unify the lifecycle rules for v1 and v2 appenders:
+- Only one appender (v1 or v2) may be open at a time; concurrent open attempts should produce an appender that errors.
+- After `Commit` or `Rollback`, the appender is considered closed and must reject further actions (including repeated commit/rollback).
+- The “open appenders” counter must be correctly decremented on commit/rollback, even when commit returns an injected error.
+- If a chained “next” appender/appenderV2 exists, commit/rollback must propagate to it.
+
+#### 4) Improve recorded sample visibility and empty slice semantics
+- When there are no pending/result/rolled-back samples, the corresponding getters should return `nil` (not an empty slice).
+- Update `Sample.String()` so that it prints histogram/float-histogram values with clear spacing and includes exemplars when present.
+
+#### 5) Reliability fixes for exemplar/metadata attachment in v1
+For v1’s `AppendExemplar` and `UpdateMetadata`, ensure the mock detects and errors when the operation cannot be associated with any previously appended series (rather than relying on fragile loop index state).
+
+The end result should be a mock appendable/appender that behaves consistently across both API generations, supports chaining in either mode, enforces correct lifecycle/concurrency constraints, and captures all data needed for assertions.

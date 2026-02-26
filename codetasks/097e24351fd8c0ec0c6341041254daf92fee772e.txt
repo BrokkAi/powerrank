@@ -1,0 +1,44 @@
+Implement reliable “remote branch checkout” behavior by ensuring the local repository has an up-to-date tracking ref for the selected remote branch before attempting to check it out or display its commits.
+
+### Background / Goal
+The app currently allows users to:
+- view commits for remote branches in the Git log UI, and
+- check out branches related to pull requests (including forks).
+
+These flows can fail or show stale data when the local clone does not yet have a tracking ref for a remote branch, or when the remote branch has moved since the last fetch. Enhance the remote-handling layer to support fetching a single branch and detecting when that fetch is necessary, and integrate it into the UI flows so branch checkout and log viewing work reliably.
+
+### Required changes
+
+1. **Remote branch parsing utility**
+   - Add a small value type in the remote-operations area that can parse a remote branch reference of the form `"remoteName/branchName"` into its two components.
+   - Ensure existing logic that derives a local branch name from such a remote reference uses this parser rather than ad-hoc string slicing.
+   - If a string is not in the expected `"remote/branch"` shape, it should be treated as “not parseable” and handled without crashing.
+
+2. **Fetch a single branch**
+   - Add a new remote operation that fetches *only one branch* from a given remote into the corresponding local remote-tracking ref (e.g., updating `refs/remotes/<remote>/<branch>`).
+   - It must use the same authentication behavior already used for other network operations in the repository layer (notably GitHub HTTPS/token handling).
+
+3. **Determine whether a fetch is needed**
+   - Add a remote operation that decides whether a particular branch on a remote is newer/different than the locally stored remote-tracking ref for that branch.
+   - This check should consult the remote without downloading objects (i.e., by querying references), compare the remote branch tip to the local tracking ref tip, and return whether an update is required.
+   - Handle these cases gracefully:
+     - No local tracking ref exists yet.
+     - The local tracking ref exists but is unreadable/invalid.
+     - The remote branch does not exist (including the case where a stale local tracking ref remains).
+
+4. **UI integration: Git log remote branch selection**
+   - When a user selects a remote branch in the log UI, the commits should be shown immediately from what is available locally, then a background check should determine whether the branch needs fetching; if it does, fetch the branch and refresh the commit list.
+
+5. **UI integration: checkout from Git log**
+   - When checking out a branch that is not already a known local branch and it refers to a remote branch (`"remote/branch"`), ensure the branch is fetched first if the remote has newer data or the local tracking ref is missing, then proceed with checkout.
+
+6. **UI integration: checkout from pull requests**
+   - When checking out a PR branch (whether from the same repo or a fork), ensure the corresponding remote branch is fetched first when needed, before checkout proceeds.
+   - Fork PRs may require creating/using a distinct remote for the fork; fetching behavior should work consistently regardless of whether the remote is newly added or pre-existing.
+
+### Acceptance criteria
+- New and existing tests pass, including tests validating:
+  - successful fetch of a new remote branch and ability to check it out locally,
+  - updating an already-fetched remote-tracking ref when the remote advances,
+  - correct “needs fetch” decisions when local refs are missing, up-to-date, outdated, or stale due to remote deletion,
+  - correct authentication error behavior when a GitHub HTTPS remote is configured without a usable token.

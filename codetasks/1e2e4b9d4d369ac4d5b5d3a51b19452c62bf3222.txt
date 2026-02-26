@@ -1,0 +1,53 @@
+Implement robust validation and (de)serialization for **policy “data” and “metadata” dictionaries** across the AdminConsole and Public API request models.
+
+### Background / Goal
+Policy update endpoints accept a free-form `Dictionary<string, object>` payload (`Data`) and, for some endpoints, an additional `Dictionary<string, object>` payload (`Metadata`). These inputs must be validated against the expected schema for the specific `PolicyType` before being persisted, and invalid types must produce clear `400 Bad Request` errors.
+
+### Required behavior
+
+#### 1) Centralized validation utility
+Create a reusable component (e.g., `PolicyDataValidator`) responsible for:
+
+- **Policy Data validation + JSON serialization**
+  - Input: `Dictionary<string, object>? data`, `PolicyType policyType`
+  - Output: `string?` JSON payload suitable for `PolicyUpdate.Data`
+  - Rules:
+    - If `data` is `null` or empty, return `null`.
+    - If `data` is present, serialize to JSON and validate it can be deserialized into the correct *policy-specific* data model for the given `PolicyType` (only for policy types that define structured data models).
+    - If validation fails due to JSON/type mismatches, throw a `BadRequestException` whose message:
+      - identifies the policy type, and
+      - includes field-level detail when available (use the JSON exception path to include the offending field name, e.g., `minLength`).
+
+- **Policy Metadata validation + model deserialization**
+  - Input: `Dictionary<string, object>? metadata`, `PolicyType policyType`
+  - Output: `IPolicyMetadataModel`
+  - Rules:
+    - If `metadata` is `null` or empty, return `EmptyMetadataModel`.
+    - For policy types that support metadata, deserialize into the correct metadata model (notably, organization data ownership metadata).
+    - If metadata cannot be deserialized (invalid types/shape), do **not** throw; instead return `EmptyMetadataModel`.
+
+Validation should distinguish JSON/type conversion errors (use `JsonException`) from other exceptions and handle them appropriately.
+
+#### 2) Integrate into request-to-domain mapping
+Update the request models that translate incoming HTTP payloads into domain models so that they use the centralized validator instead of performing ad-hoc JSON serialization/parsing:
+
+- `PolicyRequestModel.ToPolicyUpdateAsync(...)` must validate and serialize `Data` using the validator and populate `PolicyUpdate.Data` with the returned JSON (or `null`).
+- `SavePolicyRequest.ToSavePolicyModelAsync(...)` must:
+  - build the `PolicyUpdate` via the policy request model mapping, and
+  - validate/deserialize `Metadata` using the validator to produce the correct `IPolicyMetadataModel`.
+- Public API request mapping (e.g., `PolicyUpdateRequestModel.ToPolicyUpdate(...)`) must also validate and serialize `Data` via the same validator.
+
+#### 3) Null-safety expectations
+Adjust the relevant request model properties and mapping behavior to be null-safe:
+
+- `Data` and `Metadata` may be omitted or explicitly `null` in requests.
+- Missing/empty dictionaries must be treated the same as `null` for storage purposes (i.e., no persisted JSON payload).
+
+#### 4) Error handling requirements for invalid data
+When invalid policy **data** is provided (wrong field types for a structured policy data model), the API layer must surface a `400 Bad Request`. The error message must include enough detail to identify the problematic field when the deserializer provides a path.
+
+Metadata errors should not fail the request; unsupported or invalid metadata should resolve to an empty metadata model.
+
+### Scope notes
+- The validation logic is policy-type dependent: only policy types with defined strongly-typed data/metadata models should be validated against those models; other policy types can treat data as absent unless it’s empty/null.
+- Ensure the mapping continues to set `PerformedBy` appropriately in each request model context (admin console vs public/system).

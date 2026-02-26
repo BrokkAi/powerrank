@@ -1,0 +1,53 @@
+Implement support for a new “Milestone 3” renewal path in the billing upcoming-invoice flow, while keeping existing organization, premium-user, and provider behaviors intact.
+
+### Context
+When Stripe emits an `invoice.upcoming` event, `UpcomingInvoiceHandler` processes it by loading the related `Invoice`, `Customer`, and `Subscription`, then routing to one of three domains based on IDs found in the subscription metadata:
+- Organization subscriptions
+- Premium (individual) user subscriptions
+- Provider subscriptions
+
+### Required changes
+
+#### 1) Milestone 3 organization renewal alignment
+Add a Milestone 3 behavior gated by a feature flag (key `PM26462_Milestone_3`) for **organizations**:
+
+- Only apply this alignment when the organization is currently on the legacy **FamiliesAnnually2019** plan.
+- When applied, the handler must “move” the organization to the current **FamiliesAnnually** plan:
+  - Update the organization record to reflect the new plan (plan type/name and other plan-derived fields used by the domain model such as premium entitlement and seat count).
+  - Update the Stripe subscription:
+    - Switch the password manager subscription item from the legacy Families 2019 price to the current Families annual price.
+    - Apply a Milestone 3 coupon/discount (a new coupon ID is introduced).
+    - Ensure the update does not prorate.
+    - If the subscription contains a “premium access add-on” item tied to the legacy plan, remove that add-on from the subscription during the migration.
+
+The handler must be resilient to missing or unexpected subscription items:
+- If the password manager item needed for the migration cannot be found, do not attempt the migration and emit an appropriate warning log.
+- If the Stripe update or persistence update fails, emit an error log describing the organization and event context.
+
+#### 2) Premium access add-on plan metadata
+Premium-access add-on information must be read from plan pricing “additional data” and exposed through the organization plan adapter:
+
+- Extend the plan adaptation (in the pricing/organization plan adapter) to map:
+  - A Stripe price ID for the premium-access add-on
+  - A price/amount for that add-on
+- The source keys are stored in `AdditionalData` (strings), and missing values should be handled gracefully.
+
+This data is used by the upcoming-invoice renewal alignment to identify and remove the premium-access add-on line item when migrating off the legacy Families 2019 plan.
+
+#### 3) New coupon constant
+Introduce a new Stripe coupon identifier for Milestone 3 (in the existing Stripe constants structure) so it can be referenced when applying the discount during the migration.
+
+#### 4) Updated upcoming-invoice email behavior for Milestone 3
+For organization upcoming-invoice notifications:
+- Upcoming invoice emails should still only be sent for annual plans.
+- When Milestone 3 is enabled for the organization renewal path, send the “updated upcoming invoice” email template (the newer mailer-based template) rather than the legacy invoice-upcoming email that includes invoice amount/line details.
+- Non-Milestone-3 behavior should remain unchanged.
+
+#### 5) Preserve existing domain behaviors
+Do not regress existing logic for:
+- Organization tax alignment (including reverse-charge handling for non‑US business use and enabling Stripe automatic tax).
+- Sponsored subscription handling (including reloading invoice amounts when sponsorship validation causes a price change).
+- Premium user Milestone 2 behavior (price migration + Milestone 2 coupon, plus appropriate email path).
+- Provider tax alignment and provider upcoming-invoice email formatting and payment method description.
+
+Additionally, improve handler robustness by logging and early-returning when referenced entities (organization/user/provider) cannot be found rather than failing silently.

@@ -1,0 +1,38 @@
+Implement a refactor of control-record key serialization/deserialization to use Kafka’s auto-generated message protocol rather than a hand-built `Schema/Struct`, while preserving wire compatibility and keeping key sizing consistent across the codebase.
+
+### Goal
+Control record keys (used for COMMIT/ABORT/LEADER_CHANGE/SNAPSHOT_HEADER/etc.) must be encoded/decoded via an auto-generated protocol message named `ControlRecordTypeSchema`, defined by a new JSON spec under `clients/src/main/resources/common/message/ControlRecordTypeSchema.json`. The encoded bytes must remain compatible with the legacy format (a fixed 4-byte key containing a 2-byte version followed by a 2-byte type id).
+
+### Required behaviors and API changes
+
+#### 1) Auto-generated protocol for ControlRecordType keys
+In `clients/src/main/java/org/apache/kafka/common/record/internal/ControlRecordType.java`:
+- Replace the legacy manual schema/struct encoding with the generated `org.apache.kafka.common.message.ControlRecordTypeSchema`.
+- The control-record key format remains: `int16 version` + `int16 type` (total 4 bytes for the current schema).
+- `flexibleVersions` must be disabled for this message (no flexible encoding).
+
+#### 2) Key creation and sizing
+- `ControlRecordType.recordKey()` must return a `ByteBuffer` containing the serialized key for that enum value (and must reject serialization of `UNKNOWN`).
+- Add an instance-level mechanism so the serialized key does not need to be recomputed multiple times (for example, `recordKey()` and a size method should not re-encode independently).
+- Introduce a method on `ControlRecordType` (named `controlRecordKeySize()` in the diff) that returns the serialized key size based on the actual encoded buffer (not a duplicated constant), and use it where key sizing is needed.
+
+#### 3) Parsing: version handling, non-destructive reads
+- Update parsing logic to decode using `ControlRecordTypeSchema` from a `ByteBuffer`.
+- Parsing must not permanently advance the position of the caller’s `ByteBuffer` in cases where the same buffer may be read again elsewhere (ensure parsing is safe even if the buffer is reused).
+- Validate key size: if fewer than 4 bytes are available, throw `InvalidRecordException` with an appropriate message.
+- Validate schema version:
+  - If the version is below the generated schema’s supported minimum, throw `InvalidRecordException`.
+  - If the version is above the generated schema’s supported maximum, parse using the highest supported version and emit a debug log noting the downgrade.
+- Ensure the returned `ControlRecordType` resolves correctly from the decoded type id, including mapping unknown ids to `UNKNOWN`.
+
+#### 4) Update key-size usage in other components
+Wherever the code previously relied on a fixed constant key size (or built keys via `Struct`), switch to using the new `recordKey()` return type and the new key-size method. This includes:
+- Control-record appends in the record builder (`MemoryRecordsBuilder.appendControlRecord`).
+- Transaction marker sizing (`EndTransactionMarker` and its tests).
+- Any helper code that previously assembled the COMMIT key manually (e.g., the log cleaner test helper).
+- Metadata readers (`BatchFileReader`, `SnapshotFileReader`) should obtain the `ControlRecordType` directly from the record key using the updated parsing API, rather than separately parsing a type id and converting it.
+
+### Compatibility expectations
+- Bytes produced by the new `recordKey()` must be readable by legacy decoding logic expecting the old 2-field layout.
+- Bytes produced by legacy encoding (version + type) must be readable by the new decoding logic.
+- The encoded key size for supported versions must remain 4 bytes for all defined control record types (excluding attempts to serialize `UNKNOWN`, which must still be rejected).

@@ -1,0 +1,29 @@
+Extend Ty’s configuration override system so that per-file `[[tool.ty.overrides]]` sections can override **analysis settings**, specifically `respect-type-ignore-comments`, in addition to the existing rule overrides.
+
+### Requirements
+
+- **New configuration surface**
+  - Support an optional `[tool.ty.overrides.analysis]` table inside each `[[tool.ty.overrides]]` entry, alongside the existing `[tool.ty.overrides.rules]`.
+  - `respect-type-ignore-comments` must be configurable both globally (`[tool.ty.analysis]`) and per override (`[tool.ty.overrides.analysis]`).
+
+- **Override resolution semantics**
+  - For a given file, determine its effective analysis settings by merging:
+    1. Global analysis options.
+    2. Any matching override entries’ analysis options.
+  - When multiple overrides match a file, **later overrides take precedence** (consistent with existing override precedence rules).
+  - Overrides that do not specify any analysis settings must **inherit** the global analysis settings (i.e., absence of `[tool.ty.overrides.analysis]` should not reset analysis settings).
+
+- **Suppression behavior**
+  - The logic that interprets `# type: ignore` comments must consult the **effective analysis settings for the specific file being analyzed**, not just the project-global settings. This should affect suppression handling in the semantic layer.
+
+- **Diagnostics for “useless override” sections**
+  - Update the validation/warning emitted for an `[[tool.ty.overrides]]` section that does not meaningfully override anything:
+    - It should consider both `rules` and `analysis`.
+    - Messaging should reflect “no settings overridden” rather than “no rules configured”, and provide appropriate guidance depending on whether the `rules` table, `analysis` table, or both are missing/empty.
+
+- **API/data model updates**
+  - Where analysis settings are accessed through the semantic database interface, update it so analysis settings can be retrieved **per file** (rather than a single global value). Ensure all implementors are updated accordingly.
+  - Ensure merged per-file settings include both rule selection and analysis settings in the resolved “file settings” representation.
+
+- **Schema/docs consistency**
+  - Update the configuration schema/documentation to include the new `overrides.analysis` capability (only to the extent needed for tests and validation to behave consistently).

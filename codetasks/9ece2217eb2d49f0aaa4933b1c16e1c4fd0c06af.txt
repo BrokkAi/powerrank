@@ -1,0 +1,30 @@
+Enhance the `libre_hardware_monitor` integration to support HTTP Basic Authentication against the Libre Hardware Monitor web server, including a full reauthentication flow when credentials are missing or change.
+
+### Requirements
+
+1. **Client initialization with optional credentials**
+   - The integration must be able to connect to Libre Hardware Monitor instances that require authentication.
+   - The API client (`LibreHardwareMonitorClient`) now supports `username` and `password` parameters and may raise `LibreHardwareMonitorUnauthorizedError` when credentials are missing/invalid.
+   - Wherever the integration constructs the client for data fetching, it must pass through stored credentials when present.
+
+2. **Config flow: initial setup with auth**
+   - The initial user step must still ask for host/port.
+   - If a connection attempt fails due to authorization, the flow must transition into a credential entry step (username + password) and, once validated, create the config entry containing host, port, username, and password.
+   - If the instance does not require auth, setup should succeed without asking for credentials.
+   - Connection errors and “no devices” errors must be surfaced as form errors as before.
+
+3. **Config flow: reauthentication**
+   - Implement a reauthentication flow that can be triggered when an existing entry encounters authentication failure at runtime.
+   - The reauth step must prompt for username and password, validate them against the server, and update the existing config entry data with the new credentials.
+   - Reauth must handle and display errors for cannot-connect, invalid-auth, and no-devices cases.
+   - Suggested values should be provided in the forms where applicable (e.g., prefill username on reauth when known).
+
+4. **Runtime behavior: detect auth failures**
+   - During coordinator updates, if authentication fails, the integration must signal Home Assistant that the config entry requires reauth (i.e., raise the appropriate auth failure exception rather than treating it like a transient update failure).
+   - Authentication failures should be logged clearly.
+
+5. **User-facing strings / metadata**
+   - Add the necessary config flow strings for the authentication step and reauth success abort reason.
+   - Update the integration quality scale declaration to indicate that reauthentication is supported.
+
+The implementation should be compatible with existing non-authenticated setups and must integrate cleanly with Home Assistant’s config entry lifecycle (setup, update, and reauth handling).

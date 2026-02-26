@@ -1,0 +1,48 @@
+### Goal
+
+Update the `fressnapf_tracker` integration so that devices whose trackers return malformed/invalid data are **filtered out during config entry setup**, while still allowing the config entry to load successfully for any remaining valid devices. When an invalid tracker is detected, Home Assistant should surface a **persistent issue** to the user.
+
+### Required behavior
+
+#### 1) Validate each tracker during `async_setup_entry`
+When setting up a config entry (`homeassistant/components/fressnapf_tracker/__init__.py`):
+
+- Authenticate and retrieve the list of devices as before.
+- For each device, perform an API call to fetch its tracker data.
+- If the tracker response is considered invalid by the library (raised as a specific “invalid tracker response” exception), treat that device as unusable:
+  - **Do not** create a coordinator for it.
+  - **Do not** set up entities/platforms for it.
+  - Emit a warning log mentioning the tracker’s serial number and that it should be removed via the app.
+  - Create a Home Assistant issue (via the issue registry) warning the user about the invalid tracker.
+
+The config entry should still reach the loaded state if other valid trackers exist, and also if all trackers are invalid (setup completes, but nothing is created for invalid devices).
+
+#### 2) Create an issue for invalid trackers (and don’t duplicate it)
+When an invalid tracker is encountered:
+
+- Register an issue under the integration domain with:
+  - A stable, deterministic issue id that includes the tracker’s serial number (so it is unique per tracker).
+  - Severity of **warning**.
+  - Marked as **not fixable**.
+  - Uses a translation key and placeholder(s) so the UI can render a localized title/description containing the tracker id/serial.
+  - A “learn more” link pointing to the integration documentation page.
+
+If the same issue already exists, it must not result in multiple issues being created for the same tracker.
+
+Add the required strings for this issue to `homeassistant/components/fressnapf_tracker/strings.json`.
+
+#### 3) Handle API failures during validation as “not ready”
+During the validation call performed in setup:
+
+- If the library raises a general API/client error (not the “invalid response” case), the config entry setup must fail in a way that causes Home Assistant to **retry later** (i.e., treated as “not ready”).
+- Authentication failures should continue to be handled as reauthentication-required (existing behavior).
+
+#### 4) Coordinator should start with known initial data
+Adjust the coordinator implementation (`homeassistant/components/fressnapf_tracker/coordinator.py`) so that it can be constructed using the already-fetched tracker data from validation, rather than requiring an immediate first refresh to populate `coordinator.data`.
+
+This initial tracker data must be used as the coordinator’s starting state so entities can be created consistently from it.
+
+### Notes
+
+- The integration uses the upstream `fressnapftracker` library; the new behavior relies on distinguishing the library’s “invalid tracker response” error from other errors.
+- The changes must preserve current entity behavior (lights, switches, device_tracker) for valid devices, while ensuring invalid devices never produce entities and instead produce an issue.

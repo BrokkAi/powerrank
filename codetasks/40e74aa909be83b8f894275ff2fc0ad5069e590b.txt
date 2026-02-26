@@ -1,0 +1,35 @@
+Implement support for associating project files with text-based diff context fragments, so workspace actions that operate “by file” (notably edit/summarize) can correctly enable/disable and can add the right files to context.
+
+### Requirements
+
+1. **`ContextFragment.StringFragment` must carry associated files**
+   - Extend `ContextFragment.StringFragment` so it can be constructed with an explicit `Set<ProjectFile>` representing files relevant to the fragment content.
+   - Ensure these file associations are included in the fragment snapshot/serialization model so that a fragment round-tripped through history export/import still exposes the same associated files.
+   - Adding file support must not change the fragment’s “source identity” semantics used for equality/`hasSameSource` comparisons.
+
+2. **Diff content should be able to imply file associations**
+   - When a `StringFragment` is created from diff-like text (e.g., git-style diffs or unified diffs), the fragment should be able to derive referenced project files from the diff content.
+   - Parsing must correctly handle:
+     - `diff --git a/... b/...` style headers
+     - unified `---` / `+++` headers
+     - deletions involving `+++ /dev/null` (should associate the non-null path)
+     - renames where old/new paths differ (prefer the “new/to” path)
+     - non-diff plain text (should yield no associated files)
+   - Only associate paths that resolve to existing project files in the current project context; ignore unresolvable, external, or non-existent paths.
+
+3. **Diff-producing UI/flows must attach files to fragments**
+   - Places that create a `ContextFragment.StringFragment` from diffs should supply the relevant changed/selected project files when available (e.g., from selected files, diff panel sources, commit/branch comparisons, PR file lists).
+   - When such explicit file sets are supplied, fragments should expose them via `files()`.
+
+4. **Workspace edit/summarize actions must be gated by file availability and tracking**
+   - In `WorkspacePanel`, the “Edit All Refs” and “Summarize All Refs” actions must be disabled (and presented as such) when no files are associated with the current selection.
+   - “Edit All Refs” must also be disabled when the selection includes files that are untracked or otherwise not editable (e.g., outside the repo’s tracked set), while “Summarize All Refs” may remain available if files exist.
+   - Triggering the edit workflow with an empty associated-file set should not proceed and should instead notify the user appropriately.
+
+5. **Performance/safety considerations**
+   - Avoid repeated expensive repo queries when validating whether all selected files are tracked (e.g., do not repeatedly recompute the tracked file set inside per-file checks).
+   - Any diff parsing failures or unexpected input should fail safely by producing an empty associated-file set rather than throwing.
+
+### Context
+
+Your changes should integrate with the existing context/history system (round-trip through zip history), existing fragment equality behavior, and UI utilities that capture diffs into context (including diff panels and git diff utilities).

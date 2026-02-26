@@ -1,0 +1,48 @@
+Refactor the analyzer subsystem so that analyzers become *immutable snapshots* and `update(...)` no longer mutates an existing instance. Instead, both `IAnalyzer.update()` and `IAnalyzer.update(Set<ProjectFile>)` must return a new `IAnalyzer` representing the updated state, while the original analyzer remains valid and unchanged.
+
+### Required behavior and API changes
+
+1. **Immutable analyzer state with snapshot semantics**
+   - Rework `TreeSitterAnalyzer` so all “database-like” structures (symbol index, per-file properties, per-codeunit properties, parsed-tree cache, etc.) live inside a single immutable state object (e.g., a record).
+   - Reads must use the current snapshot without requiring read/write locks.
+   - `update(...)` must produce a new state and return a new analyzer instance that uses that state.
+
+2. **Remove locking and replace concurrent maps with persistent collections**
+   - Remove the read/write lock approach used to coordinate mutations.
+   - Introduce and use `pcollections` for snapshot state storage (persistent immutable maps). Internal update logic may use temporary mutable structures, but the final stored snapshot must be immutable/persistent.
+   - Ensure prefix/symbol searches remain efficient (e.g., by maintaining a read-only sorted index of symbol keys in the snapshot).
+
+3. **Constructor and excluded file handling**
+   - Analyzer constructors should no longer accept “excluded files/directories” as a parameter. Exclusions come from `IProject` (e.g., `project.getExcludedDirectories()`).
+   - Update `Languages.createAnalyzer(...)` implementations accordingly.
+
+4. **Snapshot construction hook**
+   - `TreeSitterAnalyzer` should not directly instantiate subclass types during updates. Provide an abstract mechanism for subclasses to create a new analyzer “snapshot” from a produced state, and implement it for each concrete analyzer.
+
+5. **Rename / normalize C++ analyzer naming**
+   - Replace the explicit “TreeSitter” naming in the C++ analyzer type: the C++ analyzer class should be named `CppAnalyzer` (not `CppTreeSitterAnalyzer`).
+   - Update logging configuration and any reflection-based or string-based references accordingly.
+
+6. **Update multi-analyzer aggregation**
+   - `MultiAnalyzer.update()` and `MultiAnalyzer.update(Set<ProjectFile>)` must also return a new `MultiAnalyzer` instance containing updated delegate analyzers, rather than mutating the existing delegates map.
+
+7. **Preserve Tree-sitter thread-local runtime pieces**
+   - Components that are inherently thread-local/ephemeral (parsers, queries, languages) must remain safely initialized per instance/thread.
+   - When creating snapshot analyzers from prebuilt state, ensure those thread-local pieces are still properly set up.
+
+8. **Parsed-tree caching semantics**
+   - The snapshot state should include the parsed-tree cache so features relying on cached trees (like skeleton generation) still work.
+   - `clearCaches()` should clear the parsed-tree cache without corrupting the rest of the analyzer snapshot (i.e., it should result in a new state for the current instance).
+
+### Files and features impacted
+
+Your changes must support all existing language analyzers shown in the diff (Java, Go, Python, Rust, JavaScript/TypeScript, PHP, C#, C++) and maintain behavior of:
+- `getDefinition`, `getFileFor`, `getSkeletons`, `getDeclarationsInFile`, symbol search, and incremental update detection.
+- Incremental updates by explicit file set and by full-project scan (`update()`), including deletion handling.
+
+### What the harness will validate
+
+The provided tests expect:
+- `update(...)` usage patterns where callers replace the analyzer reference with the returned snapshot.
+- The new C++ analyzer class name and its integration.
+- Correct preservation of analyzer functionality across updates, skeleton generation, and symbol lookup under the new immutable-state design.

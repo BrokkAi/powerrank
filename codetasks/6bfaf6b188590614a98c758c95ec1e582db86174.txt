@@ -1,0 +1,26 @@
+Implement robust “action exception” handling for the Actron Air integration so that user-initiated entity actions (service calls) fail gracefully and surface a Home Assistant–friendly error.
+
+### Requirements
+
+1. **Translate Actron API errors into Home Assistant errors**
+   - The underlying library can raise `actron_neo_api.ActronAirAPIError` during actions.
+   - When that happens, raise `homeassistant.exceptions.HomeAssistantError` instead, using a translatable exception:
+     - `translation_domain` must be the Actron Air integration domain.
+     - Use a new translation key for API failures and include the original error text via translation placeholders.
+
+2. **Apply this handling to entity actions**
+   Update the integration so that the exception conversion is applied to asynchronous action methods that trigger API calls, including:
+   - System climate actions (changing HVAC mode, fan mode, temperature).
+   - Zone climate actions (enabling/disabling via HVAC mode, setting temperature).
+   - Switch actions (turn on/off toggles that call into the API).
+
+3. **Reusable approach**
+   - Implement the exception handling once in shared integration code (e.g., a decorator or helper) and reuse it across the affected entities.
+
+4. **Localization string**
+   - Add the new exception message to the integration’s `strings.json` under `exceptions`, with a placeholder for the underlying error message.
+
+5. **Quality scale metadata**
+   - Mark the integration as meeting the “action-exceptions” quality rule in its `quality_scale.yaml`.
+
+The final code should ensure that normal action behavior is unchanged when the API succeeds, while API failures consistently surface as a `HomeAssistantError` with the new translated error message.

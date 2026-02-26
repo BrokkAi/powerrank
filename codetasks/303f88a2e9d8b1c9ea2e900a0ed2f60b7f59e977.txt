@@ -1,0 +1,35 @@
+Extend the Go language analyzer to support import analysis and make package/import parsing driven by Tree-sitter query captures.
+
+### Goals
+
+1. **Tree-sitter query updates (Go)**
+   - Update the Go Tree-sitter query file (`app/src/main/resources/treesitter/go.scm`) to expose:
+     - A capture for the file’s package name (package clause).
+     - A capture that identifies Go `import` declarations (including grouped `import (...)` blocks).
+
+2. **GoAnalyzer: package name determination via captures**
+   - Ensure `GoAnalyzer.determinePackageName(...)` uses the shared query/capture infrastructure (rather than compiling an inline, Go-specific query string), and reads the package name from the capture defined in `go.scm`.
+
+3. **Import analysis implementation for Go**
+   - Make `GoAnalyzer` provide import analysis (it should participate in the project-wide “who imports whom” features).
+   - Implement import resolution for Go such that it can:
+     - Parse both single-line imports and grouped import blocks.
+     - Support standard imports as well as aliased imports (`import f "fmt"`) and dot imports (`import . "fmt"`).
+     - Skip blank imports (`import _ "pkg/path"`) since they are for side effects only and should not resolve to imported symbols.
+     - Extract import paths written with either double quotes (`"..."`) or backticks (`` `...` ``).
+     - Avoid treating commented-out import paths as real imports (both `//` and `/* ... */` comments).
+
+4. **Mapping import path → package name**
+   - Go import paths do not always match the actual `package` identifier (e.g., versioned paths). Resolve an import to a package name by:
+     - Preferably determining the package name from matching Go source directories within the project (based on the import path and the file’s declared package).
+     - Falling back to a reasonable heuristic when no source can be found.
+   - This mapping should be efficient across many files (use caching to avoid repeated work).
+
+5. **Resolving imports to CodeUnits**
+   - Go imports should resolve to the set of `CodeUnit`s that belong to the imported package (Go has no module-type CodeUnit analogous to Java imports in this system).
+   - Only return non-module CodeUnits for imported packages.
+
+6. **Integrate with the existing analyzer framework**
+   - Wire `importedCodeUnitsOf(...)` and `referencingFilesOf(...)` into the existing base-class import analysis workflow (rather than duplicating indexing logic).
+
+The end result should enable import extraction from Go source files and correct resolution to referenced package symbols, while keeping package detection consistent with the query capture system.

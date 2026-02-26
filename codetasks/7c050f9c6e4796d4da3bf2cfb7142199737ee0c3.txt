@@ -1,0 +1,18 @@
+Extend Lucene’s automaton-based `RegExp` engine to support true Unicode-aware case-insensitive matching, comparable to Java’s `java.util.regex.Pattern` when used with `CASE_INSENSITIVE | UNICODE_CASE`.
+
+Today, case-insensitive matching is driven by an ASCII-only flag. The updated behavior must:
+
+- Introduce a new matching flag for case-insensitive operation over (most) Unicode code points.
+- Deprecate the existing ASCII-only flag, but keep it functional and make its behavior equivalent to the new Unicode-aware case-insensitive behavior (so callers using either flag get the same results).
+- Apply case-insensitive expansion consistently for:
+  - literal characters in the regexp
+  - literal strings in the regexp
+  - single-character elements inside character classes (e.g., `[c]`)
+- Implement Unicode case folding in a way that covers:
+  - common/simple/special fold equivalences (including non-obvious equivalence sets such as Greek sigma forms: `Σ`, `σ`, `ς`, which must match one another under case-insensitive operation)
+  - characters whose upper/lower transforms are not symmetric or are “unstable” (a code point can uppercase to one value and lowercase to another)
+- Explicitly do **not** implement multi-character case expansions (characters whose uppercase mapping produces more than one code point). These should be treated in a way that aligns with Java’s `Pattern` behavior (best-effort parity), meaning single-codepoint matching should not attempt to match multi-codepoint results.
+
+The implementation should remain automaton-based: case-insensitivity is achieved by expanding a single input code point into a set of alternative code points that should be accepted at that position, then building the corresponding automaton.
+
+Finally, ensure the solution is robust over the full Unicode range (up to `Character.MAX_CODE_POINT`) and that the determinized automata remain correct for both ASCII and non-ASCII inputs, including the added Unicode-focused parsing and parity expectations.

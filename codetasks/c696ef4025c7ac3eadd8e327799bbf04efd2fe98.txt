@@ -1,0 +1,30 @@
+Implement a performance improvement to range-suppression loading so it no longer needs to walk the entire token stream just to find relevant suppression comments.
+
+### Requirements
+
+1. **Add a token-splitting API**
+   - In `crates/ruff_python_ast/src/token/tokens.rs`, add a new method on `Tokens`:
+     - `pub fn split_at(&self, offset: TextSize) -> (&[Token], &[Token])`
+   - The method must return two slices: tokens strictly “before” the given offset and tokens at/after it, based on token start positions.
+   - It must **panic** if `offset` falls *inside* a token range (i.e., greater than the token start and less than its end). Offsets that land exactly on token boundaries are valid.
+   - Document and preserve the nuance that results can differ from existing `before()`/`after()` behavior around **zero-width tokens** (e.g., `Dedent`), and ensure the added unit tests around `split_at` pass.
+
+2. **Update range-suppression parsing to use the `Indexer`**
+   - In `crates/ruff_linter/src/suppression.rs`, change `Suppressions::from_tokens` to accept an `&Indexer` in addition to the current parameters.
+   - Update the internals of suppression loading to prefer comment locations obtained from `Indexer` (via its comment range information) rather than discovering suppression comments by scanning all tokens.
+   - Trailing suppression comments must still be rejected as before, and indentation-based validity rules for range suppressions must remain consistent with the existing behavior.
+   - Any parsing errors that are not “not a suppression” should still be collected and surfaced in the resulting `Suppressions` object.
+
+3. **Use the correct indentation source**
+   - Replace any indentation computation that relied on token walking/whitespace helpers with the trivia-based indentation API (`indentation_at_offset`), keyed off the suppression comment’s start offset in the source.
+
+4. **Plumb the new `Indexer` requirement through call sites**
+   - Update all callers that construct suppressions from tokens to pass the existing `Indexer` instance already computed during linting/parsing.
+   - This includes the linter entry points and relevant test helpers across crates (e.g., `ruff_linter`, `ruff_server`, `ruff_wasm`), so everything compiles and behavior is preserved.
+
+### Outcome
+
+After these changes:
+- Range suppressions are derived from indexed comment ranges and validated against the token stream only as needed.
+- The new `Tokens::split_at` API behaves as specified (including panic conditions and boundary handling).
+- All existing and newly added tests compile and pass.

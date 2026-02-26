@@ -1,0 +1,24 @@
+Implement a refinement to the Refurb rule **FURB180** (“use `abc.ABC` instead of `metaclass=abc.ABCMeta`”) so that the auto-fix does **not** introduce a duplicate `abc.ABC` base when the class already inherits from `abc.ABC` (including cases where `ABC` is imported/aliased and appears as a base).
+
+### Required behavior
+
+When a class definition is flagged for using `metaclass=ABCMeta` / `metaclass=abc.ABCMeta`:
+
+1. **If the class does not already have an `abc.ABC` base**  
+   The fix should convert the `metaclass=...` usage into inheriting from `abc.ABC` (and ensure the appropriate import is added/used as needed), preserving existing formatting as much as feasible.
+
+2. **If the class already has an `abc.ABC` base (directly or via an imported/aliased `ABC`)**  
+   The fix should **only remove** the `metaclass=...` argument and must **not** add another `abc.ABC` base.
+
+3. **Argument removal must be robust**  
+   Removing the `metaclass` keyword argument should correctly handle it appearing:
+   - as the only argument in the class header,
+   - after one or more base classes,
+   - after other keyword arguments,
+   - in multi-line argument lists, including trailing commas.
+
+4. **Fix safety / applicability**
+   - If the class has any base classes (beyond the `metaclass` keyword), the fix must be treated as **unsafe** (since adding/reordering bases can change runtime behavior).
+   - If the class header’s argument list overlaps with comments such that applying the fix would delete or alter comments, the fix must also be considered **unsafe**.
+
+The updated test fixture additions in `crates/ruff_linter/resources/test/fixtures/refurb/FURB180.py` cover regressions around already-present `ABC` bases, imported/aliased `ABC`, indirect inheritance via another base class, and multi-line class headers with comments. Your change should make those scenarios produce correct diagnostics and fixes without duplicating `ABC` or mangling class argument lists.

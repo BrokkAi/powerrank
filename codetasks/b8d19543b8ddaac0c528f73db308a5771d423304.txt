@@ -1,0 +1,88 @@
+### Goal
+
+Improve robustness around native histogram “resolution reduction” and remote-read histogram handling so invalid histogram inputs never trigger panics and are reported as errors instead.
+
+The change spans both **integer** (`Histogram`) and **float** (`FloatHistogram`) native histograms, plus the generic span/bucket reduction helper used throughout the codebase.
+
+---
+
+## Functional requirements
+
+### 1) Make resolution reduction return errors instead of panicking
+
+Update the public APIs:
+
+- `(*histogram.Histogram).ReduceResolution(targetSchema int32)`
+- `(*histogram.FloatHistogram).ReduceResolution(targetSchema int32)`
+
+so they **return `error`** rather than a histogram pointer. On success they should still mutate the receiver (schema, spans, buckets) as before.
+
+These methods must fail with an error for:
+
+- target schema not smaller than current schema
+- source histogram uses custom buckets
+- target schema refers to custom buckets
+- spans/buckets inconsistency or invalid span offsets (details below)
+
+Some of the above are considered **programming/configuration errors** (e.g. attempting to reduce to a larger/equal schema, or involving custom buckets); those should return ordinary `error`s (not the histogram validation error type). Validation-style failures (offsets, bucket mismatch) must return the same histogram error type used by the existing validation system.
+
+All call sites that previously used the returned histogram must be updated to handle the new “mutate + error” behavior.
+
+---
+
+### 2) Add minimal validation to the underlying resolution reduction helper
+
+The generic resolution reducer (used for both integer and float histograms) must be updated to detect invalid input early and return an `error` rather than panicking or silently masking issues.
+
+Specifically, it must error if:
+
+- **Any span except the first has a negative `Offset`.**
+- The span definitions require **more buckets than provided** (too few buckets).
+- After processing all spans, there are **leftover buckets** (too many buckets).
+
+These errors must wrap the existing histogram sentinel errors used elsewhere in the package (e.g. “span negative offset” and “spans/buckets mismatch”), so callers can `errors.Is` / `errors.As` them appropriately.
+
+Because many internal call sites assume validated inputs, introduce and use a separate “must” variant that keeps the old panic-on-error behavior for those trusted paths (e.g. schema conversion/copy operations).
+
+---
+
+### 3) Remote-read: fully validate histograms and never panic on bad inputs
+
+Remote-read decoding currently only performs a schema check and may later panic when converting/reducing/using invalid histograms.
+
+Update the remote-read series iterator so that, when positioned on a histogram sample:
+
+- It performs schema validation up front.
+- It converts the protobuf histogram to the model histogram (int or float as appropriate).
+- If the schema is higher-resolution than supported but still in the reserved exponential range, it reduces resolution to the maximum supported schema **using the new error-returning API**.
+- It performs full model-histogram validation (`Validate`) before allowing `AtHistogram` / `AtFloatHistogram` to return a value.
+
+If validation or reduction fails, the iterator must:
+- stop producing samples (`ValNone`),
+- and expose the failure via `Err()`.
+
+This must work consistently for both `Next()` and `Seek()` paths, and must not rely on callers invoking `At*` to trigger validation.
+
+---
+
+### 4) Update ingestion/reduction call sites to handle errors
+
+Any code path that reduces histogram resolution during ingestion/append (e.g. schema limiting, bucket limiting, or remote write handling) must be adapted to:
+
+- call `ReduceResolution(...)`,
+- handle returned errors,
+- and propagate them rather than panicking.
+
+---
+
+### 5) Chunk/record decoding behavior
+
+Some TSDB decoding/iterator paths that reduce resolution for “newer-version chunks/records” may continue to treat reduction failures as unrecoverable (panic or hard error), but they must compile and correctly use the new `ReduceResolution` signature. Where these paths return errors (e.g. record decoding), include sufficient context in the returned error to identify the failing histogram.
+
+---
+
+## Notes / constraints
+
+- The change must apply consistently to both integer and float histograms.
+- Do not introduce significant overhead on hot paths: only minimal checks are required in the reducer, and full validation is required specifically for remote-read histograms before returning them.
+- Preserve existing semantics for trusted internal conversions by using the “must” reducer variant where appropriate.

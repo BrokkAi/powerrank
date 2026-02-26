@@ -1,0 +1,37 @@
+Update the “collections” data paths in the Admin Console/Vault APIs to explicitly mean **shared collections only**, and align naming and database access accordingly.
+
+### Required behavior changes
+1. **Organization user “details with collections” must only return SharedCollections**
+   - When retrieving an organization user’s details along with collection assignments, the returned collection list must **exclude DefaultUserCollection** entries and include **only** collections whose `Collection.Type` is `SharedCollection`.
+   - This applies both to:
+     - single-user detail retrieval, and
+     - organization-wide “many user details” retrieval when collections are requested.
+
+2. **Admin Console collections listing must only include SharedCollections**
+   - The repository method used by the collections “details” endpoint must return only collections of type `SharedCollection` (and not default user collections), while preserving existing permission/relationship behavior.
+
+### API/repository contract updates
+Refactor misleading method/parameter names so they describe the new intent:
+
+- In `IOrganizationUserRepository` and its implementations (Dapper + EF):
+  - Rename the “details by id with collections” method to indicate it returns **shared** collections.
+  - Rename “include collections” parameters in the “many details by organization” methods (including the `_vNext` variant) to indicate they include **shared** collections.
+  - Ensure the Dapper and EF implementations match the updated contract and semantics.
+
+- In `ICollectionRepository` and its implementations (Dapper + EF):
+  - Rename the organization collection-admin-details method so it indicates it returns **shared** collections.
+  - Ensure the implementation filters to SharedCollection only.
+
+### Database / SQL changes
+Introduce appropriately named stored procedures used by the Dapper repositories so that shared-collection filtering is enforced at the database level:
+
+- A procedure to read **shared** collection-user rows by organization user ids.
+- A procedure to read organization-user details plus **shared** collections by organization user id.
+- A procedure to read **shared** collections by organization id with permissions (and optionally include access relationships), used by the Admin Console collections tab.
+
+Also add/update the migrator script so these procedures exist when integration tests run against a migrated database.
+
+### Consistency across query layers
+Ensure Entity Framework implementations apply the same filtering logic as the stored procedures (i.e., compare collection type as **equals SharedCollection**, not “not default”).
+
+The end result should make naming, stored procedures, and filtering consistent across controllers, repository interfaces, Dapper implementations, EF implementations, and database scripts, with shared collections being the only “collections” returned by these specific Admin Console paths.

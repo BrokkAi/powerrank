@@ -1,0 +1,60 @@
+## Goal
+
+Improve auto-context “related files” retrieval so it works reliably when Git history is unavailable or when the current context (“seed”) files are untracked. The system should primarily use Git co-change history when possible, but must fall back to (and/or supplement with) an import-graph–based ranking so results are still produced for non-Git projects and new/untracked files.
+
+## Required changes (behavioral)
+
+### 1) Import-based related-file ranking (new component)
+
+Add a new ranking strategy that:
+
+- Builds a **file-to-file import graph** using the project analyzer (import relationships between source files).
+- Computes **related files via a localized Personalized PageRank (PPR)** starting from weighted seed files.
+- Limits the candidate graph size by expanding from seeds only up to a fixed **import reach depth** (multi-hop expansion must be supported within that depth).
+- Excludes the seed files from returned results.
+- Handles common graph edge cases:
+  - Cycles must converge and produce stable, non-negative scores.
+  - “Dangling” nodes (no outgoing edges in the chosen direction) must not absorb rank mass; their mass should be redistributed in a seed-personalized way.
+- Supports a `reversed` mode that flips the ranking direction (ranking importers vs imports).
+- Returns results as `IAnalyzer.FileRelevance` sorted by descending score with a deterministic tiebreaker.
+
+This component should live in `ai.brokk.ranking` and be callable from production code (tests will call it directly).
+
+### 2) Context.getMostRelevantFiles: Git-first, import-based fallback/supplement
+
+Update `Context.getMostRelevantFiles(int topK)` so that:
+
+- It returns an empty list for non-positive `topK`.
+- It derives **weighted seed files** from the current context fragments (seed weights must reflect the fragment composition; fragments containing more files should contribute more to the seed weights).
+- It filters out any files coming from fragments that are **not eligible for auto-context**, and those files must be excluded from ranking outputs.
+- It prefers Git-based related-file ranking **only when an actual `GitRepo` is available**.
+- If Git-based ranking returns too few results (or cannot run), it must **supplement** the remaining slots using the import-based ranker.
+- Merging rules:
+  - Preserve ordering such that Git-derived results come first.
+  - Do not return duplicates across the two sources.
+  - Do not exceed `topK`.
+
+### 3) GitDistance API and fast-path optimization
+
+Update `GitDistance.getRelatedFiles(...)` to:
+
+- Remove the obsolete “reversed sort” behavior and any corresponding parameter from the public signature (update callers accordingly).
+- Add a fast-path: if **none of the seed files are tracked by Git**, return an empty list immediately (avoid any commit-history processing).
+- Keep results sorted in descending relevance.
+
+### 5) Benchmark tool plumbing (compilation-level)
+
+A small benchmark runner exists in test sources and must compile and run against your updated APIs. Ensure any signature changes (notably GitDistance) are reflected so the tool and its test compile successfully.
+
+## Notes / constraints
+
+- The inline/ephemeral project builder used by tests already supports creating temporary projects **with Git enabled**, including the ability to create simple commits involving specific files.
+- Do not change the semantics of unrelated features; this work is focused on improving related-file ranking and robustness.
+- The import-based ranking must work with both TreeSitter-backed analyzers and analyzers that only provide import statements/definition lookup.
+- All updated and existing tests must pass, including scenarios covering:
+  - No Git repo present
+  - Git repo present but seed files untracked
+  - Hybrid behavior (Git results first, imports fill)
+  - Multi-hop import reach within the depth limit
+  - Hub/cycle behavior in the import graph
+  - GitDistance “untracked seeds” early return avoiding history access

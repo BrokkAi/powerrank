@@ -1,0 +1,42 @@
+Implement query-time filtering that removes log lines covered by delete requests, integrated into the v2 query engine’s logical planner.
+
+### Required behavior
+
+1. **Planner API now takes context and optional deletes**
+   - Update the logical planner entrypoint so plan building accepts a `context.Context`.
+   - Add a variant that also accepts a list of delete requests (`[]*logproto.Delete`) and incorporates them into the produced logical plan.
+   - All plan construction paths (log queries and sample/metric queries, including nested aggregations) must propagate the context and the deletes list consistently.
+
+2. **Delete-request predicates in the logical plan**
+   - For each delete request that overlaps the query’s effective time range, build a logical predicate that *keeps* rows that do **not** match the delete request (i.e., the predicate should exclude deleted lines).
+   - Overlap calculations must consider the query time window and, for range aggregations, the query’s effective start time extended by the range interval (since range vectors read earlier samples).
+   - Each delete request should translate to a single predicate that combines:
+     - delete time window constraints (as applicable depending on how the delete window overlaps the query window), and
+     - the delete selector’s stream matchers, and
+     - any supported pipeline filters contained in the delete selector.
+   - These delete predicates must be applied **early** in the log-query pipeline to avoid further work on lines that will be filtered out.
+   - Predicate construction must support delete selectors containing:
+     - stream matchers (`{...}`),
+     - line filters (`|=`, `|~`, etc.),
+     - label filters (`| label="x"` / comparisons supported by existing label filter conversion).
+   - If a delete selector contains unsupported pipeline stages (e.g., parsers/formatters or other stages not handled), plan building must fail with the existing “unimplemented” error style used by the planner.
+
+3. **Do not push delete predicates into storage**
+   - The delete predicates should be built in a way that they remain evaluated at the engine level (not pushed down into storage scans), consistent with current planner/optimizer capabilities for predicates referencing label/log columns.
+
+4. **Engine integration: fetching deletes**
+   - Extend the v2 engine parameters to accept a delete-request getter (querier deletion interface) and store it on the engine.
+   - During logical plan building, if a getter is configured, fetch delete requests relevant to the current user query time range and pass them to the planner’s “with deletes” entrypoint.
+   - If delete requests cannot be fetched, fail the query with an error indicating the failure.
+
+5. **Configuration / flag**
+   - Add an experimental boolean setting under `query_engine` to enable/disable delete-request filtering.
+   - Default must be **enabled**.
+   - Add a CLI flag for this setting and wire it so that when disabled, the v2 query engine does not configure a delete getter and therefore does not apply delete filtering.
+
+6. **Instrumentation**
+   - Add a new xcap statistic that records how many delete predicates were built/applied for a plan build.
+
+### Notes
+- Update all affected callers (including support checks and unit tests) to use the new planner signature that requires a context.
+- The final logical plan string representation must reflect the new filtering stages where applicable (tests assert on plan structure/serialization).

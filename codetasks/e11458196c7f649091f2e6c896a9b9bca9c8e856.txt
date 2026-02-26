@@ -1,0 +1,67 @@
+Implement a refactor of **organization account recovery (admin reset password)** so the behavior is split into:
+
+1) **A new command in Core** that performs the actual recovery work (policy/org/user validations + password reset side effects), and  
+2) **A new authorization requirement/handler in the API** that decides whether the current caller is allowed to recover the *specific target member* (role/permission comparison + provider membership constraints).
+
+This new flow must be **gated by a feature flag**, while the legacy flow remains available when the flag is off.
+
+### Functional requirements
+
+#### Feature flag switch
+- Add a new feature flag key (in the existing feature flag constants) for enabling the “account recovery via command” path.
+- The `PUT organizations/{orgId}/users/{id}/reset-password` endpoint must:
+  - Use the **legacy** implementation when the flag is **disabled**.
+  - Use the **new command + new authorization handler** implementation when the flag is **enabled**.
+
+#### New authorization logic (API)
+Create an authorization requirement + handler that authorizes recovery of a *target* `OrganizationUser` resource. It must:
+- Allow recovery only if the caller is either:
+  - an organization member with sufficient privileges relative to the target member’s role, **or**
+  - a provider user for the organization (provider-management relationship to the org).
+- Prevent privilege escalation:
+  - A caller must not recover a target member with a *higher* organization role than the caller.
+  - A caller must not recover an account belonging to a provider unless the caller is also a member of **all** providers the target user belongs to.
+- Support returning **specific failure reasons** (strings) for:
+  - general “not permitted to recover this user”
+  - “not permitted to recover a provider member’s account”
+
+Register the handler with the app’s authorization handler collection so it participates in authorization.
+
+#### New account recovery command (Core)
+Create a command that performs the password recovery operation given:
+- `orgId`
+- the target `OrganizationUser`
+- new master password hash
+- sealed key
+
+The command must validate and enforce:
+- the organization exists and allows reset password
+- the reset-password enterprise policy is enabled for the org
+- the target `OrganizationUser` is eligible for recovery (confirmed, belongs to org, has reset password key, has an associated `UserId`)
+- the target `User` exists
+- the target `User` is not using Key Connector
+
+On success, it must update the user’s password hash and persist the recovery-related changes (revision/account revision dates, last password change date, force reset flag, key), and execute the existing side effects expected by the platform (email notification, org-user event logging, and logout push).
+
+Register the command in the organization service collection so it can be resolved by the API.
+
+#### Endpoint behavior changes (API)
+For the reset-password endpoint when the flag is enabled:
+- Load the target `OrganizationUser` and ensure it belongs to the requested organization; otherwise return “not found”.
+- Authorize using the new requirement/handler and:
+  - if authorization fails, return a **400 Bad Request** with an `ErrorResponseModel` containing the failure reason message (do not return 403 for this path).
+- Invoke the new command and:
+  - return **200 OK** on success
+  - on identity errors, return a **400 Bad Request** using model state (and preserve the existing delay behavior used to mitigate brute-force/guessing patterns)
+
+When the flag is disabled, preserve the legacy behavior, but adapt the action to return an `IResult`-style response rather than throwing for common API outcomes.
+
+#### Mail service signature adjustment
+Update the admin reset-password email API to allow a nullable user name:
+- `IMailService.SendAdminResetPasswordEmailAsync(string email, string? userName, string orgName)`
+and adjust implementations accordingly.
+
+### Notes
+- The new authorization requirement is distinct from simply “can manage account recovery”; it must enforce “can recover *this particular* member”.
+- The provider-related restriction must handle the case where a user may belong to multiple providers (even if uncommon).
+- The solution must integrate cleanly into existing DI/authorization registration patterns and compile across API, Core, and tests.

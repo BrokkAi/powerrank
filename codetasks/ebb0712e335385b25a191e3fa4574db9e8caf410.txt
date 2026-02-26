@@ -1,0 +1,41 @@
+Implement support for **idempotent creation of “My Items” (default user) collections** for one or many organization users, with both a standard and a bulk-oriented code path.
+
+### Background / domain behavior
+A “default user collection” is a `Collection` record of type `CollectionType.DefaultUserCollection` that is **paired** with a `CollectionUser` row granting the target `OrganizationUser` `Manage = true` (and not read-only / not hidden passwords). Each eligible organization user should end up with **at most one** such default collection in a given organization. Calling the new API repeatedly with the same users must **not** create duplicates.
+
+### Requirements
+1. **Repository contract update**
+   - Replace the old “upsert” entry point with a new repository API for creating default collections.
+   - Provide two methods:
+     - A regular method intended for small/typical counts.
+     - A bulk-oriented method intended for large counts (e.g., policy enablement across many users).
+   - Both methods must internally filter out organization users who already have a default collection.
+
+2. **Two implementations (Dapper + EF)**
+   - Dapper-backed repository must create the missing collections in a single, transactional operation using a database stored procedure that accepts a list of `(OrganizationUserId, CollectionId)` pairs (via a TVP).
+   - EF-backed repository must achieve the same behavior without relying on bulk copy; it should insert using EF-native range adds and persist changes.
+   - The “bulk” method must exist for both implementations; in EF it can share the same behavior as the standard method.
+
+3. **Database stored procedure**
+   - Add a stored procedure under the SQL project that:
+     - Accepts `@OrganizationId`, `@DefaultCollectionName`, and a table-valued parameter containing organization-user IDs alongside pre-generated collection IDs.
+     - Inserts into `Collection` and `CollectionUser` only for users who do not already have a default collection in that organization.
+     - Uses UTC timestamps for creation/revision.
+     - Executes safely when called multiple times with the same input (idempotent effect).
+   - Add the corresponding migrator script version of this procedure.
+
+4. **Shared collection-building logic**
+   - Extract/centralize the logic that constructs the in-memory `Collection` + `CollectionUser` pairs (IDs, timestamps, type, permissions) so both bulk and non-bulk flows use the same arrangement rules.
+
+5. **Call site updates**
+   - Update the command/validator flows that previously created one default collection at a time (or invoked the old upsert method) to use the new repository method(s).
+   - Ensure the policy-driven path uses the bulk-oriented repository method.
+
+6. **TVP helper support**
+   - Extend the Dapper helpers to build a `DataTable` representing a TVP of two GUID columns matching the new SQL TVP type expected by the stored procedure.
+
+### Acceptance criteria (what your implementation must ensure)
+- Creating default collections for a set of organization users results in each user having exactly one default user collection in that organization.
+- Re-running creation with overlapping or identical user sets does not create additional default collections.
+- Both the standard and bulk APIs satisfy the same externally observable behavior; the bulk API is simply optimized for large counts.
+- All provided unit and integration tests (including those for both standard and bulk creation paths) pass.

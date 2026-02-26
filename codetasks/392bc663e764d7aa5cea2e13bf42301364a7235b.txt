@@ -1,0 +1,38 @@
+Extend the JavaScript and TypeScript Tree-sitter analyzers so the project can both **extract** import-like statements from source files and **resolve** relative module specifiers to concrete in-repo files, enabling accurate `importedCodeUnitsOf(...)` / `referencingFilesOf(...)` analysis for JS/TS projects.
+
+### Functional requirements
+
+1. **Import statement extraction (JS + TS)**
+   - ES module imports must be captured from Tree-sitter parses (named/default/wildcard imports).
+   - ES “side-effect” imports must also be handled (e.g. `import './polyfill'`).
+   - CommonJS `require()` calls must be treated as imports and included in the analyzer’s collected import statements.
+   - The extraction mechanism must support language-specific import patterns beyond a single captured “import node” type.
+
+2. **Tree-sitter query updates**
+   - Update the Tree-sitter query files for JavaScript and TypeScript to capture:
+     - ES import statements under the capture name expected by the analyzers.
+     - `require()` call expressions with captures that allow Java-side verification of the called identifier (due to limitations of the JNI Tree-sitter predicate support).
+
+3. **Language-specific extraction hook**
+   - Introduce an overridable hook in the shared Tree-sitter analyzer flow that allows subclasses (JS/TS) to add additional import statements derived from query captures (specifically, `require()` calls) while keeping existing ES import handling intact.
+
+4. **Module resolution for JS-like languages**
+   - Implement shared module resolution logic usable by both JavaScript and TypeScript analyzers:
+     - Only resolve **relative** specifiers (`./` and `../`). Bare specifiers (e.g. `"react"`) are not resolved to project files.
+     - Normalize relative paths and resolve them against the importing file’s directory.
+     - Support extension probing for common JS/TS extensions (`.js`, `.jsx`, `.ts`, `.tsx`) when the import omits an extension.
+     - If the import includes an explicit known extension, resolve that exact path without producing “double extensions”.
+     - Support directory imports by resolving to an `index` file within the referenced directory (across the same known extensions).
+     - Ensure resolved targets are restricted to the project’s file set and project root.
+
+5. **Caching**
+   - Add a bounded cache for module resolution results to avoid repeated path probing across analyses (large enough to cover typical project/module reuse patterns).
+
+6. **JS/TS analyzers must expose import analysis**
+   - Ensure the JavaScript and TypeScript analyzers participate in the import analysis API used by the test harness (the APIs that return imported code units and referencing files).
+   - The import resolution must integrate with each analyzer’s existing declaration extraction so that resolving an import yields the `CodeUnit`s declared in the resolved module file.
+
+### Notes / constraints
+
+- The implementation must work with the JNI Tree-sitter binding, including the limitation that certain query predicates (e.g. identifier equality checks) cannot be relied upon; `require()` detection must therefore be validated in Java using captured nodes/text.
+- Keep existing parsing/analyzer behavior for non-import-related constructs unchanged; the new import logic must fit into the existing Tree-sitter-driven analysis pipeline.

@@ -1,0 +1,58 @@
+Implement a new CLI mode for **ty** that can automatically suppress all *lint* diagnostics by inserting `# ty:ignore[...]` comments into affected files, and write the updated sources back to disk.
+
+### Feature: `ty check --add-ignore`
+Extend the `check` command (see `crates/ty/src/args.rs` and the check execution flow) with a boolean flag:
+
+- `--add-ignore`: when present, ty should **attempt to add suppression comments for every suppressible lint diagnostic**, write the modified files, and then report remaining diagnostics (non-lints, unsuppressible lints, IO failures, syntax-error files, etc.).
+
+The normal `ty check` behavior must remain unchanged when the flag is not set.
+
+### Suppressing diagnostics and writing files
+Add project-level logic that, given a set of diagnostics from a check run:
+
+1. Identifies suppressible diagnostics:
+   - Only diagnostics that correspond to a **lint rule** and have a usable file span/range.
+   - Do **not** generate suppressions for the lint that reports unused ignore directives.
+2. Groups work per file and edits the source to add or extend existing `ty:ignore` comments:
+   - Prefer merging codes into an existing `ty:ignore[...]` comment on the relevant line rather than creating duplicates.
+   - Ensure multiple diagnostics on the same physical line result in a single combined ignore comment when possible.
+   - Correctly compute the “line to suppress” for cases like line continuations, f-strings, and other tokenization edge cases.
+3. Applies the generated edits deterministically and safely:
+   - Handle overlapping/incompatible edits without corrupting the file.
+4. Validates the modified file content before committing changes:
+   - Ty must not persist edits that introduce syntax errors.
+   - If validation fails, surface an internal-style diagnostic that tells the user it’s a ty bug and includes environment/context details.
+5. Writes the updated content back to disk only if the file hasn’t changed since it was read (revision/mtime guard).
+6. Returns:
+   - The number of suppressions successfully added.
+   - The remaining diagnostics after changes (including diagnostics for files that were skipped or failed to write).
+
+This functionality should live in the project layer (see `crates/ty_project`) and use suppression generation utilities from the semantic layer (see `crates/ty_python_semantic`).
+
+### System and source handling requirements
+To support writing notebooks and non-UTF8-safe workflows:
+
+- Update the writable system abstraction so writing can be done with **raw bytes**, not only `&str`. Provide a default convenience `write_file(&str)` in terms of `write_file_bytes(&[u8])`.
+- Ensure in-memory/test filesystem implementations store file contents as bytes and return UTF-8 errors when invalid.
+- Add a way to clone a writable system as a trait object (needed to hold a writable handle while mutating the database).
+- Extend the source representation so it can:
+  - Produce bytes for writing (`SourceText` → bytes), including notebook serialization.
+  - Create a modified `SourceText` from new text while preserving notebook cell boundaries via a source map.
+- Add support for temporarily overriding a file’s source text in the database (useful for validating edits) and ensure this override is cleared automatically when the file’s revision/status changes.
+
+### Diagnostics improvements
+Centralize the “this is a bug, please report it” sub-diagnostic construction on the core `Diagnostic` type (in `ruff_db`), including platform, version (when available), and CLI args.
+
+Also add a lightweight cancellation error type (`Canceled`) usable when a cancellation token interrupts the add-ignore workflow; cancellation should not be treated as a failure exit in the CLI flow.
+
+### IDE code actions
+Update the IDE “Ignore this lint for this line” quick-fix to use the same suppression-generation logic as the bulk suppression path, including correct behavior on tricky line-continuation layouts.
+
+### Output/exit behavior
+In `--add-ignore` mode, ty should:
+- Print diagnostics (if any) using the existing rendering pipeline.
+- Print a human-readable summary indicating how many ignore comments were added.
+- Exit successfully when no remaining diagnostics exist (and also when canceled).
+- Otherwise, compute exit status from remaining diagnostics using the existing rules.
+
+The new and existing CLI and project tests must pass, including scenarios with multiple files, syntax errors, repeated violations, and re-running ty after suppressions are applied.

@@ -1,0 +1,32 @@
+## Problem: Consumer shutdown can hang when broker is unavailable
+
+Kafka’s console consumer and console share consumer can take ~30 seconds to terminate (e.g., after `ctrl-c`) if the broker becomes unavailable around the same time. The delay is caused by the consumer’s internal network thread continuing to process certain retryable, coordinator-related work during shutdown, and the shutdown path waiting for those attempts to finish rather than exiting promptly.
+
+You need to adjust the consumer internals so that **closing a consumer completes quickly even when the broker is already down**, without waiting for the normal coordinator-discovery / request timeouts.
+
+### Requirements
+
+Implement changes in the consumer internals so that:
+
+1. **Network-thread shutdown does not stall on outstanding work that cannot be sent**
+   - During shutdown, the consumer network thread performs cleanup that polls the network client while pending work exists.
+   - When the broker is down, some queued requests remain in a state where they cannot be transmitted (e.g., coordinator not known / no target node available yet) and would otherwise be retried until a timeout.
+   - On close, these requests must no longer keep the shutdown loop alive; they should be completed/finalized in a way consistent with an interrupted shutdown and allow the network thread to exit promptly.
+
+2. **The network polling path can distinguish “normal polling” from “polling while closing”**
+   - The component that polls the network client must support being invoked in a “closing” context so it can apply shutdown-specific behavior for pending work.
+   - Existing callers that perform normal operation polling should continue to behave as before.
+
+3. **Share consumer close must not wait indefinitely when the member is not established**
+   - The share consumer has a close path that may involve acknowledgements and uses a completion future.
+   - If the share consumer is closing while it has not yet established the necessary membership identity (e.g., member id not set), the close operation must still complete promptly rather than waiting for state that will never arrive.
+
+### What will be validated
+
+The provided test suite includes new integration and unit coverage ensuring that:
+- Closing both “classic” and “async” consumers completes within a short time after a broker shutdown.
+- Closing a share consumer also completes promptly after a broker shutdown.
+- Internal request tracking and completion behavior is correct for both normal polling and polling during shutdown, including completion of affected futures with an appropriate retriable network-related failure.
+- Share consumer close futures complete correctly in edge cases where membership was never established.
+
+You may reference the relevant classes directly (e.g., `ConsumerNetworkThread`, `NetworkClientDelegate`, `ShareConsumeRequestManager`) and must preserve correct behavior across existing and new tests.

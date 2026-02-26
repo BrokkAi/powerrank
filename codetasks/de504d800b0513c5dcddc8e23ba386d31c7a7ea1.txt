@@ -1,0 +1,42 @@
+## Problem: Preserve collection access assignments and return them correctly from the Public API
+
+A regression in the Public collections API causes **group/user access data to be missing (null) in responses**, and can also cause **existing access assignments to be wiped** when updating a collection if the caller omits `Groups` and/or `Users` from the request payload.
+
+You need to implement a fix so that:
+
+### 1) Public collections listing includes access groups
+The endpoint that lists collections under `src/Api/Public/Controllers/CollectionsController.cs` must return collection response models that include the collection’s **group access entries** (with their permission flags). Previously, the list response was built without access information, leaving `Groups` null.
+
+The response models involved are in:
+- `src/Api/Models/Public/Response/CollectionResponseModel.cs`
+- `src/Api/AdminConsole/Public/Models/Response/GroupResponseModel.cs`
+
+The models must deserialize cleanly with `System.Text.Json` in the integration test environment (including cases where a framework needs to construct them without calling a domain-entity constructor).
+
+### 2) Updating a collection must not unintentionally delete access
+The repository method that updates/replaces a collection (in `src/Infrastructure.Dapper/Repositories/CollectionRepository.cs`) must correctly handle **nullable access parameters**:
+
+- If the caller passes **null for both** `groups` and `users`, treat it as “update collection fields only” and **do not change existing collection-group or collection-user associations**.
+- If the caller passes **groups but users is null**, update **only group associations** and leave user associations unchanged.
+- If the caller passes **users but groups is null**, update **only user associations** and leave group associations unchanged.
+- If the caller passes **both**, update both sets of associations.
+
+Additionally, ensure the replace/update operation is performed atomically so that partial updates do not occur if something fails mid-operation.
+
+### 3) Database support for partial access updates
+New SQL stored procedures are required to support updating only groups or only users without requiring the other parameter, and without clearing the untouched association table. These procedures must:
+- Update collection core fields.
+- Synchronize the corresponding association table (delete missing, update changed permissions, insert new).
+- Leave the other association table untouched.
+- Perform the same revision bump behavior as existing collection updates.
+
+The relevant scripts are under:
+- `src/Sql/dbo/Stored Procedures/`
+- `util/Migrator/DbScripts/`
+
+### 4) Test helper support for external IDs
+The integration test helpers that create collections must support setting an `ExternalId` when creating a collection (see `test/Api.IntegrationTest/Helpers/OrganizationTestHelpers.cs`), since API flows depend on it.
+
+---
+
+Implement the above behavior so that the provided integration and repository tests pass, including scenarios where a collection is created with both group and user permissions, retrieved via the public API, and then updated without re-supplying both access lists.

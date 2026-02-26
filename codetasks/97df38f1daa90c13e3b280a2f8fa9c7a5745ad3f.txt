@@ -1,0 +1,63 @@
+Implement a new Home Assistant integration named **“MTA New York City Transit”** with domain **`mta`**. The goal is to add a config-entry based integration that polls MTA subway GTFS-realtime data via the external library **`py-nymta`** and exposes upcoming-arrival sensors.
+
+### Functional requirements
+
+#### Config flow (`homeassistant/components/mta/config_flow.py`)
+Create a UI config flow (`ConfigFlow`, `domain="mta"`) with two steps:
+
+1. **Line selection** (`async_step_user`)
+   - Present a dropdown of available subway lines using the library’s known routes (e.g., keys from `pymta.LINE_TO_FEED`).
+   - Store the chosen line and advance to the stop step.
+
+2. **Stop selection** (`async_step_stop`)
+   - Fetch the list of stops for the previously selected line using the library’s *static stop list* for that line.
+   - Present a dropdown of stops. The display label must include the stop name plus a direction marker derived from the stop id suffix (e.g., `...N` / `...S`), and the stop id should be the stored value.
+   - When a stop is chosen:
+     - Set a stable **unique id** for the entry derived from line + stop id, and abort if that unique id is already configured.
+     - Perform a connectivity check against the *realtime arrivals feed* (not the stop list). If it fails with the library’s feed exception, show a `cannot_connect` base error and keep the user on the stop step.
+     - On success, create the config entry with a human-friendly title that includes the selected line and the resolved stop label.
+
+Handle “no stops found” as an abort reason distinct from connectivity issues.
+
+#### Coordinator (`homeassistant/components/mta/coordinator.py`)
+Implement a `DataUpdateCoordinator` that:
+- Polls the realtime feed on a fixed interval (30 seconds).
+- Uses the configured line and stop id to fetch a small set of upcoming arrivals.
+- Converts arrival timestamps to local time.
+- Produces structured runtime data for sensors (a list of upcoming arrivals including at least time, route id, and destination; additional fields are allowed).
+
+Library exceptions during updates must be surfaced as `UpdateFailed`.
+
+Define a typed config entry alias (runtime data stored on the entry) matching Home Assistant’s runtime-data pattern.
+
+#### Integration setup (`homeassistant/components/mta/__init__.py`)
+- Support config entries only.
+- On setup, create the coordinator, perform the first refresh, store the coordinator as `entry.runtime_data`, and forward setup to the sensor platform.
+- Implement unload for the forwarded platforms.
+
+#### Sensors (`homeassistant/components/mta/sensor.py`)
+Expose sensors for the **first three arrivals** at the configured stop:
+
+For each of arrival #1, #2, #3 create:
+- a **timestamp** sensor for the arrival time
+- a sensor for the **route id**
+- a sensor for the **destination**
+
+Requirements:
+- Entities must be `CoordinatorEntity`-based and use the coordinator’s runtime data.
+- If an arrival for an index doesn’t exist, the entity state should be `None`/unknown.
+- Entities must have stable unique ids derived from the config entry unique id plus a per-sensor key.
+- Provide appropriate `DeviceInfo` so the entities are grouped under a single service-style device representing the configured stop.
+- Use entity translation keys for names.
+
+#### Metadata / registration
+Add the integration’s metadata files and registration so it is recognized by Home Assistant:
+- `manifest.json` with config flow enabled, dependency on `py-nymta==0.3.4`, and logger configuration.
+- `strings.json` covering config flow text, abort/error messages, and sensor entity names via translation keys.
+- Ensure the integration appears in the generated integration/config flow registries used by tests.
+- Update requirement pinning files used by the test environment.
+
+### Non-functional expectations
+- All code must follow Home Assistant async patterns (no blocking I/O).
+- Proper error handling and abort reasons must align with Home Assistant config flow conventions.
+- The implementation must be compatible with the provided tests for config flow, setup/unload, and sensor snapshots.

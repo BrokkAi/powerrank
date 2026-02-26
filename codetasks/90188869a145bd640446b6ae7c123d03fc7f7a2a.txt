@@ -1,0 +1,9 @@
+Extend the distributor’s ingest-limits integration to support an additional RPC, `UpdateRates`, exposed by the ingest-limits-frontend service.
+
+Your changes should make the distributor’s ingest-limits component capable of:
+- Calling a new `UpdateRates(ctx, req)` RPC on its ingest-limits-frontend client abstraction (the same abstraction currently used for `ExceedsLimits`), and returning per-stream rate results back to the caller.
+- Building an `UpdateRatesRequest` from the tenant ID and the set of streams, using the same stream metadata model already used for limit checks (stream hash plus any relevant per-stream sizing/policy fields).
+- Implementing `UpdateRates` for the ring-based ingest-limits-frontend client wrapper so it can discover a frontend via the ring and forward the RPC in the same manner as the existing limit-check RPC.
+- Updating request/failed-request instrumentation so request counters are tracked per operation (i.e., metrics differentiate between the `ExceedsLimits` operation and the `UpdateRates` operation).
+
+The existing `ExceedsLimits` and `EnforceLimits` behavior must remain intact while adopting the updated client interface and the per-operation metrics.

@@ -1,0 +1,44 @@
+Extend the engine scheduler/worker protocol so the scheduler can account for a worker’s total compute capacity (threads) and enforce a simple connection “handshake” and role separation.
+
+### Required protocol changes
+Introduce a new wire message, `WorkerHelloMessage`, carried in `MessageFrame` as a new `oneof` variant, with a single field:
+- `threads` (`uint64` in protobuf; `int` in the Go wire message)
+
+Update the wire codec so this message can be encoded/decoded like existing worker/task/stream messages.
+
+### Scheduler behavior changes
+The scheduler must treat each inbound connection as starting in an **initial/unknown** state, and then classify it as either:
+
+1) **Control-plane connection** (can request tasks and send task/stream status):
+- A peer must first send `WorkerHelloMessage` to become control-plane.
+- `WorkerHelloMessage` must be rejected if sent when the connection is not “initial”.
+- `threads` must be validated as `>= 1`.
+- After a successful hello, the scheduler tracks the worker’s `maxThreads = threads`.
+
+2) **Data-plane connection** (stream payload only):
+- Receiving `StreamDataMessage` on an initial connection transitions it to data-plane.
+- A data-plane connection must not be allowed to send control-plane messages.
+
+For control-plane connections:
+- `WorkerReadyMessage` must be rejected unless the connection has successfully completed the hello handshake.
+- The scheduler must enforce a per-worker capacity rule: a worker may not have more outstanding “ready” requests plus currently assigned (non-terminal) tasks than `maxThreads`. If the worker is at capacity, reject additional `WorkerReadyMessage`s.
+
+### Capacity bookkeeping requirements
+Replace/augment any existing “tasks per peer” bookkeeping so the scheduler can:
+- Track tasks currently assigned to a specific worker connection.
+- Track how many “ready” slots the worker has requested (each `WorkerReadyMessage` consumes 1 slot until it is turned into an actual assignment).
+- Decrement the “ready” count when an assignment is accepted.
+- Free capacity when a task becomes terminal (completed/failed/canceled) and when a task is canceled by the scheduler.
+- Free all capacity and mark tasks appropriately when a worker connection drops; tasks owned by that worker must be aborted and untracked.
+
+Task ownership should be associated with the specific worker connection abstraction (not a raw peer) so untracking and capacity updates are consistent.
+
+### Worker behavior change
+When connecting to the scheduler as a worker:
+- Perform the handshake by sending `WorkerHelloMessage{Threads: <worker thread count>}` before sending any `WorkerReadyMessage`.
+- When a task finishes, report completion to the scheduler in a way that ensures the scheduler has updated its bookkeeping before the worker requests another task (i.e., avoid fire-and-forget semantics for the terminal `TaskStatusMessage`).
+
+### Documentation/comments update
+Update the protobuf comments for `StreamDataMessage` to clarify it is sent by a “peer” and that sending it establishes a data-plane connection on which no other message kinds are valid.
+
+The end result should be that the scheduler only assigns up to `threads` concurrent tasks per worker connection, rejects invalid message ordering/connection roles, and releases capacity promptly on terminal transitions and cancellation/connection loss.

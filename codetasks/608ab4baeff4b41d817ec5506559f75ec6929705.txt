@@ -1,0 +1,47 @@
+Update the “code excerpt” contract used by the review flow to a less fragile Markdown format, and make the parsing/serialization logic handle it correctly across the different entry points that consume LLM output.
+
+### Background / new format
+LLM responses currently embed excerpt metadata inside the first line of a fenced code block (e.g., `path/to/File.java @42`). This is being replaced with a format where the file path and line number appear on a separate line *before* the code fence:
+
+```
+At `path/to/File.java` line 42:
+```java
+<excerpt content>
+```
+```
+
+The system must reliably extract `(file, line, content)` excerpts from Markdown, and also strip the metadata line from user-visible prose when building structured “notes”.
+
+### What to change
+Implement support for the new excerpt format throughout the review pipeline:
+
+1. **Prompt/output format changes**
+   - Update the ReviewAgent prompt text that instructs models how to emit excerpts so that it describes the new “At `...` line N:” line preceding the code block.
+   - Update any retry prompts that ask the model to resend specific excerpts so they request the corrected excerpt using the new format (without requiring a `path @line` line inside the code block).
+
+2. **Parsing excerpts from raw Markdown**
+   - Update the excerpt parser so it can find excerpts written in the new format:
+     - Detect an `At \`filepath\` line N:` line.
+     - Require an immediately-following fenced code block.
+     - Treat the code block content as the excerpt body (do not expect/consume a metadata line inside the fence).
+   - Ensure malformed blocks are not treated as excerpts (e.g., a fenced block without the `At ...` prefix).
+   - Preserve behavior for mixed Markdown: intervening text, multiple excerpts, and nested/indented fences that should be treated as plain content.
+   - Ensure excerpt scanning terminates quickly on pathological/unclosed input.
+
+3. **Segment model and serialization**
+   - Wherever excerpts are represented as segments (text vs excerpt), make sure serialization emits the new format (the “At … line …:” line followed by the fenced code block).
+
+4. **Parsing structured reviews / filtering metadata out of prose**
+   - In Markdown review parsing (e.g., “Design Notes”, “Tactical Notes”), the metadata line (`At ...`) should not appear in the description/recommendation text that is stored for the note.
+   - Excerpt extraction in this structured parser should associate a fenced code block with the most recent preceding `At ...` metadata line.
+   - Validation that a tactical note includes an excerpt should recognize the new format (i.e., the note body includes the `At \`file\` line N:` reference corresponding to an excerpt).
+
+5. **Line splitting / normalization considerations**
+   - The excerpt matching logic that compares extracted excerpts to file content should continue to behave correctly across different newline conventions (`\n` vs `\r\n`) and should not regress in performance for large inputs.
+
+### Expected outcome
+After your changes, the system should:
+- Instruct models to output excerpts using the new “At `file` line N:” + fenced block format.
+- Correctly parse excerpts from both full review responses and excerpt-only retry responses.
+- Keep note descriptions/recommendations free of excerpt metadata lines while still attaching the extracted excerpts.
+- Continue to match extracted excerpt bodies against file content as before.

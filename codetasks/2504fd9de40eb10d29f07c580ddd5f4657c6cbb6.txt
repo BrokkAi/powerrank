@@ -1,0 +1,59 @@
+Implement CQRS-style commands/queries and cache invalidation for **Admin Console Organization Integrations**, and refactor the API controller to use them.
+
+### Goal
+Replace direct repository usage in `OrganizationIntegrationController` with dedicated command/query abstractions, and introduce a dedicated “Event Integrations” extended cache that is invalidated when an integration is created/updated/deleted.
+
+### Required changes
+
+#### 1) Controller refactor (CQRS wiring)
+Update `src/Api/AdminConsole/Controllers/OrganizationIntegrationController.cs` so it no longer depends on `IOrganizationIntegrationRepository`. Instead, it must depend on and use:
+- `ICreateOrganizationIntegrationCommand`
+- `IUpdateOrganizationIntegrationCommand`
+- `IDeleteOrganizationIntegrationCommand`
+- `IGetOrganizationIntegrationsQuery`
+
+The controller must preserve its current authorization/ownership checks via `ICurrentContext` and keep the same public endpoints/signatures. The obsolete POST delete endpoint must continue to function.
+
+#### 2) New commands/queries for OrganizationIntegrations
+Under `src/Core/AdminConsole/EventIntegrations/OrganizationIntegrations/` create implementations and interfaces under `.../Interfaces/`:
+
+- `ICreateOrganizationIntegrationCommand` / `CreateOrganizationIntegrationCommand`
+  - Creates a new `OrganizationIntegration`.
+  - Must reject creation when an integration of the same **Type** already exists for the organization (raise `BadRequestException` with an appropriate message).
+  - Must invalidate cache entries for the organization/type after a successful create.
+
+- `IUpdateOrganizationIntegrationCommand` / `UpdateOrganizationIntegrationCommand`
+  - Updates an existing integration identified by `(organizationId, integrationId)`.
+  - Must throw `NotFoundException` if the integration does not exist, does not belong to the organization, or if the stored integration’s **Type** does not match the incoming update’s **Type**.
+  - Must ensure immutable identity fields are preserved (e.g., the persisted record’s identifiers and creation metadata should not be overwritten incorrectly).
+  - Must invalidate cache entries for the organization/type after a successful update.
+
+- `IDeleteOrganizationIntegrationCommand` / `DeleteOrganizationIntegrationCommand`
+  - Deletes an existing integration identified by `(organizationId, integrationId)`.
+  - Must throw `NotFoundException` if the integration does not exist or does not belong to the organization.
+  - Must invalidate cache entries for the organization/type after a successful delete.
+
+- `IGetOrganizationIntegrationsQuery` / `GetOrganizationIntegrationsQuery`
+  - Retrieves all integrations for an organization and returns them as a `List<OrganizationIntegration>`.
+
+All new public interfaces/classes should include XML documentation (summary + key param/exception notes).
+
+#### 3) Event Integrations cache integration (keyed FusionCache)
+Commands must use a **named/keyed** extended cache instance:
+- Use `IFusionCache` resolved via keyed services (i.e., a specifically named cache for event integrations).
+- Cache invalidation must use tag-based removal:
+  - The tag string must be produced via `EventIntegrationsCacheConstants.BuildCacheTagForOrganizationIntegration(organizationId, integrationType)`.
+  - Invalidate with `RemoveByTagAsync(...)` after successful mutations.
+
+#### 4) Dependency injection registration
+Create a DI extension in `src/Core/AdminConsole/EventIntegrations/EventIntegrationsServiceCollectionExtensions.cs` that:
+- Registers the named extended cache for event integrations (using the project’s existing extended cache infrastructure and the cache name constant).
+- Registers the commands/queries above as **scoped** services.
+- Is safe to call multiple times without duplicating registrations (idempotent behavior).
+
+Update `src/Api/Startup.cs` to call the new extension method that registers event integration services.
+
+### Notes
+- The solution must compile cleanly across API and Core projects.
+- Ensure namespaces align with the existing project conventions (the tests expect specific namespaces/types to exist).
+- Do not remove or change public API routes; only rewire the internal dependencies and add the new CQRS/caching layer.

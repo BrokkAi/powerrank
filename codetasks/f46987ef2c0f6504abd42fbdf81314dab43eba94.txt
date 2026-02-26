@@ -1,0 +1,50 @@
+Extend the Java Tree-sitter–based analyzer to properly **discover, name, normalize, and source-extract Java lambda expressions**, while keeping Java “skeleton” output clean and preserving compatibility with LSP-derived anonymous names.
+
+### Required behavior
+
+#### 1) Lambda discovery and representation
+- Java lambda expressions must be treated as function-like declarations for indexing/navigation purposes (i.e., they should produce `CodeUnit` entries that can be resolved by fully-qualified name and can return their source snippet).
+- Lambdas should be discoverable within methods (including within nested/inner types) and should appear in the analyzer’s declaration set for a file.
+
+#### 2) Lambda naming scheme
+- Because lambdas have no explicit identifier, synthesize a stable “anonymous” name that includes:
+  - the nearest enclosing method/constructor name when available; otherwise fall back to the nearest enclosing class-like name; otherwise a safe generic fallback,
+  - and a location suffix derived from the lambda’s start position in the file (`line:column`, 0-based).
+- The synthesized name must follow the “`<enclosing>$anon$<line>:<col>`” style and be usable as a `CodeUnit` simple name / fqName component.
+
+#### 3) Parent/child structure (nesting)
+- Lambdas should be attached as **direct children of their nearest enclosing function-like** declaration when that parent is available in the same file’s extracted `CodeUnit` set.
+- If the enclosing function-like cannot be resolved, fall back to attaching them under the nearest class-like container (or top-level if necessary).
+
+#### 4) Skeleton output rules
+- Lambdas must **not** appear in Java skeleton signature output, even though their `CodeUnit`s exist for navigation/discovery.
+- More generally, skeleton generation must not emit class “closers” for function-like blocks (even if functions can contain nested items), while still emitting closers for class-like structures.
+
+#### 5) Name normalization rules
+Update Java full-name normalization to correctly handle:
+- generic type arguments removal,
+- `$` vs `.` normalization for nested names,
+- trailing numeric anonymous-class suffixes (e.g., `$1`, optionally followed by `:line`/`:line:col`),
+- trailing location suffixes (`:line` or `:line:col`),
+- and **special handling for literal “`$anon$`” segments**:
+  - normalization must preserve `$anon$` as a literal marker (i.e., don’t truncate the name at `$anon$`),
+  - and must still normalize nested separators consistently without corrupting the `$anon$` marker.
+
+#### 6) LSP compatibility: anonymous naming context selection
+Update the LSP client logic that derives anonymous/lambda names from a `Location` so that:
+- it builds the container type chain using non-anonymous type symbols,
+- and it selects the appropriate method name in the presence of anonymous classes (i.e., when anonymous types appear in the containing symbol stack, prefer the “first method with a non-anonymous class-like parent” rather than blindly taking the nearest method symbol).
+- It should be robust to missing/empty symbol results and failures (returning `Optional.empty()` rather than throwing).
+
+### Files/areas involved
+The changes will span:
+- Java Tree-sitter query/capture support to identify lambda expressions,
+- Tree-sitter analyzer extraction logic to accommodate a definition capture that has no explicit “name” capture,
+- Java-specific naming and normalization logic,
+- skeleton rendering logic around nesting/closers,
+- and LSP anonymous-name derivation logic for compatibility with the synthesized lambda names.
+
+The provided tests cover:
+- lambda discovery, naming, parent-child attachment, and exact source extraction,
+- normalization edge cases,
+- and LSP-to-TreeSitter naming compatibility for at least one lambda scenario.

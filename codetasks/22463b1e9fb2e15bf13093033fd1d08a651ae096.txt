@@ -1,0 +1,48 @@
+Extend the TSDB exemplar circular buffer to support *out-of-order (OOO) exemplars* within a configurable time window, while preserving correct per-series ordering, eviction behavior, and resize semantics.
+
+### Functional requirements
+
+#### 1) Configurable OOO time window
+* The circular exemplar storage must accept an **out-of-order time window** value (milliseconds) that controls whether and how far back exemplars may arrive out of timestamp order.
+* A non-positive window must effectively **disable out-of-order insertion** (i.e., older-than-newest exemplars are rejected as out-of-order).
+* The window must be adjustable at runtime via a storage method (thread-safe) so that configuration changes can take effect without reconstructing the storage.
+
+#### 2) Validation rules for insertion
+When adding an exemplar to an existing series, validation must:
+* Continue to reject the “exact duplicate of the newest exemplar” as a duplicate.
+* Reject exemplars that are “too old” relative to the newest exemplar based on the configured OOO window.
+* Define a stable ordering for exemplars that share the same timestamp so the storage can:
+  * allow multiple exemplars with the **same timestamp** when they differ by value and/or labels (required for native histogram buckets),
+  * still detect duplicates/out-of-order relationships without scanning the entire stored list.
+  The ordering must use timestamp first, then value, then a deterministic label ordering key (e.g., label hash) to break ties.
+
+#### 3) Per-series ordering with OOO insertion
+`AddExemplar` must maintain a per-series chain so that `Select` returns exemplars **in the correct order** for that series even when insertions arrive out of order (within the allowed window):
+* If the exemplar is newer than or equal to the series newest timestamp, it appends to the end.
+* If it is older than the series oldest timestamp, it prepends to the beginning.
+* Otherwise it must be inserted into the appropriate position between existing exemplars for that series.
+
+The storage must also avoid storing “obvious duplicates” arising from OOO insertion (e.g., when an insertion point indicates the exemplar is already present) without performing an expensive full-list duplicate check.
+
+#### 4) Correct eviction semantics for a circular buffer
+When the buffer is full and the next write slot already contains an exemplar:
+* The overwritten exemplar must be removed from its series chain.
+* If that removal empties the series, the series entry must be removed from the index.
+* If an eviction happens to affect the same series currently being inserted into, insertion must still succeed and the series index must end up in a valid initialized state (no dangling/empty index entries left behind).
+
+#### 5) Resize behavior (grow and shrink)
+`Resize` must continue to allocate a new backing buffer and migrate data, while keeping the storage consistent:
+* **Grow:** preserve all currently stored exemplars and keep `nextIndex` pointing to the next free slot.
+* **Shrink:** discard exemplars in **ingestion order** (oldest overwritten first) as needed to fit the new size, updating per-series chains and deleting now-empty series from the index.
+* After resizing, the per-series chains and stored exemplars must remain queryable via `Select` in correct order.
+* The return value of `Resize` must reflect how many exemplars were migrated/retained.
+
+#### 6) Data structure expectations
+The storage currently maintains an index mapping a series key to “oldest/newest exemplar position”. To support OOO insertion efficiently, the exemplar entries must additionally support backwards traversal (i.e., each stored entry can reference both next and previous in the per-series chain), and those pointers must be kept correct across insertions, evictions, and resizes.
+
+#### 7) Construction and integration updates
+The exemplar storage constructor must be updated to accept the OOO window parameter and normalize invalid values safely. Any in-tree callers that construct or reconfigure the exemplar storage (including head initialization/config application and test storage helpers) must be adapted to the new API and runtime window updates.
+
+### What must continue to hold
+* `Select` must filter by matcher and time range and return per-series exemplars in the maintained per-series order.
+* Concurrency safety must be preserved for `AddExemplar`, `Resize`, selection/querying, and runtime OOO window updates.

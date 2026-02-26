@@ -1,0 +1,54 @@
+### Goal
+
+Restore “rendered signature” handling to be **part of the persisted analyzer snapshot**, while keeping snapshot loading **backward-compatible** with older/legacy serialized states that may contain now-obsolete fields.
+
+The codebase currently contains a partial/incorrect split between:
+
+- **Persistent snapshot state** (`TreeSitterAnalyzer.AnalyzerState` and its `codeUnitState` map), and
+- **Transient runtime caches** (`ai.brokk.analyzer.cache.AnalyzerCache`)
+
+Your task is to make signatures behave as persistent per–`CodeUnit` data again, and align analysis, incremental updates, caching, and state serialization/deserialization accordingly.
+
+---
+
+### Required behavior changes
+
+#### 1) Persist signatures in per-CodeUnit state
+`TreeSitterAnalyzer.CodeUnitProperties` must represent per-code-unit information including:
+
+- children
+- **signatures**
+- ranges
+- hasBody
+
+Any logic that returns signatures (notably `TreeSitterAnalyzer.signaturesOf(CodeUnit)`) should obtain them from the immutable snapshot state (i.e., from `codeUnitProperties(codeUnit)`), not from a transient cache.
+
+During file analysis and merge/update flows, signatures produced from parsing must be stored into `CodeUnitProperties` and correctly merged when multiple definitions contribute to the same merged `CodeUnit` key (deduplicating as needed, consistent with existing merge patterns for children/ranges).
+
+#### 2) Remove signatures from the transient analyzer cache
+`ai.brokk.analyzer.cache.AnalyzerCache` should no longer manage a `signatures` cache:
+
+- no signatures cache field/accessor
+- `isEmpty()` and `snapshot()` must reflect the remaining caches only
+- any “transfer constructor” logic must only transfer the remaining caches
+
+All code paths that previously populated or read `cache.signatures()` must be updated or removed so the system compiles and signatures still work via persisted state.
+
+#### 3) Incremental update must not rely on cached signatures
+`TreeSitterAnalyzer.update(Set<ProjectFile> changedFiles)` (and related update plumbing) must produce a correct new snapshot where signatures are available from state after the update.
+
+Any cache filtering/transfer performed during update should apply only to caches that still exist; signatures must come from the recomputed/merged `AnalyzerState` content.
+
+#### 4) Snapshot I/O must serialize/deserialize signatures and tolerate legacy fields
+`TreeSitterStateIO` must be able to:
+
+- Serialize `CodeUnitProperties` including signatures.
+- Deserialize into the new `CodeUnitProperties` shape.
+- Load legacy snapshots that may contain extra/obsolete per-code-unit fields (for example historical supertype-related fields), without failing.
+
+Concretely, the DTO representing persisted `CodeUnitProperties` must include a `signatures` field, and the deserialization layer must ignore unknown properties so that older payloads with additional keys can still be loaded.
+
+---
+
+### Documentation consistency
+Update any internal documentation in the analyzer module that describes what belongs in persistent `AnalyzerState` vs transient `AnalyzerCache` so it matches the restored model (signatures are persisted with the snapshot state).

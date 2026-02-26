@@ -1,0 +1,36 @@
+Implement a new Repairs warning and fix flow for Shelly Gen 1 (CoAP / “block”) devices when CoIoT push updates are not correctly configured.
+
+### Functional requirements
+
+1. **New Repairs issue type**
+   - Introduce a new issue id template (in the Shelly integration constants) for a “CoIoT unconfigured” warning, uniquely scoped per config entry.
+   - During Shelly block-device entry setup, evaluate the device’s CoIoT configuration and create or delete the issue accordingly.
+
+2. **When to create / delete the issue**
+   - Read the device’s CoIoT settings from the block device settings structure.
+   - Create a warning issue (fixable, non-persistent) when:
+     - CoIoT is disabled, **or**
+     - a peer address is set but does not match Home Assistant’s address.
+   - Delete the issue when CoIoT is enabled and the peer matches Home Assistant’s address.
+   - Do **not** create an issue when:
+     - the device does not expose CoIoT settings at all (missing key), or
+     - the device model is the Shelly Plug (Gen 1) variant that does not support CoIoT configuration.
+
+3. **Home Assistant address / port helpers**
+   - Add utility helpers to:
+     - derive Home Assistant’s host/address from the instance URL (and gracefully handle “no URL available”),
+     - obtain the configured CoAP/CoIoT UDP port from integration data (falling back to the default).
+   - Ensure existing code that starts the CoAP context uses the shared port helper (so port handling is consistent).
+
+4. **Fix flow**
+   - Add a Repairs fix flow for this issue that:
+     - shows a menu with “confirm” and “ignore” choices, using the issue translation placeholders (device name, IP) in the UI copy,
+     - on confirm: configures CoIoT on the Gen 1 device using Home Assistant’s address and CoIoT port, then reboots the device,
+     - aborts with an appropriate reason if Home Assistant’s URL/address cannot be determined or the device cannot be reached,
+     - on ignore: marks the issue ignored/dismissed via the issue registry.
+   - The fix flow must work with Gen 1 block devices. The repairs flow dispatch logic must choose the correct underlying device object depending on whether the config entry represents an RPC-generation device or a block-generation device.
+
+5. **Translations**
+   - Add the required strings entry for the new issue (title, description, menu option labels, and abort reasons), matching the translation keys used by the issue creation and fix flow.
+
+The provided tests cover issue creation/removal rules (including missing keys and special model handling), correct fix-flow routing and outcomes, URL-unavailable behavior, and the ignore path.

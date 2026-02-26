@@ -1,0 +1,37 @@
+Update the Tibber integration to simplify configuration around OAuth and to use a single Tibber client implementation throughout the integration.
+
+### Goals
+
+1. **Remove the “legacy access token” configuration path**
+   - Configuration should no longer prompt the user to manually enter a Tibber access token.
+   - The config entry data should be based on the OAuth token payload (stored under `CONF_TOKEN`), and must no longer store a separate legacy token key/alias.
+
+2. **Unify runtime client handling**
+   - `TibberRuntimeData` should expose an async method that returns an authenticated `tibber.Tibber` client created from the OAuth2 session access token.
+   - The client should be cached on the runtime object and reused; when a new access token is available it must be applied to the cached client.
+   - Client construction must include the Home Assistant aiohttp session and be configured with HA’s default time zone and SSL context.
+
+3. **Use the unified Tibber client everywhere**
+   - Places that previously read a stored connection object from `runtime_data` should instead retrieve the client via the runtime getter.
+   - The data API calls in the coordinator must be performed via the Tibber client’s Data API interface (e.g., through a `data_api` attribute), rather than instantiating/using a separate `TibberDataAPI` client directly.
+
+4. **Config flow changes (OAuth-only)**
+   - The OAuth finalize step must validate the obtained access token by connecting to Tibber and fetching basic account info.
+   - Transient connectivity errors during validation must not abort the flow; instead, show a dedicated “connection failed” step that allows retrying validation without restarting the flow.
+   - Invalid login/token errors must abort with the appropriate reason.
+   - Handle reauthentication:
+     - Start reauth with a confirmation step.
+     - After OAuth completes, ensure the account matches the existing entry’s unique ID; abort with a “wrong account” reason if it doesn’t.
+     - On successful reauth, update the existing entry with the new OAuth data and trigger reload using the standard reauth-success abort mechanism.
+   - Ensure unique ID handling prevents configuring multiple entries for the same account.
+
+5. **Integration setup/unload behavior**
+   - During config entry setup, obtain the Tibber client via the runtime method and call the appropriate Tibber “update”/info method to verify connectivity.
+   - Map authentication-related failures to `ConfigEntryAuthFailed` and connectivity/API failures to `ConfigEntryNotReady` as appropriate.
+   - Ensure realtime connections are disconnected on Home Assistant stop, and also on entry unload (using the unified client retrieval rather than a stored connection object).
+
+6. **Constants and translations**
+   - Remove any constants that only exist to support the legacy/manual-token flow.
+   - Update integration strings to reflect the new OAuth-only UX, including the new connection error step and abort reasons surfaced by the flow.
+
+The resulting implementation should satisfy the updated config flow behavior, coordinator behavior, and runtime client usage expected by the provided tests.

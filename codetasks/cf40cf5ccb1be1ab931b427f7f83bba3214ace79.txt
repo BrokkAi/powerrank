@@ -1,0 +1,21 @@
+### Problem: peer API services disappear from `Hostinfo` across repeated `Start` calls
+
+In `ipn/ipnlocal`, `LocalBackend` maintains a `tailcfg.Hostinfo` that is shared with the control client. Separately, the backend also advertises “peer API” endpoints (and related services) via the `Hostinfo.Services` field. These services are typically populated/adjusted when peer API listeners are initialized or updated.
+
+A bug exists where calling `Start` more than once can cause the peer API service entries to be removed from the `Hostinfo` seen by the control client, and they may not be re-added later if no triggering change occurs (for example, if the netmap addresses remain unchanged and listener setup short-circuits). This breaks features that depend on those services being consistently advertised (e.g., exit nodes).
+
+#### What you need to change
+
+Update the backend’s startup and hostinfo-update flow so that:
+
+1. **On initial control client creation**, the `Hostinfo` provided via `controlclient.Options` already includes the current peer API services (i.e., `Hostinfo.Services` reflects what the backend intends to advertise at that moment).
+2. **Subsequent no-op calls to `LocalBackend.Start`** do not “wipe” or regress the peer API service entries in the control client’s hostinfo.
+3. Hostinfo updates performed through the existing “filter/add services” logic (e.g., the path that ultimately calls `controlclient.Client.SetHostinfo`) remain correct and consistent with the backend’s peer API listener state.
+
+You may reference and adjust logic around these areas (names are stable and can be used directly):
+
+- `LocalBackend.startLocked` (how hostinfo is prepared/applied and what is passed into the control client options)
+- `LocalBackend.doSetHostinfoFilterServicesLocked` (how services are added/filtered before being sent to control)
+- Any helper(s) needed to ensure the backend can produce a `Hostinfo` view that includes the correct `Services` list while preserving the underlying hostinfo state
+
+The goal is to ensure the control client never ends up with a `Hostinfo` missing peer API services purely due to lifecycle calls like `Start`, even when there are no netmap/address changes to force a later repair.

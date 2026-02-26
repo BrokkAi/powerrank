@@ -1,0 +1,10 @@
+Add a new coordinator runtime metric that captures the *effective batch linger time*—the actual time a write batch spends waiting before it is flushed to the local partition. This value should be measured from when a batch is created/started (the batch’s append timestamp) until the moment the runtime begins flushing that batch, and it may be greater than the configured linger due to runtime queuing delays.
+
+Requirements:
+
+- Extend the coordinator runtime metrics API to expose a method for recording this linger duration (in milliseconds).
+- Implement the metric in the metrics implementation as a latency-style histogram with the same percentile/max breakdown used by the existing coordinator runtime histograms (e.g., p50/p95/p99/p999/max).
+- Ensure the metric is registered under the coordinator runtime metrics group using the name prefix `batch-linger-time-ms` (with the percentile/max suffixes appended consistently with other histograms).
+- Ensure the metric sensors are properly cleaned up when metrics are closed, consistent with existing sensors.
+- Wire the measurement into the coordinator runtime so that each time a batch is flushed/appended, the runtime records the effective linger time for that batch using the batch’s timestamp and the current time at flush start.
+- Update the operational documentation entry for group coordinator metrics to include the new “Batch Linger Time (Ms)” JMX metric name pattern and description, consistent with the existing metrics table format.

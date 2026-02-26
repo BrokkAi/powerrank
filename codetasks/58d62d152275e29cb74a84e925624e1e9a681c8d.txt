@@ -1,0 +1,39 @@
+Update Kafka’s protocol type system and protocol documentation rendering to explicitly distinguish *nullable* vs *non-nullable* composite types, and ensure generated message serializers remain consistent with the generic `Schema`/`Struct` serialization.
+
+### Required changes
+
+1. **Formalize nullable/non-nullable RECORDS and COMPACT_RECORDS**
+   - Split the existing “records” types into separate non-nullable and nullable variants.
+   - The non-nullable variants must reject `null` values and serialize using the non-nullable bytes encodings.
+   - The nullable variants must accept `null` and use the nullable bytes encodings and null-length conventions.
+   - Any code that scans schemas to detect “buffer-like” fields (bytes/records) must recognize all variants.
+
+2. **Formalize nullable vs non-nullable arrays (regular and compact)**
+   - `ArrayOf` and `CompactArrayOf` must have distinct type identities for nullable vs non-nullable forms (including `typeName()` / `toString()` differences).
+   - Both array types must expose a bracket representation used by protocol doc generation:
+     - regular arrays render as `[...]`, nullable as `?[...]`
+     - compact arrays render as `(...)`, nullable as `?(...)`
+
+3. **Introduce a nullable struct type**
+   - Add a `NullableSchema` type that represents a struct which may be `null`.
+   - A nullable struct must be encoded with an explicit one-byte null indicator:
+     - `-1` for null, otherwise `1` followed by the normal struct field encoding
+   - It must integrate with validation (`validate`), sizing (`sizeOf`), reading, and writing.
+   - `Schema` itself should represent a non-nullable struct by default and provide doc-bracket rendering `{...}`. The nullable form must render as `?{...}`.
+
+4. **Protocol documentation rendering updates**
+   - Update HTML/BnF generation so that it uses the new bracket rendering APIs instead of hardcoded `[` / `]` and so that top-level schemas are rendered using their own bracket style.
+   - Ensure tagged field array rendering uses the correct brackets for the array type being rendered.
+   - Fix any response documentation rendering that incorrectly uses the wrong schema variable.
+
+5. **Message/schema generator alignment**
+   - Ensure the message schema generator emits the correct schema type constants/constructs:
+     - records fields must choose among the four records variants based on flexibility and nullability
+     - struct fields referencing shared schemas are non-nullable by default; when a struct field is nullable, it must be represented as a nullable wrapper around the referenced shared schema rather than treating the shared schema itself as nullable.
+
+6. **Update primitive type documentation list**
+   - The protocol type documentation table should include examples of struct and nullable struct types in addition to existing primitives/arrays.
+
+### Outcome
+
+After these changes, the protocol type system should have clear, separate runtime types and documentation identities for nullable vs non-nullable arrays, compact arrays, records, compact records, and structs; protocol HTML output should use the new syntax; generated message read/write logic and the generic `Schema`/`Struct` serialization must remain byte-for-byte consistent for the same messages.

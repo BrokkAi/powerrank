@@ -1,0 +1,45 @@
+Update Brokk’s session-resume behavior to be explicit, add a dedicated CLI entry point for resuming by session ID, and print a helpful “resume hint” on exit only when the finished session actually contains task history.
+
+### Required behavior changes
+
+#### 1) Session resumption must no longer be the default
+The application should create a new session unless the user explicitly requests resumption. This includes updating the default value used when constructing `BrokkApp` so that “resume last session” is opt-in rather than opt-out.
+
+#### 2) CLI: make resumption explicit and add a `resume` subcommand
+Extend the CLI in `brokk_code/__main__.py` to support:
+
+- A `--resume` flag that resumes the last-used session for the selected workspace (as opposed to starting a new one).
+- A `resume <session_id>` subcommand that resumes a specific session by ID.
+  - This subcommand must accept the same common runtime arguments as the other modes (e.g., workspace/vendor options).
+  - When invoked, it should start the app with the provided session ID and must not depend on any “resume last session” flag logic.
+
+The existing `--session <id>` argument remains supported as an “attempt to resume a specific session id” style input to the app.
+
+#### 3) Print a “resume hint” after the app exits (only when meaningful)
+After `BrokkApp.run()` completes in `__main__`, print a single-line command users can run to resume the session they just used, in the form:
+
+- `brokk-code resume <session_id>`
+
+However, this hint must only be printed when:
+- A “last session id” exists for the workspace, and
+- The corresponding persisted session archive contains at least one qualifying “task” entry (see below).
+
+If the session archive is missing, corrupt, lacks the needed file, or contains no qualifying tasks, no hint should be printed.
+
+#### 4) Implement task detection for a saved session zip
+Add logic in `brokk_code/session_persistence.py` to determine whether a session zip contains task history:
+
+- Implement a `has_tasks(zip_path: Path) -> bool` function.
+- It should inspect `contexts.jsonl` inside the zip and return `True` if any entry indicates at least one valid task.
+- A task is considered present when a JSONL record contains a `tasks` array with at least one dict-like task that includes:
+  - a numeric `sequence`, and
+  - at least one non-null “meta” field among: `taskType`, `primaryModelName`, `primaryModelReasoning`.
+
+Robustness and performance requirements:
+- Be tolerant of missing zip files, missing `contexts.jsonl`, bad zips, OS/IO errors, and malformed JSON lines (treat as “no tasks” rather than raising).
+- Avoid unbounded reads: limit scanning by both total bytes read and number of lines examined (constants should be defined in the module).
+- Handle `contexts.jsonl` that may not end with a trailing newline (i.e., the last record can be a partial line at EOF and must still be considered).
+
+### Notes
+- The CLI routing must ensure the right `session_id`/`resume_session` values are passed into `BrokkApp` for each invocation style.
+- The resume-hint feature should rely on existing session persistence helpers for “last session id” and session-zip location, plus the new task-detection helper.

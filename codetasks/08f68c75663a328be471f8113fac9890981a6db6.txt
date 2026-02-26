@@ -1,0 +1,23 @@
+### Problem: Stop retrying uploads that exceed the server size limit
+
+A bug in session synchronization causes certain sessions to be re-uploaded on every sync cycle even when the server has already rejected the upload because the payload is too large (HTTP **413**). This results in repeated failures and wasted work.
+
+Update the session sync flow so that:
+
+1. **Oversized uploads are remembered locally**
+   - When an **UPLOAD** operation fails specifically due to an HTTP **413 Payload Too Large** response, the session’s UUID must be recorded in a small piece of persistent sync state stored under the sessions directory (e.g., a JSON file in a dedicated subdirectory).
+   - This state must be readable/writable across runs and robust to missing or malformed files.
+   - Deserialization must tolerate unknown JSON fields.
+
+2. **Future sync planning skips known-oversized uploads**
+   - The sync planner must take this persisted “oversized session IDs” information into account.
+   - If a session is marked oversized, the planner must not schedule **UPLOAD** actions for it (including cases where the session is local-only or where local is newer than remote).
+   - Other action types (e.g., **DOWNLOAD**, deletes) must continue to be planned normally.
+
+3. **Unreadable sessions are still handled correctly**
+   - Sessions identified as “unreadable” must not result in attempted downloads. Ensure this exclusion is enforced consistently during planning.
+
+4. **Concurrency safety**
+   - Reads/writes of the persisted sync state must be safe when sync logic is invoked concurrently (e.g., prevent corrupt or interleaved updates).
+
+Your changes should integrate with the existing `SessionSynchronizer` / planner / executor design. The updated API surface should support passing the persisted sync state into planning, and execution should update that state when a 413 upload failure occurs.

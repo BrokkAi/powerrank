@@ -1,0 +1,36 @@
+Tree-sitter reports node boundaries in **UTF-8 byte offsets**, but much of the analyzer code currently treats those offsets as Java `String` indices (or repeatedly re-encodes Strings to bytes). This causes incorrect slicing when the source contains non-ASCII characters and adds avoidable allocation overhead.
+
+Update the analyzer implementation to introduce a small, reusable source wrapper and refactor byte-based slicing throughout so node text extraction is correct and efficient for any UTF-8 content.
+
+### Requirements
+
+1. **Add `ai.brokk.analyzer.SourceContent`**
+   - Encapsulate:
+     - the canonicalized source `String` (UTF-8 BOM removed)
+     - its UTF-8 `byte[]` representation (cached)
+   - Provide APIs used by analyzers/tests:
+     - `static SourceContent of(String src)`
+     - `static Optional<SourceContent> read(ProjectFile file)`
+     - `String text()`, `byte[] utf8Bytes()`, `int byteLength()`
+     - `String substringFromBytes(int startByte, int endByte)` extracting `[startByte, endByte)` from the cached UTF-8 bytes with safe bounds handling (invalid ranges produce an empty string; end past EOF clamps)
+     - `String substringFrom(TSNode node)` using the node’s start/end bytes
+     - Conversions:
+       - `int byteOffsetToCharPosition(int byteOffset)`
+       - `int charPositionToByteOffset(int charPosition)`
+   - Implement meaningful `equals`, `hashCode`, and `toString` consistent with the stored content.
+
+2. **Refactor AST and analyzer slicing to use `SourceContent`**
+   - Replace APIs that accept raw `String` and/or `byte[]` for slicing with `SourceContent` equivalents where node text or byte-range extraction is required.
+   - Update `ASTTraversalUtils.extractNodeText(...)` and any helpers that were previously responsible for converting byte offsets to character offsets so that extraction is performed via the new wrapper.
+   - Update `TreeSitterAnalyzer` and language-specific analyzers to pass a `SourceContent` instance through the analysis pipeline (including signature building, package/namespace determination, receiver extraction, decorator handling, and any override hooks that previously received `String`/`byte[]`).
+
+3. **SQL byte/char offset handling**
+   - In `SqlAnalyzer`, ensure conversions between regex-derived character positions and stored byte ranges are performed via the new conversion API (not via ad-hoc UTF-8 re-encoding of substrings).
+   - Skeleton extraction for SQL ranges must slice the statement text using byte offsets correctly.
+
+4. **Behavioral expectations**
+   - Extracting node text must be correct for sources containing multi-byte UTF-8 characters (accented characters, emoji, etc.).
+   - BOM handling must be consistent: the exposed `text()` should not include a UTF-8 BOM, and byte offsets/slicing should align with the BOM-stripped content.
+   - Range validation in byte slicing should be defensive (empty results for invalid ranges; clamping for end beyond EOF).
+
+The provided tests include coverage for the new wrapper (BOM stripping, UTF-8 slicing, boundary cases, conversions, and equality) and existing analyzer behavior that depends on correct byte-range extraction.

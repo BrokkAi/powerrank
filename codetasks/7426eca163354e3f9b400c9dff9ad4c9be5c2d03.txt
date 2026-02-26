@@ -1,0 +1,34 @@
+Add support for configuring and propagating “static relay server endpoints” through Tailscale prefs and the relayserver feature.
+
+### Goal
+Introduce a new preference, `RelayServerStaticEndpoints`, representing a list of static `IP:port` candidates that a relay server can advertise for incoming relay connections. Expose it via a new CLI flag and ensure it is carried through the prefs/view/clone/equality logic and applied to the running relay server implementation.
+
+### Requirements
+
+#### 1) New CLI flag (`cmd/tailscale/cli`)
+- Extend `tailscale set` to accept a string flag named `--relay-server-static-endpoints`.
+- The flag value is a comma-separated list of `IP:port` endpoints (supporting IPv4 and bracketed IPv6 forms like `[2001:db8::1]:40000`).
+- When provided, parse and validate every endpoint; invalid entries must cause a clear error indicating which entry is invalid.
+- The resulting stored preference must be deterministic: duplicates must not be preserved, and ordering must be stable across runs (i.e., do not depend on input order).
+- Integrate the flag into the “up” prefs-flag mapping so that “up/set-style” flag-to-pref wiring recognizes it.
+
+#### 2) Preferences plumbing (`ipn`)
+Add a new field to `ipn.Prefs`:
+- `RelayServerStaticEndpoints []netip.AddrPort` with appropriate JSON behavior.
+- Treat it as only meaningful when the relay server is enabled (i.e., when `RelayServerPort` is non-nil), but it must still be stored/round-tripped as a preference value.
+
+Update related prefs infrastructure:
+- `Prefs.Clone` must deep-copy the slice.
+- `PrefsView` must expose a read-only accessor for this slice.
+- `Prefs.Equals` must account for this field.
+- `Prefs.pretty` should include this field in its human-readable output when relevant.
+- `MaskedPrefs` must gain a corresponding “set” boolean so the field can be applied via masked edits.
+
+#### 3) Relay server feature integration (`feature/relayserver`)
+- Extend the internal relay server abstraction to accept the static endpoints list (as a read-only slice/view type consistent with the surrounding code).
+- Ensure the relayserver extension captures updated values from prefs changes and applies them to the running relay server instance.
+- Static endpoints updates must be applied whether the relay server is already running or newly started as a result of a prefs change.
+
+### Notes
+- Use `net/netip` types for endpoint parsing/storage.
+- Keep the implementation compatible with existing code patterns in `ipn` view types and masked prefs application.

@@ -1,0 +1,43 @@
+Extend the Daikin integration to expose *per-zone target temperature control* as additional `climate` entities when the underlying device reports zone capabilities.
+
+### Functional requirements
+
+1. **Zone temperature entities**
+   - When setting up the Daikin `climate` platform, detect whether the connected device supports zone temperature control.
+   - If supported, create one additional `climate` entity per *configured* zone (zones with an unconfigured name must be ignored).
+   - Each zone entity must have a stable unique ID derived from the device and the zone index, and a human-friendly name based on the zone name.
+   - These zone entities represent **target temperature only** (no fan, swing, etc.).
+
+2. **Support detection**
+   - Only expose zone temperature entities if:
+     - The device reports zones, and
+     - The device exposes both heating and cooling zone temperature lists, and
+     - Those lists are long enough to cover all zones.
+
+3. **Mode and temperature behavior**
+   - A zone entity’s HVAC mode must mirror the main unit’s current HVAC mode; it must not offer mode changes itself.
+   - The zone entity must only allow setting a temperature when the main unit is in **heat** or **cool** mode.
+   - The zone entity’s `target_temperature` must reflect the zone temperature for the currently active mode (heat uses the heating list; cool uses the cooling list). For other modes, it should not expose a target temperature value.
+
+4. **Temperature limits**
+   - Zone temperature selection must be constrained to a small window around the system target temperature reported by the device:
+     - `min_temp = system_target - 2`
+     - `max_temp = system_target + 2`
+   - If the system target temperature is missing or not parseable, the zone entity must be unavailable.
+
+5. **Service behavior and errors**
+   - Calling `climate.set_temperature` on a zone entity must:
+     - Require a temperature parameter.
+     - Validate that the zone still exists and is configured.
+     - Validate that the device still exposes the required zone parameters.
+     - Translate backend failures into `HomeAssistantError` instances with Daikin-specific translation metadata.
+   - Calling `climate.set_hvac_mode` on a zone entity must be rejected with a translated error indicating the zone mode is read-only.
+
+6. **Constants and zone configuration**
+   - Centralize the marker used by the device to indicate an unconfigured zone name (currently `"-"`) into a shared constant so both climate and switch logic use the same value.
+
+7. **Translations**
+   - Add translation strings for the new error cases raised by zone temperature operations (unsupported mode, missing temperature, zone inactive/missing, parameters unavailable, update failure, read-only HVAC mode).
+
+### Files involved
+Your changes should integrate cleanly with the existing Daikin coordinator/entity structure, add the zone temperature functionality to the climate platform, update any existing zone filtering that relied on the hardcoded unconfigured marker, and provide the translation entries required for the new errors.

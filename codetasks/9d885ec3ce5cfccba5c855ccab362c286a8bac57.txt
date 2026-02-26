@@ -1,0 +1,37 @@
+### Problem: Fix Python import resolution to match real Python semantics (explicit, wildcard, packages)
+
+The current Python import resolver in the analyzer does not behave like Python when multiple imports introduce the same symbol name, and it does not correctly support `from ... import *` (including relative wildcards and package `__init__.py` cases). Update the implementation so import resolution matches Python’s execution/override rules and supports wildcard expansion.
+
+#### Required behaviors
+
+1. **“Last import wins” name shadowing**
+   - Python executes import statements in order; if two imports (explicit or wildcard-expanded) provide the same imported name, the later one must override the earlier one.
+   - This must apply across combinations:
+     - explicit after explicit
+     - wildcard after explicit
+     - explicit after wildcard
+     - wildcard after wildcard
+   - The result should contain only the final binding per imported name, not multiple candidates.
+
+2. **Wildcard imports (`from X import *`)**
+   - Support resolving wildcard imports and expanding them into the symbols that become available in the importing module.
+   - Only **public** top-level symbols should be imported (i.e., exclude names starting with `_`).
+   - Wildcard expansion must include **classes and functions** (not just one of them).
+
+3. **Relative wildcard imports**
+   - Handle relative wildcard forms such as `from . import *` and `from ..module import *` by resolving the relative module/package to an absolute module path before expanding.
+   - These should participate in the same “last import wins” override behavior.
+
+4. **Package imports via `__init__.py`**
+   - When resolving `from pkg import Name` or `from pkg import *`, treat `pkg` as a package when appropriate and resolve symbols from the package’s `__init__.py` if there is no corresponding `pkg.py` module file.
+   - This applies to both wildcard imports and explicit symbol imports.
+
+5. **Explicit `from X import Y` should resolve functions as well as classes**
+   - If `Y` refers to a top-level function, it must be resolvable the same way as a class.
+
+6. **Tree-sitter query support for wildcard imports**
+   - The analyzer relies on Tree-sitter captures to extract import components. Ensure wildcard imports and relative wildcard imports are captured distinctly enough to drive correct resolution.
+
+#### Notes / constraints
+- Import aliases may appear (e.g., `from a import b as c`). The resolver should still apply “last import wins” consistently for what it records as the imported binding name(s) according to the analyzer’s representation.
+- The change must integrate into the existing analyzer architecture (Tree-sitter parsing, declaration/definition lookup, etc.) and preserve correct resolution for non-wildcard imports.

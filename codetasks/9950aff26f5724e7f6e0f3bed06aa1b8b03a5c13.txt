@@ -1,0 +1,46 @@
+Improve the Python and Tree-sitter based analyzers to correctly model Python scoping/override semantics and to make duplicate-handling consistent and safe across languages.
+
+### Required behavior changes
+
+#### 1) Python: function-local classes must be uniquely scoped and correctly parented
+Python classes defined inside functions must not collide across different functions. They must:
+- Produce deterministic, unique FQNs that reflect the enclosing function scope.
+- Support further nesting (e.g., class inside a function-local class) without ambiguity.
+- Attach as children of the enclosing function in the analyzer’s parent/child graph.
+- Continue to represent methods using the project’s existing “method naming” convention (i.e., method FQNs should still use the expected separator/structure for methods, even when the class is function-local).
+- Correctly handle underscore-prefixed function names when deciding whether a scope segment represents a function vs a class (e.g., `_private_function`, `__dunder__`).
+
+Packaged modules must also work: when a function is in a package/module, the analyzer must still be able to resolve function-local classes back to the correct parent function CU even though function CUs include module qualification.
+
+#### 2) Python: “last assignment/definition wins” semantics for duplicates
+Python runtime semantics replace earlier top-level definitions with later ones. The analyzer must reflect this by ensuring that when multiple definitions produce the same FQN in the same file, the last one wins for:
+- Top-level variables (duplicate assignments).
+- Top-level functions (redefinitions).
+- Top-level classes (redefinitions).
+- Duplicate children within a scope (e.g., duplicate methods, duplicate nested classes, duplicate class attributes).
+
+When a later duplicate replaces an earlier one, the analyzer must not leave stale/orphaned children/signatures/ranges from the replaced definition in its internal structures or returned results.
+
+#### 3) Python: property setters/deleters should not create duplicate methods
+In Python class bodies, decorated property setters and deleters should not be emitted as separate function CUs when they would duplicate the corresponding property getter’s logical API surface. The analyzer should still include:
+- The property getter.
+- Regular methods (including ones whose names contain “setter” as part of the identifier but are not property decorators).
+
+Setter/deleter filtering must work for decorated definitions (Python’s decorator syntax structure) and must not incorrectly suppress unrelated functions.
+
+#### 4) Tree-sitter analyzer core: robust duplicate handling and null-safety
+Across languages (not only Python), improve the Tree-sitter analyzer so it:
+- Tolerates `createCodeUnit(...)` returning `null` without error spam and without producing duplicates.
+- Prevents duplicate top-level CUs and duplicate children from appearing in results.
+- Supports language-specific policies for duplicate resolution (some languages keep-first, Python replaces with last).
+- Does not break signature collection/merging behavior for languages that intentionally merge multiple declarations under the same FQN (e.g., exported vs non-exported forms).
+- Resets per-file analysis state correctly so analyzing multiple files does not cross-contaminate results.
+
+#### 5) Shared capture-name usage
+Capture names referenced by analyzers must be centralized as shared constants (to avoid string drift) and used consistently across language analyzers that participate in the Tree-sitter pipeline.
+
+#### 6) Go (Tree-sitter): receiver-aware method naming must remain correct
+Method CUs in Go must incorporate the receiver type in the produced naming scheme as expected by the rest of the system. The receiver extraction must work reliably from Tree-sitter captures and be integrated into the generic Tree-sitter analyzer flow rather than being hard-coded in the base implementation.
+
+### Files involved
+The updated tests reference Python fixtures under `app/src/test/resources/testcode-py/` and Java tests in `app/src/test/java/ai/brokk/analyzer/PythonAnalyzerTest.java`. The changes also affect the shared Tree-sitter analyzer infrastructure and multiple language analyzers that use capture names.

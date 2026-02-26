@@ -1,0 +1,38 @@
+You’re working in the registration / key-management request-model layer. A previous change introduced new nested request DTOs for “master password unlock/authentication data” and moved KDF input handling into those nested structures. That approach is being rolled back: registration finish should once again be driven by the legacy, top-level fields (master password hash, user symmetric key, and KDF settings), while still keeping request-side KDF DTOs available in the API layer for other endpoints.
+
+Implement the rollback cleanly so the API compiles and the registration flow behaves consistently with the legacy contract.
+
+### Required outcomes
+
+1. **API-side KeyManagement request DTOs exist**
+   - Introduce API-layer request models for KDF and master-password-related payloads under the API KeyManagement namespace.
+   - These models must be usable by other API request models (e.g., password / initial password flows), support DataAnnotations validation where appropriate, and provide conversion methods into the corresponding Core “data” types.
+
+2. **Core no longer exposes API request DTOs**
+   - The previous Core-level request DTOs for KDF and master-password unlock/authentication must not be depended on by API request models anymore.
+   - Update references accordingly so the API layer imports the API-layer DTOs, and Core remains focused on non-request “data” types.
+
+3. **`RegisterFinishRequestModel` returns to legacy shape**
+   - The registration finish request model should be based on required, top-level fields:
+     - a required master password hash
+     - a required user symmetric key
+     - required KDF type and iteration count (with optional memory/parallelism)
+   - Any nested “master password unlock/authentication” request properties used by the earlier migration should no longer drive registration finish behavior.
+   - `ToUser()` should populate the `User` entity from these top-level fields (KDF settings + key + asymmetric keys), without sourcing values from nested structures.
+
+4. **Registration finish validation focuses on KDF settings**
+   - Model-level validation for registration finish should validate KDF settings using the shared KDF validator and return its results.
+   - Validation behavior that attempted to reconcile nested unlock/auth structures, compare hashes, or validate token presence at the model level should not be required for this exercise.
+
+5. **Token-type resolution rules match the legacy expectations**
+   - `GetTokenType()` must correctly distinguish among the supported registration token types.
+   - For token types that include an accompanying GUID, treat “present” consistently with legacy semantics (i.e., don’t require an explicit non-empty GUID check if the ID is supplied as a nullable value).
+
+6. **Identity registration finish handler uses the legacy hash**
+   - The Identity controller action for `POST register/finish` must forward the correct master password hash coming from the legacy top-level property.
+   - Ensure the controller handles nullable GUID inputs safely for the token types that require them (without reintroducing the removed nested master-password structures).
+
+7. **Error messaging for invalid KDF settings aligns with the new expectations**
+   - When KDF settings are invalid during registration finish, the surfaced error message/content should match what the tests assert (it should be tied to “KDF settings” rather than a generic “model state is invalid” response).
+
+The provided tests cover both API request-model wiring (namespaces, conversions, annotations) and end-to-end registration finish behavior (including invalid KDF handling). Your changes should make all of them pass without reintroducing the removed nested-registration DTO approach.

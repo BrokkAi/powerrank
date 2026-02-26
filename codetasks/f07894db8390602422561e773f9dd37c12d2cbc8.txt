@@ -1,0 +1,27 @@
+Implement persistence and worktree-isolation hardening around analyzer caches and TreeSitter analyzer state.
+
+### 1) TreeSitter analyzer state persistence must be robust and atomic
+The `ai.brokk.analyzer.TreeSitterStateIO` save/load API must be strengthened:
+
+- **Saving must be atomic and resilient**: writing analyzer state should not risk leaving a partially-written/corrupt state file if the process crashes or is interrupted. The final output should appear “all at once” to readers, and the implementation must avoid leaving behind temporary artifacts after a successful save.
+- **Non-atomic filesystem behavior must be handled**: on some platforms/filesystems atomic renames may not be supported, and replace operations may fail transiently (e.g., due to file locks). Saving must still succeed by using a safe fallback strategy that tolerates transient failures.
+- **Cleanup on failure**: if saving fails, any temporary file created as part of the save process must be cleaned up when possible.
+- **Loading must fail closed**: `load(Path)` must return `Optional.empty()` when the state file is missing, incompatible, corrupt, or truncated (including gzip-related corruption), and it must not crash callers in those cases. It should also provide improved diagnostics (without changing the API shape).
+- **Threading contract**: mark the persistence operations appropriately as blocking.
+
+### 2) Worktree creation must not reuse analyzer caches
+In `ai.brokk.gui.git.GitWorktreeTab`, creating a new git worktree must **not** copy, hard-link, or otherwise replicate analyzer storage caches from the parent project into the new worktree. Each worktree must start with its own analyzer cache state isolated to that worktree’s root.
+
+This includes ensuring that no hard links are created as part of worktree setup (even opportunistically), and that the cache remains absent in the new worktree unless naturally created later by analysis.
+
+### 3) Analyzer storage paths must be root-isolated
+Language-specific analyzer storage paths must be **different for different project roots** (even when the enabled language is the same). In other words, `Language.getStoragePath(IProject)` must incorporate the project root such that two distinct roots do not collide to the same absolute normalized path.
+
+### 4) Test infrastructure expectations
+Some tests use lightweight/mocked git and language implementations (e.g., a test `GitRepo` and a test `Language`) to validate behavior. Your changes must be compatible with these patterns, including worktree creation flows that rely on `GitRepo` abstractions rather than invoking real git operations.
+
+The end result should ensure:
+- analyzer state files can be saved and loaded reliably across platforms,
+- corrupt/incompatible state files trigger rebuild behavior via empty loads rather than exceptions,
+- worktree creation does not propagate analyzer caches,
+- and storage locations remain isolated per project root.

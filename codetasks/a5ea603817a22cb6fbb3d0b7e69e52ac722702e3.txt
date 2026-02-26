@@ -1,0 +1,30 @@
+Implement a new “policy changed” push notification that is emitted whenever an organization policy is created or updated, and ensure it is delivered to connected clients via the notifications hub.
+
+### Requirements
+
+1. **New push payload model**
+   - Add a new push-notification payload type in the core push-notification models:
+     - Name: `SyncPolicyPushNotification`
+     - Fields:
+       - `OrganizationId` (`Guid`)
+       - `Policy` (a full `Policy` entity; required)
+
+2. **New push type**
+   - Extend the push-type enum with a new value representing a policy change (e.g., `PolicyChanged`).
+   - Register the new type with the existing notification metadata mechanism (the same attribute/registration pattern used by other push types), associating it with the `SyncPolicyPushNotification` payload type.
+
+3. **Emit push notifications on policy saves**
+   - When saving policies through both policy-save command paths (the “current” save command and the “vNext” save command), send a push notification after the policy has been persisted.
+   - The notification must:
+     - Use the new push type (`PolicyChanged`)
+     - Target an **organization** (not a user)
+     - Use the organization id as the target id
+     - Include a payload containing the organization id and the saved/updated policy (reflecting the final persisted values)
+     - Not exclude the current context (i.e., it should be delivered even to the initiating context)
+
+4. **Route notifications through the hub**
+   - Update the hub notification dispatcher so that when it receives the new push type, it forwards the message to the **organization SignalR group** used by the notifications hub (the same group naming scheme already used elsewhere for organization-scoped notifications).
+   - The forwarded message should be the deserialized `PushNotificationData<SyncPolicyPushNotification>` for that notification.
+
+5. **Dependency updates**
+   - Wherever the save commands are constructed, ensure they can receive the push-notification service dependency required to send these notifications (consistent with the project’s existing DI style).

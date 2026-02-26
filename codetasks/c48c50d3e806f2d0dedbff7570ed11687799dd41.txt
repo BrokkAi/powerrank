@@ -1,0 +1,44 @@
+You’re working on Kafka Streams internals around the **state updater thread** and **shutdown/cleanup semantics**.
+
+### Context
+
+`DefaultStateUpdater` performs background work on tasks (restoration, pausing/resuming, checkpointing, removal, etc.). As part of this work it invokes `Task#maybeCheckpoint(...)` in multiple flows (eg, periodic checkpointing during restore, enforcing a checkpoint when pausing/removing, and when reacting to corruption).
+
+Two classes of problems must be fixed:
+
+1. **Exceptions thrown from `Task#maybeCheckpoint(...)` are not consistently handled**, which can:
+   - terminate or destabilize the state-updater thread,
+   - leave tasks stuck in internal tracking structures,
+   - or fail to surface the exception in a way the caller can properly clean up.
+
+2. **`TaskManager` shutdown can hang indefinitely** if the state updater thread is dead or otherwise cannot complete task removals. Shutdown must remain bounded and still ensure tasks are closed appropriately.
+
+### Requirements
+
+#### 1) Make `DefaultStateUpdater` resilient to checkpoint failures
+
+Update the state updater so that a `StreamsException` (including `ProcessorStateException`) thrown by `Task#maybeCheckpoint(...)`:
+
+- does **not** kill the state-updater thread or prevent it from continuing to process other tasks,
+- results in the failing task being moved into the updater’s existing “failed task + exception” reporting mechanism (so higher layers can close/handle it),
+- is correctly associated with the specific task when the failure occurs in code paths where the thrown exception may not itself contain a task id.
+
+Additionally, when handling task corruption (where changelogs are marked corrupted and a “cleanup checkpoint” is attempted), checkpoint failures during this cleanup attempt must be treated as non-fatal to the updater’s progress (the corruption handling should proceed without cascading failures).
+
+#### 2) Prevent `TaskManager` shutdown from blocking forever on state-updater removals
+
+`TaskManager` shuts down by removing tasks from the state updater and waiting for completion via the returned futures. If the state updater thread is dead, these futures may never complete.
+
+Change shutdown/removal behavior so that:
+
+- waiting for task removal is **bounded** (no indefinite waits),
+- if bounded waiting expires, shutdown continues and tasks are still cleaned up safely (eg, closed dirty when necessary),
+- any tasks already reported as failed by the state updater are handled during shutdown even if the stream threads are no longer running to periodically drain/report them,
+- the final shutdown of the state updater (and any related scheduling manager) uses finite time bounds appropriate for a shutdown path where tasks have already been removed.
+
+### What should be true after your changes
+
+- A checkpoint failure in the state updater (during restore, pause, removal, periodic checkpointing, or corruption handling) does not take down the updater thread and does not prevent other tasks from continuing.
+- The failing task is surfaced to `TaskManager` as a failed task with its exception.
+- During shutdown, `TaskManager` never hangs indefinitely waiting for the state updater; instead it proceeds with best-effort cleanup and closes any remaining/unremoved tasks.
+- The new integration and unit tests validating these scenarios pass, along with the pre-existing test suite.

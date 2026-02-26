@@ -1,0 +1,60 @@
+Implement support for hosting **Tailscale Services** from `tsnet` nodes, plus a small test-focused certificate hook and a few testcontrol enhancements.
+
+### 1) `tsnet`: add Service listeners
+
+Add a new API on `tsnet.Server`:
+
+- `ListenService(name string, mode ServiceMode) (*ServiceListener, error)`
+
+This function must:
+- Validate the Service name using `tailcfg.ServiceName` validation rules.
+- Require a non-nil `mode`.
+- Bring the node up (equivalent to ensuring the server is running/connected) before proceeding.
+- Refuse to host a Service when the node has no ACL tags, returning a sentinel error:
+  - `ErrUntaggedServiceHost` (exported).
+  - Rationale: Service hosts must be tag-authenticated identities.
+- Ensure the Service is advertised in the node’s preferences (AdvertiseServices). If it isn’t already present, update prefs to include it.
+- Update the node’s serve configuration to route incoming Service traffic to a local listener created by `ListenService`.
+
+Define:
+- `type ServiceMode interface { network() string }`
+- Two supported modes:
+  - `ServiceModeTCP` (advertise a TCP port; optionally terminate TLS; optionally emit PROXY protocol headers)
+  - `ServiceModeHTTP` (advertise an HTTP(S) port; allow configuring “app capabilities” forwarding by mount point; optionally emit PROXY protocol headers)
+- A returned `ServiceListener` that:
+  - Wraps an underlying `net.Listener` (it will be a local TCP listener bound on loopback with an ephemeral port).
+  - Exposes the Service’s FQDN (derived from the Service name and the current tailnet MagicDNS suffix) via a field like `FQDN`.
+  - Returns a `net.Addr` whose `String()` is the Service FQDN and advertised port (when applicable), and whose `Network()` matches the Service mode (for TCP/HTTP this is `tcp`).
+
+Serve/forwarding behavior:
+- For TCP Services: configure serve state so connections to `service-fqdn:port` are forwarded to the local loopback listener.
+- For HTTP Services: configure serve state so requests to `service-fqdn:port` are proxied to the local loopback listener; support per-mount-point capability forwarding; always ensure there is a handler at `/` even if capability mapping doesn’t explicitly include it. Normalize mount points to absolute-path form.
+
+Do not remove or change existing `tsnet` listener behavior; however, the internal address type used by listeners should correctly report its network and address string without depending on implicit access to listener internals.
+
+### 2) `ipnlocal`: test-only certificate injection
+
+Add a test-only mechanism to bypass normal ACME/cert registration when fetching cert PEMs:
+
+- Add a field on `ipnlocal.LocalBackend` to hold an optional test hook for certificate retrieval.
+- Add a method:
+  - `ConfigureCertsForTest(func(hostname string) (*TLSCertKeyPair, error))`
+  - Must assert it’s only used in tests.
+- Update `GetCertPEMWithValidity` so that, if the test hook is configured, it is used to return a `TLSCertKeyPair` for the requested domain immediately (also asserting test-only usage), skipping normal validation/ACME flow.
+
+This should integrate cleanly with existing `tsnet.Server` certificate handling (i.e., `tsnet` should no longer rely on a private `getCertForTesting` hook on `tsnet.Server`; tests should be able to configure certs via the backend).
+
+### 3) `tstest/integration/testcontrol`: capabilities + DNS + update forcing
+
+Enhance the integration test control server with:
+
+- A way to configure a **global app capability grant** that results in appropriate capability grants being included in map responses (represented as a packet filter rule granting capabilities to all destinations).
+- A helper to add extra DNS records to the server’s DNS config.
+- A helper that can force delivery of a (possibly redundant) netmap/mapresponse update to a specific streaming client, intended for deterministic test sequencing.
+- When a MagicDNS domain is configured, ensure node naming and certificate domain lists behave sensibly:
+  - Node names should be fully-qualified under the MagicDNS domain where applicable.
+  - Certificate domains should be appended rather than replacing existing entries.
+
+### Deliverables
+
+Your implementation should introduce the new `ListenService` API and supporting types, wire it through preferences and serve config updates, add the LocalBackend test certificate hook, and extend the test control server as described, such that all provided unit/integration tests compile and pass.

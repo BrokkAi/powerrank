@@ -1,0 +1,36 @@
+Implement AST-aware filtering for fuzzy “usage” search results so that plain-text matches inside comments or identifier declarations (e.g., method/field/parameter names) are not reported as real usages/references.
+
+### Goal
+`FuzzyUsageFinder` currently finds matches by scanning file text. Enhance it so language analyzers can veto matches that are *not* true references (such as comment text or the declared name of a symbol). Java should support this via Tree-sitter AST inspection; other languages should remain conservative and continue reporting matches unless they can prove a hit is non-referential.
+
+### Required functional changes
+
+#### 1) Analyzer API: “is this match a real access/reference?”
+Extend the analyzer abstraction to expose a method that decides whether a given UTF-8 **byte range** in a `ProjectFile` represents an access/reference expression rather than a declaration or comment. The default behavior must be permissive (treat as a reference) so existing analyzers keep working without modification.
+
+This API must work when an analyzer is wrapped/selected via a delegating analyzer (e.g., multi-language projects).
+
+#### 2) Java: AST-based filtering using Tree-sitter
+Enhance the Java analyzer to implement this decision using the parsed Tree-sitter AST:
+
+- Return **false** for matches occurring inside any kind of comment (including line/block/Javadoc).
+- Return **false** when the matched identifier is acting as the **declared name** within a declaration context (e.g., method name in a method declaration, variable name in a variable declarator, formal parameter name, and similar top-level type declarations).
+- Return **true** when the match corresponds to a genuine usage/access context (e.g., method invocation, field access, object creation, type reference, import usage, annotations, class literals, etc.).
+- If AST data is unavailable or cannot be obtained, behave conservatively and return **true** (do not filter).
+
+Byte offsets passed to this method are UTF-8 byte offsets, not Java `char` indices.
+
+#### 3) FuzzyUsageFinder integration
+When `FuzzyUsageFinder` finds a textual hit, it must consult the analyzer’s new API (when available via the interface) and skip hits that are identified as non-references.
+
+#### 4) Tree-sitter parsing availability and lifecycle
+The Java analyzer’s filtering relies on Tree-sitter parse trees being accessible for files that may not already have a cached tree. Update the Tree-sitter-based analyzer infrastructure so that:
+
+- Parse trees can be created **on demand** when needed (e.g., during usage search) by reading the file and parsing it.
+- Trees are cached to avoid repeated parsing, but the cache must be **bounded** to prevent unbounded native-memory growth (Tree-sitter trees hold native resources).
+- Analyzer state snapshotting must account for any lazily created trees so subsequent snapshots reflect that they exist in memory, while still ensuring that parse trees are **not serialized** into the persisted analyzer state.
+
+### Notes / constraints
+- Keep behavior for non-Java analyzers unchanged unless they explicitly opt into filtering.
+- Ensure the delegation analyzer routes the new API to the correct underlying analyzer for a file.
+- Maintain existing public contracts around analyzer state saving/loading: serialized state should not embed parse trees, but lazy parsing after reload must still work.

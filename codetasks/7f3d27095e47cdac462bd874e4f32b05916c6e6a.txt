@@ -1,0 +1,40 @@
+### Goal
+
+Enhance context fragment handling so the system can reliably discover which `ProjectFile`s are referenced by arbitrary pasted text—not just unified diffs—and ensure those references are preserved in fragment snapshots and serialization.
+
+### Required behavior
+
+#### 1) File extraction from arbitrary text
+When a fragment contains free-form text (e.g., compiler output, stack traces, pasted lists), the system must be able to extract associated `ProjectFile` references if the text contains recognizable project file paths.
+
+Key expectations:
+
+- Detect files when their project-relative path (or other canonical string form used by `ProjectFile#toString()`) appears anywhere inside the text, not only when the text is a clean list.
+- Handle paths that include spaces.
+- Only return files that exist in the project (i.e., are part of the project’s known file set); ignore unknown/non-existent paths.
+
+This capability must apply to at least:
+- `ContextFragment.StringFragment`
+- `ContextFragment.PasteTextFragment`
+
+#### 2) Diff parsing still supported, with precedence
+For text that *is* a unified diff, continue extracting affected files via the existing diff parsing logic. If diff parsing succeeds and yields files, those results must take precedence over any “plain text path” extraction.
+
+If diff parsing fails or yields no files, fall back to the plain text path extraction described above.
+
+#### 3) PasteTextFragment snapshots must include extracted files
+`PasteTextFragment` builds its `FragmentSnapshot` asynchronously (description/syntax may come from futures and may fail/timeout). Regardless of whether those futures succeed:
+
+- The snapshot produced for a `PasteTextFragment` must include the set of extracted `ProjectFile`s based on its pasted text content.
+- If the description/syntax futures fail, the fragment should still compute a usable snapshot (with its default description/syntax), and file extraction must still work.
+
+#### 4) Serialization must preserve extracted files
+When a context containing a `PasteTextFragment` is saved and loaded (e.g., via history zip), the loaded fragment must retain the same associated files as the original.
+
+#### 5) Path normalization: project-relative computation must be robust on Windows
+Update path normalization/relativization so that project-relative path handling is consistent across platforms, especially with Windows path separators. This should eliminate separator-related mismatches when comparing/relativizing paths against the project root.
+
+### Constraints / integration notes
+
+- The implementation should work with the project’s existing concept of “all project files” (as exposed by the project attached to the `IContextManager`) and should not invent new file discovery mechanisms.
+- Keep the behavior compatible with existing fragment types and snapshot construction; only extend what’s necessary to support the new extraction and persistence requirements.

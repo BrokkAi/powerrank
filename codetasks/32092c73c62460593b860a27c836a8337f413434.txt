@@ -1,0 +1,35 @@
+Extend the Tessie integration to expose **daily Energy Site “energy history” totals** as Home Assistant sensor entities.
+
+### Requirements
+
+1. **Energy history data source**
+   - Add support for fetching Energy Site *energy history* from the Fleet/Tessie `EnergySite` API using the **DAY** period.
+   - Poll this history endpoint on its own cadence (separate from live/status polling), approximately once per minute.
+
+2. **History availability / site eligibility**
+   - Only enable energy-history fetching and entities for energy sites that have **Powerwall-like capability**, i.e. sites where the product indicates either a battery component or a solar component.
+   - Sites that do not meet this criteria must not create the history coordinator/entities.
+
+3. **Sensors**
+   - Create one `sensor` entity per history field listed in a shared constant collection (e.g. `ENERGY_HISTORY_FIELDS`) containing keys such as grid imported/exported, solar exported, battery charged/discharged, total home usage, etc.
+   - Each sensor:
+     - Uses `SensorDeviceClass.ENERGY`
+     - Reports native units in **Wh** with a suggested display unit of **kWh** and precision suitable for energy totals
+     - Uses `SensorStateClass.TOTAL`
+     - Sets `last_reset` to the start timestamp of the current returned day period
+
+4. **Aggregation semantics**
+   - The history endpoint returns a `time_series` list. For each configured history key, the sensor value must represent the **sum** of that key across all points in the returned series.
+   - If a key is not present anywhere in the series, the corresponding sensor should be treated as having no value (and therefore be unavailable).
+
+5. **Error handling**
+   - Authentication failures from the history endpoint (e.g. invalid/missing token) must trigger Home Assistant reauth handling consistent with other Tessie coordinators.
+   - Other Fleet/Tessie API errors must be surfaced as update failures such that the history-backed entities become unavailable.
+   - If the response is structurally invalid (e.g. missing/empty `time_series`), treat it as an update failure with a translatable error message.
+
+6. **Integration wiring**
+   - Ensure config-entry setup performs the initial refresh for this new history coordinator where applicable, alongside existing vehicle/energy site coordinators.
+   - Update shared entity base types as needed so history-backed entities integrate cleanly with the coordinator/entity patterns already used in this integration.
+   - Add the necessary translation strings for the new sensor names and any new error translation keys used by the history coordinator.
+
+The provided test suite includes updated coordinator and sensor coverage (including snapshots). Implement the feature so all tests pass.

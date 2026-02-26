@@ -1,0 +1,9 @@
+OTLP metric data points may carry attributes whose keys collide with label names that the Prometheus remote-write translation sets separately. In particular, some OTLP producers include a `__name__` attribute. The Prometheus remote-write path also sets `__name__` from the metric name, which can lead to duplicate `__name__` labels in the final label set.
+
+Update the OTLP → Prometheus remote-write translation so that reserved label names coming from OTLP attributes are filtered out before constructing the final Prometheus label set. This should prevent duplicates when the reserved labels are also supplied through other inputs (e.g., the “extras”/explicit labels passed to attribute creation).
+
+The change must apply consistently across all metric types converted in `storage/remote/otlptranslator/prometheusremotewrite/` (e.g., number data points, histograms, summaries), so that any data point attributes containing `__name__` do not result in multiple `__name__` labels.
+
+Additionally, ensure the handling of the special labels used for type and unit (`__type__`, `__unit__`) remains correct: when type/unit label emission is enabled and metadata provides a type and/or unit, the resulting labels must reflect the metadata values even if the incoming OTLP attributes also contain `__type__`/`__unit__`.
+
+You may reference and adjust the behavior of `createAttributes` (in `helper.go`) and the call sites that build per-point labels, but the external behavior should match the expectations encoded in the provided tests.

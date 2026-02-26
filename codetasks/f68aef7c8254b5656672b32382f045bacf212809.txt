@@ -1,0 +1,45 @@
+Implement a cleanup of Goldfish’s “tolerance-based” comparison so that hash mismatches can be classified as “within tolerance” without changing the primary comparison status, and persist that information end-to-end (storage, retrieval, and UI DTOs).
+
+### Functional requirements
+
+1. **Introduce a persisted `match_within_tolerance` boolean**
+   - Add a new `match_within_tolerance` column to both `sampled_queries` and `comparison_outcomes` (default `false`, non-null), including a reversible migration.
+   - Ensure MySQL storage code writes this field when storing:
+     - Query samples (the `sampled_queries` insert).
+     - Comparison results (the `comparison_outcomes` upsert).
+   - Ensure MySQL storage code reads this field when loading sampled queries and when fetching a query by correlation ID.
+
+2. **Extend Goldfish types to carry the new field**
+   - Add `MatchWithinTolerance` to:
+     - `goldfish.QuerySample` (so the sampled query returned/stored can reflect it).
+     - `goldfish.ComparisonResult` (so the comparator/manager can set it and storage can persist it).
+
+3. **Change tolerance matching semantics**
+   - When the two responses are not an exact match (e.g., hashes differ) and a value-comparison-with-tolerance check determines they are equivalent:
+     - Keep `ComparisonStatus` as a mismatch (do not convert it into a match).
+     - Set `MatchWithinTolerance` to `true`.
+   - If tolerance comparison is not possible or fails, `MatchWithinTolerance` must remain `false`.
+   - Tolerance comparison must not run for “stream” result responses; it should only apply to non-stream metric-style responses.
+
+4. **Make tolerance comparison configurable from Goldfish config**
+   - Add a new Goldfish configuration option (flag + YAML field) to enable value-by-value comparison using a tolerance.
+   - When this tolerance is `0` (default), the tolerance comparator is disabled.
+   - When the tolerance is `> 0`, the Goldfish manager should internally construct and use an appropriate response comparator.
+   - Validate the new config value (it must be non-negative).
+
+5. **Propagate Loki response “result type” so stream results can be excluded**
+   - Update response capture/parsing so the comparison logic can determine whether a response is a stream vs non-stream.
+   - `CaptureResponse` / stats extraction should extract and return the Loki `data.resultType`, and that value must be available to the comparison logic.
+
+6. **Update UI-facing sampled query struct**
+   - Add `matchWithinTolerance` to the UI model returned for sampled queries and populate it from the persisted value (alongside the existing comparison status).
+
+### Integration notes (expected touchpoints)
+- The comparison logic lives in the Goldfish querytee comparator layer and should set the new field on the produced `ComparisonResult`.
+- The manager should no longer require an externally provided comparator; it should use the config to decide whether to create one.
+- Storage should persist and retrieve the new flag consistently for both per-sample records and per-correlation result records.
+
+The final behavior should allow the system to distinguish:
+- exact matches,
+- true mismatches,
+- and mismatches that are nevertheless “within tolerance,” with that distinction visible in stored data and returned APIs.

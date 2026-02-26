@@ -1,0 +1,58 @@
+### Goal
+
+Add support for routing eligible queries from the query-frontend to the “v2” query engine over HTTP, rather than requiring the v2 engine to be embedded in-process. This includes:
+
+1. A new HTTP address configuration for the query-frontend to contact the v2 engine.
+2. A v2-engine HTTP handler that can directly serve Loki query endpoints when the v2 engine runs in distributed mode.
+3. An updated engine-router middleware that routes to v2 based on time-range + “supported query” validation, and safely falls back to the v1 path if the v2 path reports “not implemented”.
+
+### Required behaviors
+
+#### 1) Configuration: v2 engine address
+Extend the queryrange/frontend configuration to accept a new string field for the destination address of the v2 engine, with:
+- YAML key: `v2_engine_address`
+- CLI flag: `-querier.v2-engine-address`
+- Default: empty string
+
+Also update the shared configuration documentation accordingly.
+
+#### 2) V2 engine HTTP handler
+Introduce an HTTP handler for the v2 engine that can serve both:
+- `/loki/api/v1/query_range`
+- `/loki/api/v1/query`
+
+The handler must:
+- Accept both “range” and “instant” Loki request types used by the queryrange layer.
+- Convert requests into `logql.Params` and execute them via an injected engine interface.
+- Enforce a “valid time range” gate based on the executor’s configured valid query range; requests outside the supported window must return an HTTP “not implemented” response.
+- Enforce the per-tenant `max_entries_limit_per_query` limit for log queries (but not for metric/sample queries). Missing tenant context should be treated as a client error.
+- Reject instant queries that are log-selector queries (only sample/metric expressions are allowed for instant queries), returning the existing “unsupported syntax for instant query” error used elsewhere.
+- If the underlying engine indicates a query is not supported (via the project’s “not supported” sentinel), translate that into an HTTP “not implemented” response (and log at warning level). Other execution errors should propagate as errors.
+
+The handler must integrate with the queryrange serialization/codec stack so it can be mounted as a normal HTTP endpoint.
+
+#### 3) Query-frontend routing to v2 over HTTP
+When the existing “enable v2 engine router” feature flag is enabled, the query-frontend middleware initialization must build a routing configuration for v2 that includes:
+- The v2 engine’s supported time bounds (derived from the v2 executor configuration).
+- A validation function to determine whether a given `logql.Params` is eligible for v2 execution.
+- A downstream handler that executes requests against the configured v2 engine address over HTTP (using the same codec as the queryrange stack).
+
+This routing configuration must be passed into the queryrange middleware construction so that the router can send eligible query sub-ranges to the v2 engine.
+
+#### 4) Engine router middleware updates (queryrange)
+Refactor the engine router so it is configured by a single “router config” object rather than separate start/end/handler arguments. The router must:
+- Decide whether to route to v2 based on both time window and the provided “supported query” validation function.
+- Execute v1 and v2 sub-requests as before and merge responses.
+- If a v2 execution returns an HTTP-grpc error corresponding to HTTP 501 (not implemented), treat it as a signal to fall back to executing that sub-request via the v1 path instead (and log a warning). This is a safety fallback even when pre-validation is present.
+
+#### 5) V2 engine module HTTP endpoints (distributed mode)
+When the v2 engine is configured to run in distributed mode, it must register HTTP handlers for the Loki query endpoints listed above, applying the standard query HTTP middlewares used by other Loki query endpoints (auth, recovery, header propagation, query tagging/metrics extraction, JSON response, etc.). The handler used here should be the v2 engine handler described in (2).
+
+#### 6) HTTP/2 scheduler connection lifecycle
+Ensure that the HTTP/2 scheduler listener properly closes the per-request connection object created in its HTTP handler to avoid leaking resources.
+
+### Notes
+
+- The public API surface that changes includes the queryrange middleware constructor signature (it now receives the v2 router configuration object rather than a v2 engine config struct).
+- The router must continue to support both log and metric query paths and preserve existing splitting/merging behavior; only the v2 routing integration and fallback semantics change.
+- The new v2 engine HTTP handler must be usable both directly (mounted in the v2 engine process) and indirectly (queried by the query-frontend via the downstream round-tripper).

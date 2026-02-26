@@ -1,0 +1,24 @@
+Implement graceful shutdown semantics for the engine worker so that canceling/stopping the worker service does **not** abruptly terminate in-flight task execution.
+
+### Goal
+
+When the worker’s `run(ctx)` context is canceled (service stop), the worker must:
+
+1. **Stop acquiring new work** (threads should no longer request/accept new task assignments from the scheduler).
+2. **Allow already-running jobs to complete** using their normal execution flow (including receiving stream data and stream-close notifications and producing outputs).
+3. **Shut down background loops in an orderly sequence** so that:
+   - worker threads can finish their current jobs,
+   - scheduler connectivity/discovery loops terminate,
+   - peer connection acceptance/handling is stopped only when it is safe to do so.
+
+### Requirements and constraints
+
+- Job execution must not be tied to the worker’s `run(ctx)` cancellation in a way that causes running jobs to be canceled mid-flight. Running jobs should keep making progress after the worker begins shutdown, and only “new work intake” should be halted.
+- The worker must still be able to **process relevant incoming messages** (e.g., stream status/data or task cancellation messages) during shutdown long enough for in-flight jobs to finish correctly.
+- Incoming peer connections are handled by the worker’s accept loop; its lifecycle should be managed so that it can be stopped independently and does not force the worker to exit prematurely or return spurious errors during shutdown.
+- Message-handling code paths that should remain functional during shutdown must not depend on a context that is guaranteed to be canceled as part of service stopping.
+- Any internal request/coordination structures that previously carried a context for job creation should be updated to match the new shutdown behavior (i.e., avoid propagating the worker’s stopping context into job execution).
+
+### Affected area
+
+All changes are within the worker implementation under `pkg/engine/internal/worker/`, primarily around the worker run loop, peer accept loop, and handling of scheduler/peer messages in `worker.go`.

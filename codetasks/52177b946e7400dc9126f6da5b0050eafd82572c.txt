@@ -1,0 +1,66 @@
+## Problem: Add unified exclusion *patterns* for Build Agent + Code Intelligence
+
+The project currently supports excluding directories from Code Intelligence via `BuildDetails.excludedDirectories`. You must extend this to support **both directory exclusions and file-pattern exclusions** (e.g., `*.svg`, `package-lock.json`) using a single unified mechanism, while keeping backward compatibility with previously persisted data.
+
+### 1) Persisted build details model changes (backward compatible)
+Update the `BuildAgent.BuildDetails` JSON model to replace the legacy field:
+
+- **Old:** `excludedDirectories: Set<String>`
+- **New:** `exclusionPatterns: Set<String>` (a single set containing directory names/paths and file patterns)
+
+Requirements:
+- Loading previously stored JSON that contains `excludedDirectories` must still work, migrating values into `exclusionPatterns`.
+- Missing/null fields must deserialize safely (empty collections).
+- On save/load, patterns that “look like paths” should be canonicalized consistently with existing path normalization rules (while not breaking glob-style patterns).
+
+### 2) Exclusion pattern semantics
+Filtering must support these pattern categories (case-insensitive matching):
+- **Simple name** (no wildcard, no `/`): matches
+  - a directory with that name at any depth (excluding that subtree), and
+  - a file with that exact name at any depth.
+  - Examples: `build`, `node_modules`, `package-lock.json`
+- **Extension pattern** in the form `*.ext` (no `/`): matches files by filename suffix (e.g., `*.svg`, `*.min.js`). Applies to files only, not directories.
+- **Glob patterns** containing wildcards (`*`, `?`, etc.):
+  - If the pattern contains `/`, match against the **full relative path** (Unix-style `/` separators).
+  - Otherwise, match against the **filename only**.
+- Patterns should be normalized for matching (trim, normalize separators to `/`, handle leading `./` or `/`, remove trailing `/`).
+
+### 3) Filtering integration
+Code Intelligence file enumeration should be driven by the unified `exclusionPatterns`:
+- `IProject.getAllFiles()` / “analyzable files” should exclude files matching any exclusion pattern **and** apply gitignore rules when the project has Git.
+- Gitignore-based exclusions should still be applied automatically, but **do not require storing gitignored directories in `exclusionPatterns`**.
+- Provide an efficient per-project path check API such as `IProject.isPathExcluded(relativePath, isDirectory)` that uses caching/compiled patterns for repeated UI and traversal checks.
+
+### 4) Gitignore handling + Build Agent reporting behavior
+The Build Agent’s reporting must evolve from “excluded directories only” to “excluded directories + excluded file patterns”:
+
+- The tool contract for `reportBuildDetails` must accept:
+  - build/test commands,
+  - a list of **directories** to exclude (literal paths only),
+  - a list of **file patterns** to exclude (`*.ext` or literal filenames; no `**/` prefixes expected).
+- When the agent reports exclusions:
+  - Verify directory entries actually exist before adding them.
+  - Merge new suggestions with any existing user-configured patterns already stored in the project (do not discard manual patterns).
+  - Remove directory patterns that are redundant because they’re already gitignored (gitignore is applied at runtime).
+  - Track which patterns were added by the agent during this run (for UI highlighting).
+
+### 5) Discovery vs filtered exploration
+Add a Build Agent tool for discovery that is not affected by exclusions:
+- A `listTrackedFiles` tool should list **git-tracked** files in a directory regardless of exclusion patterns.
+- Existing `listFiles` behavior should remain filtered (uses `getAllFiles()` / exclusion patterns).
+
+### 6) Analyzer interaction cleanup
+Analyzers should no longer apply their own directory-exclusion logic via `getExcludedDirectories()` if `getAllFiles()`/`getAnalyzableFiles()` already returns filtered sets based on patterns. Adjust analyzers accordingly so SQL and tree-sitter based analyzers operate on the filtered file set.
+
+### 7) Git repo utilities used by UI / filtering
+Support efficient “is this file tracked?” checks:
+- Extend the git repo abstraction with a method like `isTracked(Path relativePath)` and implement it efficiently (avoid repeated full set scans).
+
+### 8) UI-facing behavior (data + checks)
+Wherever the UI determines whether a node is excluded:
+- It must consider both:
+  - exclusion patterns (`isPathExcluded`), and
+  - gitignore (`isGitignored`) with the nuance that gitignored rules should not mark **tracked** files as excluded purely due to gitignore.
+- Gitignore-driven exclusions should be treated as read-only (not removable via UI toggles), while pattern-driven exclusions remain user-editable.
+
+Implement the above so that all provided (old and new) tests pass.

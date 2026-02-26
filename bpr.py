@@ -139,6 +139,17 @@ def _normalize_priority_spec(priority: str | PrioritySpec) -> PrioritySpec:
     return _parse_priority_spec(priority)
 
 
+def _normalize_cli_jar(cli_jar: str | None) -> str | None:
+    if not cli_jar:
+        return None
+    candidate = pathlib.Path(cli_jar).expanduser()
+    if not candidate.is_absolute():
+        candidate = (pathlib.Path.cwd() / candidate)
+    if not candidate.is_file():
+        return None
+    return str(candidate.resolve())
+
+
 def _load_filter_revisions(
     filter_file: pathlib.Path | None,
     *,
@@ -1394,6 +1405,13 @@ def _run_single_project(
     except ValueError:
         pass
 
+    if args.cli_jar:
+        if job_env is None:
+            job_env = {}
+        else:
+            job_env = job_env.copy()
+        job_env["BROKK_CLI_JAR"] = args.cli_jar
+
     revisions = _read_revisions_from_lines(sys.stdin)
     revisions = _apply_revision_filter(revisions, filter_revisions)
 
@@ -1647,6 +1665,8 @@ def _run_multi_project(
 
         job_env = build_job_env(config)
         job_env["BRK_MODE"] = args.mode
+        if args.cli_jar:
+            job_env["BROKK_CLI_JAR"] = args.cli_jar
         project_str = str(project_path)
 
         def _make_cli_args_fn(
@@ -1956,8 +1976,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--cli-dir",
-        default="../brokk/",
+        default=".",
         help="Path to the Brokk CLI directory (default: %(default)s, resolves to <dir>/cli).",
+    )
+    parser.add_argument(
+        "--cli-jar",
+        help="Path to a specific Brokk CLI jar. This is passed to the CLI launcher via BROKK_CLI_JAR.",
     )
     parser.add_argument(
         "--results-dir",
@@ -2025,6 +2049,13 @@ def run_with_args(
 
     # Validate API key is present
     validate_api_key()
+    normalized_cli_jar = _normalize_cli_jar(args.cli_jar)
+    if args.cli_jar and not normalized_cli_jar:
+        output.stderr(f"Error: --cli-jar does not point to a readable jar file: {args.cli_jar}")
+        _write_exit(1, exit_fn)
+        return 1
+    args.cli_jar = normalized_cli_jar
+
     set_cli_bin(pathlib.Path(args.cli_dir))
     validate_models(models)
     base_cli_tokens = shlex.split(args.cli_args or "")

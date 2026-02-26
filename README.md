@@ -35,6 +35,24 @@ Start with a quicker sanity run before scaling out.
 BROKK_PROXY=LOCALHOST ./bpr-all.sh --results-dir coderesults-0226 --runs 2 --model q3-35b --tui --threads 30
 ```
 
+### Using a specific released CLI jar
+
+If you downloaded a CLI jar from `https://github.com/BrokkAi/brokk-releases/releases` (for example `brokk-0.23.0.beta9.jar`), point the benchmark to it with `--cli-jar`.
+
+```bash
+./bpr-all.sh \
+  --cli-dir . \
+  --cli-jar "$(pwd)/brokk-0.23.0.beta9.jar" \
+  --results-dir coderesults-0226 \
+  --runs 2 \
+  --model q3-35b \
+  --tui \
+  --threads 30
+```
+
+Equivalent direct `bpr.py` invocation:
+CLI fallback behavior: if `--cli-jar` is omitted, `cli` uses the latest `brokk*.jar` from `./cli/app/build/libs`.
+
 `bpr.py`/`bpr-all.sh` can now execute tasks from multiple projects concurrently, so separate per-project runs are no longer required. Use `--projects=...` with your full set when possible, and only split into smaller runs if you want manual resource isolation.
 
 # How the sausage is made (explanation of bpr-all.sh)
